@@ -1,0 +1,6 @@
+# N64Recomp configuration for Mischief Makers (US 1.1)
+# input elf: the byte-perfect decomp build from trouble-makers-ai-recomp
+[input]
+entrypoint = 0x80000400
+elf_path = "input/troublemakers.elf"
+output_func_path = "RecompiledFuncs"

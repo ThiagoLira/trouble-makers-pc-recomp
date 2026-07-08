@@ -1,0 +1,5 @@
+input/
+RecompiledFuncs/
+build/
+*.z64
+*.elf
