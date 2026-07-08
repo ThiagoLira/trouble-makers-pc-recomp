@@ -25,7 +25,7 @@ translation runs locally from your legally dumped ROM's decomp build.
 
 - [x] Phase 0 — recompiler builds; whole-ROM translation succeeds (30,260
       symbols, 45MB of C, statically-linked overlays handled)
-- [ ] Phase 1 — runtime: integrate
+- [x] Phase 1 — runtime groundwork: N64ModernRuntime submodule; ALL translated game code compiles native (libmm_recompiled.a); see PHASE1_NOTES.md. Remaining Phase 1→2: link probe unresolved-symbol list = the work plan. Original scope:
       [N64ModernRuntime](https://github.com/N64Recomp/N64ModernRuntime)
       (librecomp = libultra reimplementation, ultramodern = platform layer);
       implement game entry + section/function lookup tables

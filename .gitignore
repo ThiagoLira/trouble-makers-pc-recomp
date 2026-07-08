@@ -1,5 +1,10 @@
 input/
 RecompiledFuncs/
 build/
+build_probe/
+.cache/
+reference/
 *.z64
 *.elf
+reference/
+phase1_worker.log
