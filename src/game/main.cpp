@@ -95,6 +95,14 @@ class StubRendererContext : public ultramodern::renderer::RendererContext {
     float get_resolution_scale() const override { return 1.0f; }
 };
 
+// Display options, set from the command line in main() before recomp::start.
+// The internal render resolution is RT64's job: with Resolution::Auto the
+// scene rasterizes at window-integer-scale (a 4K window ≈ 9x native), so a
+// bigger window IS higher resolution. ds_option supersamples on top (SSAA).
+static int g_window_w = 1280;
+static int g_window_h = 960;
+static bool g_fullscreen = false;
+
 namespace mm::stub::gfx {
 // SEAM (graphics worker owns the real window). For bring-up we create a real
 // SDL window so the stretch run gets as far as window creation.
@@ -110,9 +118,15 @@ ultramodern::renderer::WindowHandle create_window(ultramodern::gfx_callbacks_t::
     SDL_Window* win = SDL_CreateWindow(
         "Mischief Makers: Recompiled",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-        640, 480, SDL_WINDOW_RESIZABLE);
+        g_window_w, g_window_h, SDL_WINDOW_RESIZABLE);
     if (win == nullptr) {
         std::fprintf(stderr, "Failed to create window: %s\n", SDL_GetError());
+    }
+    // RT64 also honors WindowMode::Fullscreen from the graphics config at
+    // context creation; setting the SDL flag here just avoids a visible
+    // windowed->fullscreen flip at startup.
+    if (g_fullscreen) {
+        SDL_SetWindowFullscreen(win, SDL_WINDOW_FULLSCREEN_DESKTOP);
     }
     return ultramodern::renderer::WindowHandle{win};
 }
@@ -204,10 +218,70 @@ static void exit_error(const char* str) {
     std::exit(EXIT_FAILURE);
 }
 
+static void print_usage(const char* argv0) {
+    std::fprintf(stderr,
+        "usage: %s <rom.z64> [options]\n"
+        "  --fullscreen        borderless fullscreen (also toggles via RT64)\n"
+        "  --window WxH        window size (default 1280x960); the scene renders\n"
+        "                      at window-integer-scale, so bigger = sharper\n"
+        "  --ssaa N            supersample N x on top of the window scale (1-8)\n"
+        "  --msaa N            multisample antialiasing (2, 4, or 8)\n",
+        argv0);
+}
+
 int main(int argc, char** argv) {
     recomp::Version project_version{};
     if (!recomp::Version::from_string("0.2.0", project_version)) {
         exit_error("Invalid version string");
+    }
+
+    // Display options (see the globals above the gfx seam).
+    const char* rom_arg = nullptr;
+    int ssaa = 1;
+    int msaa = 0;
+    for (int i = 1; i < argc; i++) {
+        std::string_view arg = argv[i];
+        if (arg == "--fullscreen") {
+            g_fullscreen = true;
+        } else if (arg == "--window" && i + 1 < argc) {
+            if (std::sscanf(argv[++i], "%dx%d", &g_window_w, &g_window_h) != 2 ||
+                g_window_w < 320 || g_window_h < 240) {
+                print_usage(argv[0]);
+                exit_error("--window expects WxH, at least 320x240");
+            }
+        } else if (arg == "--ssaa" && i + 1 < argc) {
+            ssaa = std::atoi(argv[++i]);
+            if (ssaa < 1 || ssaa > 8) { print_usage(argv[0]); exit_error("--ssaa expects 1-8"); }
+        } else if (arg == "--msaa" && i + 1 < argc) {
+            msaa = std::atoi(argv[++i]);
+            if (msaa != 2 && msaa != 4 && msaa != 8) { print_usage(argv[0]); exit_error("--msaa expects 2, 4 or 8"); }
+        } else if (arg == "--help" || arg == "-h") {
+            print_usage(argv[0]);
+            return EXIT_SUCCESS;
+        } else if (!arg.empty() && arg[0] != '-' && rom_arg == nullptr) {
+            rom_arg = argv[i];
+        } else {
+            print_usage(argv[0]);
+            exit_error("unknown option");
+        }
+    }
+
+    // Seed the renderer configuration before the runtime spawns the gfx
+    // thread (the Rt64Context constructor reads it once at creation).
+    {
+        ultramodern::renderer::GraphicsConfig gfx_config{};
+        gfx_config.res_option = ultramodern::renderer::Resolution::Auto; // window-integer-scale
+        gfx_config.wm_option = g_fullscreen ? ultramodern::renderer::WindowMode::Fullscreen
+                                            : ultramodern::renderer::WindowMode::Windowed;
+        gfx_config.ar_option = ultramodern::renderer::AspectRatio::Original; // 4:3 game art
+        gfx_config.msaa_option = msaa == 2 ? ultramodern::renderer::Antialiasing::MSAA2X
+                               : msaa == 4 ? ultramodern::renderer::Antialiasing::MSAA4X
+                               : msaa == 8 ? ultramodern::renderer::Antialiasing::MSAA8X
+                                           : ultramodern::renderer::Antialiasing::None;
+        gfx_config.rr_option = ultramodern::renderer::RefreshRate::Original; // game is natively 60Hz
+        gfx_config.hpfb_option = ultramodern::renderer::HighPrecisionFramebuffer::Auto;
+        gfx_config.ds_option = ssaa;
+        ultramodern::renderer::set_graphics_config(gfx_config);
     }
 
     // Store config (mods, saves) under a per-project folder in the user's
@@ -225,14 +299,13 @@ int main(int argc, char** argv) {
     }
     troublemakers::register_overlays();
 
-    // Optional: if a ROM path is given as argv[1], validate + load it now so
-    // the stretch run can prove the hash/name/save wiring without the launcher
-    // UI. (The game is NOT auto-started; that needs the real RSP/renderer.)
-    if (argc >= 2) {
+    // If a ROM path was given, validate + load it now; the game auto-starts
+    // from the first VI tick (see vi_callback).
+    if (rom_arg != nullptr) {
         // select_rom validates the ROM against the registered GameEntry keyed
         // by game_id, so we must name the game we registered above.
         std::u8string game_id = kGameId;
-        auto err = recomp::select_rom(fs::path(argv[1]), game_id);
+        auto err = recomp::select_rom(fs::path(rom_arg), game_id);
         const char* msg = nullptr;
         switch (err) {
             case recomp::RomValidationError::Good: msg = "ROM validated and loaded."; break;

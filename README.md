@@ -65,6 +65,12 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --target mm_game -j8
 
 ./build/src/game/mm_game path/to/your.z64
+
+# display options (the scene renders at window-integer-scale — a bigger
+# window IS higher internal resolution; the game is natively 60 fps):
+./build/src/game/mm_game rom.z64 --fullscreen
+./build/src/game/mm_game rom.z64 --window 1920x1440 --msaa 4
+./build/src/game/mm_game rom.z64 --ssaa 2        # supersampling on top
 ```
 
 The ROM is validated by hash (only US 1.1 boots), stored under
