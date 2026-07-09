@@ -89,11 +89,29 @@ instruction = [
     { func = "func_80082380", vram = 0x8008254C, value = 0x24EE00C0 }, # left-edge skip 0x20 -> 0xC0
     { func = "func_80082380", vram = 0x80082644, value = 0x04010003 }, # drop max(0,x) clamp
     { func = "func_80082380", vram = 0x800826F4, value = 0x27190050 }, # row stride 40 -> 80 bytes
+
+    # Scrolling path (func_80082820) — the one active during gameplay
+    # (func_80082F10 selects it when D_800BE6FC != 0). Same widening, all
+    # original words asm/ROM-verified (sll x8 -> x16 works because the row
+    # register holds row*5: (row*5)<<3 = row*40 -> (row*5)<<4 = row*80).
+    { func = "func_80082820", vram = 0x800829D0, value = 0x2414000F }, # col stop 10 -> 15
+    { func = "func_80082820", vram = 0x80082A08, value = 0x240CFFFB }, # col start 0 -> -5
+    { func = "func_80082820", vram = 0x80082A20, value = 0x24F900C0 }, # left-edge skip 0x20 -> 0xC0
+    { func = "func_80082820", vram = 0x80082B24, value = 0x04010003 }, # drop max(0,x) clamp
+    { func = "func_80082820", vram = 0x80082A00, value = 0x00197900 }, # row offset (row*5)<<3 -> <<4
 ]
 
-# Entry hook: repack the 7x10 tile array into scratch rdram (top of the
-# committed 512MB, above anything the game or an empty mod heap touches) as
-# 7x20 with modulo wrap, then repoint the array argument at the scratch.
+# Entry hooks: when the incoming tile-array pointer is the Background
+# system's shared array D_80180D90 (the ONLY buffer used by the backdrop
+# band — both the static and scrolling paths of func_80082F10 feed from it,
+# per the Phase 8 layer-log forensics), repack it into scratch rdram (top of
+# the committed 512MB) as 7x20 with horizontal modulo wrap + two zeroed
+# guard rows, and repoint the argument at the scratch copy. Any other
+# caller/buffer passes through untouched — this discrimination is what the
+# failed attempt 2 lacked (it repacked every caller's buffer and corrupted
+# non-backdrop draws). Static path takes the array in $a3/ctx->r7;
+# scrolling path in $a1/ctx->r5 (asm-verified; framebuffer is $a0 there).
 hook = [
-    { func = "func_80082380", text = '{ gpr b = ctx->r7; gpr s = (gpr)(int32_t)0x9FFFE000; int y; int c; for (y = 0; y < 7; y++) { for (c = 0; c < 20; c++) { int sc = c - 5; int w = ((sc % 10) + 10) % 10; MEM_W((y*20 + c)*4, s) = MEM_W((y*10 + w)*4, b); } } ctx->r7 = s; }' },
+    { func = "func_80082380", text = '{ if ((uint32_t)ctx->r7 == 0x80180D90u) { gpr b = ctx->r7; gpr s = (gpr)(int32_t)0x9FFFE000; int y; int c; for (y = 0; y < 7; y++) { for (c = 0; c < 20; c++) { int sc = c - 5; int w = ((sc % 10) + 10) % 10; MEM_W((y*20 + c)*4, s) = MEM_W((y*10 + w)*4, b); } } for (c = 0; c < 40; c++) { MEM_W((140 + c)*4, s) = 0; } ctx->r7 = s; } }' },
+    { func = "func_80082820", text = '{ if ((uint32_t)ctx->r5 == 0x80180D90u) { gpr b = ctx->r5; gpr s = (gpr)(int32_t)0x9FFFF000; int y; int c; for (y = 0; y < 7; y++) { for (c = 0; c < 20; c++) { int sc = c - 5; int w = ((sc % 10) + 10) % 10; MEM_W((y*20 + c)*4, s) = MEM_W((y*10 + w)*4, b); } } for (c = 0; c < 40; c++) { MEM_W((140 + c)*4, s) = 0; } ctx->r5 = s; } }' },
 ]
