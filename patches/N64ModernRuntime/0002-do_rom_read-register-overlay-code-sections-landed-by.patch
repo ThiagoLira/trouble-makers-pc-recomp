@@ -1,7 +1,7 @@
 From 23ae9e0b7fd0711b56d0829501d982f5521da0b5 Mon Sep 17 00:00:00 2001
 From: Thiago Lira <thlira15@gmail.com>
 Date: Thu, 9 Jul 2026 10:46:20 -0300
-Subject: [PATCH 2/2] do_rom_read: register overlay code sections landed by
+Subject: [PATCH 2/3] do_rom_read: register overlay code sections landed by
  runtime PI DMAs
 
 N64Recomp emits no per-call-site overlay-load hooks for some titles

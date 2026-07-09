@@ -1,0 +1,54 @@
+From ea0549eb548be0f4120b972c5fddefdab3f0e272 Mon Sep 17 00:00:00 2001
+From: Thiago Lira <thlira15@gmail.com>
+Date: Thu, 9 Jul 2026 11:03:46 -0300
+Subject: [PATCH] osEepromLong{Read,Write}: round nbytes up to block size like
+ real libultra
+
+Real libultra loops whole 8-byte blocks while (length > 0); non-multiple
+lengths round up with the tail block spilling into adjacent memory. Games
+rely on this (Mischief Makers' first save write); match it instead of
+asserting.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_016g6NrpY7bmbqNfAxa23cTC
+---
+ librecomp/src/eep.cpp | 16 ++++++++++++++--
+ 1 file changed, 14 insertions(+), 2 deletions(-)
+
+diff --git a/librecomp/src/eep.cpp b/librecomp/src/eep.cpp
+index 048246e..cd46728 100644
+--- a/librecomp/src/eep.cpp
++++ b/librecomp/src/eep.cpp
+@@ -48,7 +48,13 @@ extern "C" void osEepromLongWrite_recomp(uint8_t* rdram, recomp_context* ctx) {
+     gpr buffer = ctx->r6;
+     int32_t nbytes = ctx->r7;
+ 
+-    assert((nbytes % eeprom_block_size) == 0);
++    // Real libultra's osEepromLong{Read,Write} loop whole 8-byte blocks with
++    // `while (length > 0)`, so a length that is not a block multiple rounds UP
++    // and the tail block spills into the bytes adjacent to the caller's buffer
++    // (games rely on this looseness — Mischief Makers passes such lengths on
++    // its first save). Match hardware instead of asserting; the extra tail
++    // bytes come from (or go to) adjacent RDRAM, which is always mapped.
++    nbytes = (nbytes + eeprom_block_size - 1) & ~(eeprom_block_size - 1);
+ 
+     save_write(rdram, buffer, eep_address * eeprom_block_size, nbytes);
+ 
+@@ -80,7 +86,13 @@ extern "C" void osEepromLongRead_recomp(uint8_t* rdram, recomp_context* ctx) {
+     gpr buffer = ctx->r6;
+     int32_t nbytes = ctx->r7;
+ 
+-    assert((nbytes % eeprom_block_size) == 0);
++    // Real libultra's osEepromLong{Read,Write} loop whole 8-byte blocks with
++    // `while (length > 0)`, so a length that is not a block multiple rounds UP
++    // and the tail block spills into the bytes adjacent to the caller's buffer
++    // (games rely on this looseness — Mischief Makers passes such lengths on
++    // its first save). Match hardware instead of asserting; the extra tail
++    // bytes come from (or go to) adjacent RDRAM, which is always mapped.
++    nbytes = (nbytes + eeprom_block_size - 1) & ~(eeprom_block_size - 1);
+ 
+     save_read(rdram, buffer, eep_address * eeprom_block_size, nbytes);
+ 
+-- 
+2.54.0
+
