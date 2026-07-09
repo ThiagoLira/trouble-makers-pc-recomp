@@ -77,7 +77,18 @@ class StubRendererContext : public ultramodern::renderer::RendererContext {
     bool update_config(const ultramodern::renderer::GraphicsConfig&,
                        const ultramodern::renderer::GraphicsConfig&) override { return false; }
     void enable_instant_present() override {}
-    void send_dl(const OSTask*) override {}
+    // Counted + flushed so headless fps is measurable from a redirected log
+    // (stderr is block-buffered off a tty, and the run ends in abort(), which
+    // does not flush stdio buffers — fflush keeps every counted line). Mirrors
+    // the [gfx] send_dl counter in rt64_render_context.cpp (TEMP DIAGNOSTIC).
+    void send_dl(const OSTask*) override {
+        static uint64_t n = 0;
+        if (n < 3 || n % 10 == 0) {
+            std::fprintf(stderr, "[gfx] send_dl #%llu\n", (unsigned long long)n);
+            std::fflush(stderr);
+        }
+        n++;
+    }
     void update_screen() override {}
     void shutdown() override {}
     uint32_t get_display_framerate() const override { return 60; }

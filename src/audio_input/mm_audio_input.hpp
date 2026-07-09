@@ -27,6 +27,12 @@ void init();
 // set_frequency). Hand this to recomp::Configuration::audio_callbacks.
 ultramodern::audio_callbacks_t audio_callbacks();
 
+// Remaining audio buffered, in stereo *frames* at the game's sample rate (the
+// same value ultramodern's audio callback uses). Exposed so the host can mirror
+// it into the N64 AI_LEN register for games that read AI_LEN directly instead
+// of through osAiGetLength (see src/game/register_overlays.cpp).
+size_t get_frames_remaining();
+
 // Filled input callback struct (poll_input / get_input / set_rumble /
 // get_connected_device_info). Hand this to recomp::Configuration::input_callbacks.
 ultramodern::input::callbacks_t input_callbacks();

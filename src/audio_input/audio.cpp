@@ -80,9 +80,20 @@ void queue_samples(int16_t* audio_data, size_t sample_count) {
     }
 }
 
+void set_frequency(uint32_t freq) {
+    if (freq == 0) return;
+    if (freq == g_sample_rate) return;
+    g_sample_rate = freq;
+    rebuild_converter();
+}
+
+} // namespace
+
 // Report remaining buffer in stereo *frames* at the game's sample rate, so
 // ultramodern's get_remaining_audio_bytes() (which multiplies by 2*sizeof(s16))
 // stays consistent. Back off ~1 VI of samples so transient underruns don't pop.
+// Declared in the public header so the host can mirror it into AI_LEN (see
+// src/game/register_overlays.cpp); it is also the audio_callbacks value.
 size_t get_frames_remaining() {
     if (g_audio_device == 0) return 0;
     uint64_t out_frames = SDL_GetQueuedAudioSize(g_audio_device) / kBytesPerFrame;
@@ -95,15 +106,6 @@ size_t get_frames_remaining() {
     else in_frames = 0;
     return static_cast<size_t>(in_frames);
 }
-
-void set_frequency(uint32_t freq) {
-    if (freq == 0) return;
-    if (freq == g_sample_rate) return;
-    g_sample_rate = freq;
-    rebuild_converter();
-}
-
-} // namespace
 
 void init() {
     if (g_audio_device != 0) return;
