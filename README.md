@@ -27,8 +27,9 @@ Everything runs locally from your own legally dumped ROM.
 - ✅ Natively 60 fps (the game's own rate), correct audio pacing
 - ✅ High-resolution rendering (window-integer-scale via RT64), fullscreen, MSAA/SSAA
 - ✅ EEPROM saves persist to disk
+- ✅ Widescreen (opt-in), F11 fullscreen, Tab fast-forward, persistent display config
 - 🚧 Untested beyond the early game; window occlusion freezes the game (present-paced); minor dither artifacts in translucent overlays at high res
-- 🗺️ Next: wider gameplay verification, widescreen, mod hooks
+- 🗺️ Next: wider gameplay verification, mod hooks, upstreaming the runtime patches
 
 ## Building and running
 
