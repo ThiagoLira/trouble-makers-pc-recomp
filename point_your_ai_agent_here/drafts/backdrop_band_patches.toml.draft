@@ -68,3 +68,20 @@ hook = [
 #   RecompiledFuncs symlink — see the WORKSPACE RULE note in the hub README);
 #   its crash was never root-caused. Re-test cleanly.
 # ============================================================================
+
+# ============================================================================
+# ATTEMPT 2 (branch widescreen-backdrop, 01dc9b4) — FAILED, user-verified:
+# scratch-repack + arg-repoint of func_80082380 (static path) caused sprite
+# flicker and did NOT extend the visible band. Conclusions:
+# 1. func_80082380 serves MULTIPLE callers (func_80082CFC/2E04/2F10) whose
+#    buffers are NOT all 7x10 backdrop grids — repacking every call corrupts
+#    the non-backdrop draws (=> flicker). Any future hook must discriminate
+#    by caller/buffer address (e.g. only repack when ctx->r7 matches known
+#    backdrop arrays) or patch a backdrop-specific wrapper instead.
+# 2. The in-level treeline band the user sees is most likely drawn by the
+#    SCROLLING path (func_80082820, buffer arg = $a0/ctx->r4 per the
+#    func_80082F10 call site) — the deferred one. Start there next time,
+#    with per-caller buffer identification FIRST (log ctx args + buffer
+#    contents for a few frames before patching anything).
+# Branch kept for archaeology; do not merge.
+# ============================================================================
