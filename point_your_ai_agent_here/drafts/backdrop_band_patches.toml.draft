@@ -1,0 +1,70 @@
+    # Widescreen backdrop band: the tree-line/meadow "wall" is a tiled CI8
+    # background drawn as a fixed 10x7 grid of 32px tiles = exactly 320x224
+    # (the 4:3 framebuffer), so in --widescreen it stops at the 4:3 edge and
+    # leaves a black band in each wing between the extended sky and ground.
+    # The grid is screen-relative (tile X = col*32 + per-frame scroll offset),
+    # NOT world-space, so the cull-rect widening above does not touch it.
+    #
+    # We widen both tile-draw loops (func_80082380 = static path, used by
+    # midground/env/static-bg; func_80082820 = scrolling-bg path) from 10 to
+    # 20 columns (start -5, stop 15) and 80-byte (20-tile) row stride, and
+    # remove the two 4:3 left-edge assumptions baked into the draw loop:
+    #   * the `upper_x+32 < 0 -> skip` off-screen cull (threshold 0x20->0xC0),
+    #   * the `max(0, upper_x)` texrect-origin clamp (bgez $a3 -> bgez $zero),
+    # so tiles at negative FB X render into the left wing (RT64 maps FB x<0
+    # to the left wing; in 4:3 those tiles clip to the render area, so the
+    # center is byte-identical — same guarantee as the cull patches).
+    #
+    # The source tile arrays (D_801374F0/580/610) hold exactly 70 tiles (7x10)
+    # with no room for more columns, so more columns can only REPEAT. The
+    # 140-s32 dst arrays (D_80180930/B60/D90, 7x20=140 exactly) have room, so
+    # the `hook` entries below repack each dst from stride-10 to stride-20
+    # with horizontal MODULO wrap (seamless for the wrapping tilemap) right
+    # after the game's per-frame copy and before the draw — in-thread, no
+    # race. Env-gated (MM_BG_WIDE): default-off writes 0 into the 10 wing
+    # columns (-> skip -> wings stay cleared, zero behavior change); set
+    # MM_BG_WIDE=1 to fill the wings with the wrapping treeline.
+    # All addrs/words verified against the byte-perfect baserom.
+    { func = "func_80082380", vram = 0x8008252C, value = 0x2413000F }, # addiu $s3,$zero,0xA -> 0xF  (col stop 10->15: draw 20 cols, start -5)
+    { func = "func_80082380", vram = 0x80082534, value = 0x240DFFFB }, # or $t5,$zero,$zero -> addiu $t5,$zero,-5  (col start 0 -> -5)
+    { func = "func_80082380", vram = 0x8008254C, value = 0x24EE00C0 }, # addiu $t6,$a3,0x20 -> 0xC0  (left-edge skip threshold 32 -> 192)
+    { func = "func_80082380", vram = 0x80082644, value = 0x04010003 }, # bgez $a3 -> bgez $zero  (drop max(0,upper_x) X-clamp; neg-x tiles -> left wing)
+    { func = "func_80082380", vram = 0x800826F4, value = 0x27190050 }, # addiu $t9,$t8,0x28 -> 0x50  (row stride 40 -> 80 bytes = 20 tiles)
+    { func = "func_80082820", vram = 0x800829D0, value = 0x2414000F }, # addiu $s4,$zero,0xA -> 0xF  (col stop 10->15)
+    { func = "func_80082820", vram = 0x80082A08, value = 0x240CFFFB }, # or $t4,$zero,$zero -> addiu $t4,$zero,-5  (col start 0 -> -5)
+    { func = "func_80082820", vram = 0x80082A20, value = 0x24F900C0 }, # addiu $t9,$a3,0x20 -> 0xC0  (left-edge skip threshold 32 -> 192)
+    { func = "func_80082820", vram = 0x80082B24, value = 0x04010003 }, # bgez $a3 -> bgez $zero  (drop max(0,upper_x) X-clamp)
+    { func = "func_80082820", vram = 0x80082A00, value = 0x00197900 }, # sll $t7,$t9,3 -> sll $t7,$t9,4  (row offset x40 -> x80)
+]
+
+# Entry hooks (before_vram omitted -> inserted at function start, with rdram +
+# ctx in scope). Repack the dst tile array the caller just filled (70 tiles,
+# stride 10) into 20-wide stride-20 with modulo wrap; the patched draw loop
+# then reads 20 cols. MM_BG_WIDE gates the 10 wing columns (cols -5..-1,
+# 10..14): off -> 0 (skip -> wings stay cleared, center byte-identical);
+# on -> wrapped treeline fills both wings. MEM_W is recomp.h's canonical
+# aligned-word accessor (same one librecomp uses), so addressing matches the
+# recompiled lw/sw exactly.
+hook = [
+    { func = "func_80082380", text = '{ static int _en=-1; if(_en<0){ extern char* getenv(const char*); extern int atoi(const char*); char* _e=getenv("MM_BG_WIDE"); _en=_e?atoi(_e):0; } uint32_t _b=(uint32_t)ctx->r7; uint32_t _t[70]; for(int _i=0;_i<70;_i++) _t[_i]=MEM_W(_i*4,_b); for(int _y=0;_y<7;_y++) for(int _c=0;_c<20;_c++){ int _sc=_c-5; uint32_t _v; if(_sc>=0&&_sc<10) _v=_t[_y*10+_sc]; else _v=_en?_t[_y*10+(((_sc%10)+10)%10)]:0; MEM_W((_y*20+_c)*4,_b)=_v; } }' },
+    { func = "func_80082820", text = '{ static int _en=-1; if(_en<0){ extern char* getenv(const char*); extern int atoi(const char*); char* _e=getenv("MM_BG_WIDE"); _en=_e?atoi(_e):0; } uint32_t _b=(uint32_t)ctx->r5; uint32_t _t[70]; for(int _i=0;_i<70;_i++) _t[_i]=MEM_W(_i*4,_b); for(int _y=0;_y<7;_y++) for(int _c=0;_c<20;_c++){ int _sc=_c-5; uint32_t _v; if(_sc>=0&&_sc<10) _v=_t[_y*10+_sc]; else _v=_en?_t[_y*10+(((_sc%10)+10)%10)]:0; MEM_W((_y*20+_c)*4,_b)=_v; } }' },
+]
+
+# ============================================================================
+# DRIVER REVIEW (why this is a DRAFT, not landed):
+# - The mechanism map is verified-quality: backdrop band = fixed 10x7 grid of
+#   32px tiles (exactly 320x224), screen-relative, drawn by func_80082380
+#   (static path) / func_80082820 (scrolling path), with two baked 4:3
+#   assumptions (left-edge skip threshold, x-origin clamp). Instruction
+#   words were byte-verified against the ROM. `hook` entries use a REAL
+#   N64Recomp feature (config.cpp get_function_hooks, [patches] hook array).
+# - BLOCKER: the hook repacks the dst tile array from stride-10 (280 bytes)
+#   to stride-20 (560 bytes) IN PLACE — but the candidate arrays
+#   (D_801374F0/580/610) appear to sit ~0x90 apart, so the write would
+#   overrun into sibling arrays / D_80137614 / D_8013769C. Verify the true
+#   buffer sizes + find scratch space (or repack into a reserved rdram
+#   region above the game's arena) before enabling.
+# - Also: the agent's A/B testing was invalidated by a workspace flaw (shared
+#   RecompiledFuncs symlink — see the WORKSPACE RULE note in the hub README);
+#   its crash was never root-caused. Re-test cleanly.
+# ============================================================================

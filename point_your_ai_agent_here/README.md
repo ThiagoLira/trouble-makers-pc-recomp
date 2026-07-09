@@ -49,6 +49,15 @@ nothing, RESULT blocks) and the repro recipes that worked.
 - Temp diagnostics still in tree (marked TEMP): `[gfx]`/`[mm_rsp]` stderr
   counters, MM_EVENT_TRACE. Strip before a proper release.
 
+## 3.5 WORKSPACE RULE learned the hard way (Phase 7)
+
+If a mission involves REGENERATING RecompiledFuncs (toml patch experiments),
+the worktree MUST get its own COPY of RecompiledFuncs and its own
+`output_func_path` — the default worktree setup symlinks it SHARED, and a
+regeneration writes through the symlink into every checkout at once,
+invalidating A/B tests and contaminating the main tree. (Recovery: regenerate
+from main's toml.) Draft work parked in `drafts/backdrop_band_patches.toml.draft`.
+
 ## 4. Worker orchestration (how the waves were run)
 
 `tools/or_worker.sh` (headless claude-code on OpenRouter GLM),
