@@ -1,0 +1,52 @@
+From 23ae9e0b7fd0711b56d0829501d982f5521da0b5 Mon Sep 17 00:00:00 2001
+From: Thiago Lira <thlira15@gmail.com>
+Date: Thu, 9 Jul 2026 10:46:20 -0300
+Subject: [PATCH 2/2] do_rom_read: register overlay code sections landed by
+ runtime PI DMAs
+
+N64Recomp emits no per-call-site overlay-load hooks for some titles
+(Mischief Makers); without this, a runtime DMA of overlay code copies the
+bytes but never populates func_map for the region, and the next indirect
+jump into the overlay aborts. Symmetric to the init path's load_overlays
+call; no-op for non-code DMAs.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_016g6NrpY7bmbqNfAxa23cTC
+---
+ librecomp/src/pi.cpp | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/librecomp/src/pi.cpp b/librecomp/src/pi.cpp
+index 43509ba..7e9a76c 100644
+--- a/librecomp/src/pi.cpp
++++ b/librecomp/src/pi.cpp
+@@ -8,6 +8,7 @@
+ #include "librecomp/addresses.hpp"
+ #include "librecomp/game.hpp"
+ #include "librecomp/files.hpp"
++#include "librecomp/overlays.hpp"
+ #include <ultramodern/ultra64.h>
+ #include <ultramodern/ultramodern.hpp>
+ 
+@@ -72,6 +73,18 @@ void recomp::do_rom_read(uint8_t* rdram, gpr ram_address, uint32_t physical_addr
+         MEM_B(i, ram_address) = *rom_addr;
+         rom_addr++;
+     }
++
++    // Register any recompiled code sections whose ROM range this DMA just
++    // landed into RDRAM. N64Recomp emits no per-call-site overlay-load hooks
++    // for this title, so without this a runtime DMA of overlay code (e.g.
++    // Mischief Makers' world/level object code DMA'd raw to 0x801B9900) would
++    // copy the bytes but leave func_map empty for that region — the next
++    // indirect jump into the overlay then aborts in get_function(). This is
++    // the symmetric counterpart to the load_overlays() call the init path
++    // makes for the boot DMA. load_overlays() is a no-op for DMAs that don't
++    // overlap a code section (assets, dispatch tables, saves), so it is safe
++    // to run on every ROM read.
++    load_overlays(physical_addr - recomp::rom_base, (int32_t)ram_address, (uint32_t)num_bytes);
+ }
+ 
+ void recomp::do_rom_pio(uint8_t* rdram, gpr ram_address, uint32_t physical_addr) {
+-- 
+2.54.0
+

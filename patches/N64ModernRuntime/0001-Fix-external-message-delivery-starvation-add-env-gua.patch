@@ -1,0 +1,146 @@
+From 6d3448b23bea1c0301cc542ee11bada4910ed58e Mon Sep 17 00:00:00 2001
+From: Thiago Lira <thlira15@gmail.com>
+Date: Thu, 9 Jul 2026 02:00:14 -0300
+Subject: [PATCH 1/2] Fix external-message delivery starvation; add env-guarded
+ event tracing
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+wait_for_external_message delivered exactly one message per call via
+wait_dequeue. moodycamel's dequeue can persistently miss items sitting in
+another producer thread's sub-queue: observed a dp_complete enqueued from
+the gfx thread that was never returned while 60Hz VI messages kept being
+delivered — deadlocking a game blocked on its DP message whenever no game
+thread was awake to run the full-drain path. After the blocking wait, drain
+all pending messages (dequeue_external_messages), which visits all producer
+streams.
+
+Also: MM_EVENT_TRACE=1 stderr tracing (TEMP, for trouble-makers bring-up)
+in sp/dp_complete, do_send/do_recv for selected queues, and both dequeue
+paths.
+
+Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_016g6NrpY7bmbqNfAxa23cTC
+---
+ ultramodern/src/events.cpp    | 14 ++++++++++++++
+ ultramodern/src/mesgqueue.cpp | 33 +++++++++++++++++++++++++++++++++
+ 2 files changed, 47 insertions(+)
+
+diff --git a/ultramodern/src/events.cpp b/ultramodern/src/events.cpp
+index 518529d..bbd3ba5 100644
+--- a/ultramodern/src/events.cpp
++++ b/ultramodern/src/events.cpp
+@@ -249,15 +249,29 @@ void vi_thread_func() {
+     }
+ }
+ 
++// TEMP (trouble-makers bring-up): event-flow tracing, enabled by MM_EVENT_TRACE=1.
++bool mm_event_trace() {
++    static const bool enabled = getenv("MM_EVENT_TRACE") != nullptr;
++    return enabled;
++}
++
+ void sp_complete() {
+     uint8_t* rdram = events_context.rdram;
+     std::lock_guard lock{ events_context.message_mutex };
++    if (mm_event_trace()) {
++        static int n = 0;
++        fprintf(stderr, "[ev] sp_complete #%d -> mq %08X\n", ++n, (uint32_t)events_context.sp.mq);
++    }
+     ultramodern::enqueue_external_message_src(events_context.sp.mq, events_context.sp.msg, false, ultramodern::EventMessageSource::Sp);
+ }
+ 
+ void dp_complete() {
+     uint8_t* rdram = events_context.rdram;
+     std::lock_guard lock{ events_context.message_mutex };
++    if (mm_event_trace()) {
++        static int n = 0;
++        fprintf(stderr, "[ev] dp_complete #%d -> mq %08X\n", ++n, (uint32_t)events_context.dp.mq);
++    }
+     ultramodern::enqueue_external_message_src(events_context.dp.mq, events_context.dp.msg, false, ultramodern::EventMessageSource::Dp);
+ }
+ 
+diff --git a/ultramodern/src/mesgqueue.cpp b/ultramodern/src/mesgqueue.cpp
+index 9944a02..72069da 100644
+--- a/ultramodern/src/mesgqueue.cpp
++++ b/ultramodern/src/mesgqueue.cpp
+@@ -37,10 +37,15 @@ void ultramodern::enqueue_external_message(PTR(OSMesgQueue) mq, OSMesg msg, bool
+ 
+ bool do_send(RDRAM_ARG PTR(OSMesgQueue) mq_, OSMesg msg, bool jam, bool block);
+ 
++static bool mm_q_trace(uint32_t mq); // TEMP (trouble-makers bring-up), defined below
++
+ void dequeue_external_messages(RDRAM_ARG1) {
+     QueuedMessage to_send;
+     std::vector<QueuedMessage> requeued_messages{};
+     while (external_messages.try_dequeue(to_send)) {
++        if (mm_q_trace((uint32_t)to_send.mq)) {
++            fprintf(stderr, "[ev] deq   mq %08X (drain)\n", (uint32_t)to_send.mq);
++        }
+         if (!do_send(PASS_RDRAM to_send.mq, to_send.mesg, to_send.jam, false) && to_send.requeue_if_blocked) {
+             requeued_messages.push_back(to_send);
+         }
+@@ -53,9 +58,20 @@ void dequeue_external_messages(RDRAM_ARG1) {
+ void ultramodern::wait_for_external_message(RDRAM_ARG1) {
+     QueuedMessage to_send;
+     external_messages.wait_dequeue(to_send);
++    if (mm_q_trace((uint32_t)to_send.mq)) {
++        fprintf(stderr, "[ev] deq   mq %08X (wait)\n", (uint32_t)to_send.mq);
++    }
+     if (!do_send(PASS_RDRAM to_send.mq, to_send.mesg, to_send.jam, false) && to_send.requeue_if_blocked) {
+         external_messages.enqueue(to_send);
+     }
++    // Deliver everything else that's pending, not just the first message.
++    // A single wait_dequeue can starve items that sit in another producer
++    // thread's sub-queue (observed: a dp_complete from the gfx thread was
++    // never returned by wait_dequeue while 60Hz VI messages kept arriving,
++    // deadlocking a game blocked on the DP message when no game thread was
++    // awake to run dequeue_external_messages). The full drain loop visits
++    // all producer streams.
++    dequeue_external_messages(PASS_RDRAM1);
+ }
+ 
+ void ultramodern::wait_for_external_message_timed(RDRAM_ARG u32 millis) {
+@@ -89,14 +105,28 @@ s32 MQ_IS_FULL(OSMesgQueue* mq) {
+     return MQ_GET_COUNT(mq) >= mq->msgCount;
+ }
+ 
++// TEMP (trouble-makers bring-up): per-queue tracing via MM_EVENT_TRACE=1 for
++// the game's DP (0x8012ABF0), audio SP (0x801377D0) and VI (0x8012ABC0) queues.
++static bool mm_q_trace(uint32_t mq) {
++    static const bool enabled = getenv("MM_EVENT_TRACE") != nullptr;
++    if (!enabled) return false;
++    return mq == 0x8012ABF0u || mq == 0x801377D0u || mq == 0x8012ABC0u;
++}
++
+ bool do_send(RDRAM_ARG PTR(OSMesgQueue) mq_, OSMesg msg, bool jam, bool block) {
+     OSMesgQueue* mq = TO_PTR(OSMesgQueue, mq_);
+     if (!block) {
+         // If non-blocking, fail if the queue is full.
+         if (MQ_IS_FULL(mq)) {
++            if (mm_q_trace((uint32_t)mq_)) {
++                fprintf(stderr, "[ev] send  mq %08X FULL (dropped or requeued)\n", (uint32_t)mq_);
++            }
+             return false;
+         }
+     }
++    if (mm_q_trace((uint32_t)mq_)) {
++        fprintf(stderr, "[ev] send  mq %08X ok valid=%d->%d\n", (uint32_t)mq_, mq->validCount, mq->validCount + 1);
++    }
+     else {
+         // Otherwise, yield this thread until the queue has room.
+         while (MQ_IS_FULL(mq)) {
+@@ -130,6 +160,9 @@ bool do_send(RDRAM_ARG PTR(OSMesgQueue) mq_, OSMesg msg, bool jam, bool block) {
+ 
+ bool do_recv(RDRAM_ARG PTR(OSMesgQueue) mq_, PTR(OSMesg) msg_, bool block) {
+     OSMesgQueue* mq = TO_PTR(OSMesgQueue, mq_);
++    if (mm_q_trace((uint32_t)mq_)) {
++        fprintf(stderr, "[ev] recv  mq %08X valid=%d block=%d\n", (uint32_t)mq_, mq->validCount, block);
++    }
+     if (!block) {
+         // If non-blocking, fail if the queue is empty
+         if (MQ_IS_EMPTY(mq)) {
+-- 
+2.54.0
+
