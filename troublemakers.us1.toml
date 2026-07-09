@@ -73,4 +73,27 @@ instruction = [
     { func = "Camera_UpdateViewBounds", vram = 0x80046370, value = 0x2443FEE0 }, # LEFT  = camX - 0x120
     { func = "Camera_UpdateViewBounds", vram = 0x80046398, value = 0x24440120 }, # RIGHT = camX + 0x120
     { func = "func_800463C0",           vram = 0x800463E0, value = 0x25CFFEE0 }, # LEFT re-set = camX - 0x120
+
+    # EXPERIMENTAL (branch widescreen-backdrop): extend the backdrop tile
+    # band into the widescreen wings — STATIC path (func_80082380) only; the
+    # scrolling path (func_80082820) is deferred (the parked draft's arg-
+    # register claims for it were wrong; see drafts/). The band is a 7x10
+    # grid of 32px tiles (exactly 320px wide) drawn from a caller-passed
+    # tile array ($a3). The entry hook below repacks that array into SCRATCH
+    # rdram as 7x20 with horizontal modulo wrap and repoints ctx->r7 at the
+    # scratch copy — no game memory is written. These five instruction
+    # patches widen the draw loop to match (cols -5..14, 80-byte row stride,
+    # wing-friendly edge handling). All original words ROM-verified.
+    { func = "func_80082380", vram = 0x8008252C, value = 0x2413000F }, # col stop 10 -> 15
+    { func = "func_80082380", vram = 0x80082534, value = 0x240DFFFB }, # col start 0 -> -5
+    { func = "func_80082380", vram = 0x8008254C, value = 0x24EE00C0 }, # left-edge skip 0x20 -> 0xC0
+    { func = "func_80082380", vram = 0x80082644, value = 0x04010003 }, # drop max(0,x) clamp
+    { func = "func_80082380", vram = 0x800826F4, value = 0x27190050 }, # row stride 40 -> 80 bytes
+]
+
+# Entry hook: repack the 7x10 tile array into scratch rdram (top of the
+# committed 512MB, above anything the game or an empty mod heap touches) as
+# 7x20 with modulo wrap, then repoint the array argument at the scratch.
+hook = [
+    { func = "func_80082380", text = '{ gpr b = ctx->r7; gpr s = (gpr)(int32_t)0x9FFFE000; int y; int c; for (y = 0; y < 7; y++) { for (c = 0; c < 20; c++) { int sc = c - 5; int w = ((sc % 10) + 10) % 10; MEM_W((y*20 + c)*4, s) = MEM_W((y*10 + w)*4, b); } } ctx->r7 = s; }' },
 ]
