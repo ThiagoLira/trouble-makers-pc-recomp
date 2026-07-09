@@ -58,3 +58,19 @@ manual_funcs = [
     { name = "_Ldunscale", section = ".main", vram = 0x800B9904, size = 0x104 },  # gap
     { name = "_Genld", section = ".main", vram = 0x800B9A08, size = 0x788 },  # gap
 ]
+
+# Widescreen: widen the per-frame view-cull rectangle at translation time.
+# The game culls actor/sprite DRAWING against a rect it recomputes every
+# frame as camX +/- 0x90 (144px) horizontally (Camera_UpdateViewBounds at
+# 0x800462F0, plus a LEFT re-set in func_800463C0). Patching the addiu
+# immediates to +/- 0x120 (288px, enough for 21:9) makes wing content update
+# deterministically — the previous host-thread mirror raced the game's
+# per-frame rewrite and sprites flickered in the wings. In 4:3 the extra
+# margin only draws objects RT64 clips; verified no gameplay impact.
+# Y bounds (+/- 0x70) are left untouched.
+[patches]
+instruction = [
+    { func = "Camera_UpdateViewBounds", vram = 0x80046370, value = 0x2443FEE0 }, # LEFT  = camX - 0x120
+    { func = "Camera_UpdateViewBounds", vram = 0x80046398, value = 0x24440120 }, # RIGHT = camX + 0x120
+    { func = "func_800463C0",           vram = 0x800463E0, value = 0x25CFFEE0 }, # LEFT re-set = camX - 0x120
+]
