@@ -74,9 +74,10 @@ cmake --build build --target mm_game -j8
 ./build/src/game/mm_game path/to/your.z64                # windowed 1280x960
 ./build/src/game/mm_game rom.z64 --fullscreen
 ./build/src/game/mm_game rom.z64 --window 1920x1440 --msaa 4
-./build/src/game/mm_game rom.z64 --widescreen    # hybrid widescreen: live wings
-#   (world layers & sprites render into the 16:9 wings; areas the engine
-#    never draws stay clean black — no stale-frame garbage)
+./build/src/game/mm_game rom.z64 --widescreen    # experimental; sprites and some
+#   layers render into the 16:9 wings, but many scenes keep black bars —
+#   the game composes each scene from 4:3-authored layers. Default is
+#   clean pillarboxed 4:3 (recommended).
 ```
 
 Options persist to `~/.config/troublemakers-recomp/display.cfg` (CLI
