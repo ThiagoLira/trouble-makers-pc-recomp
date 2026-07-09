@@ -12,6 +12,7 @@
 // reference/Zelda64Recomp/src/main/register_overlays.cpp.
 
 #include <cstdio>
+#include <cstdlib>
 #include <sys/mman.h>
 
 #include <atomic>
@@ -127,6 +128,98 @@ void on_game_init(uint8_t* rdram, recomp_context* /*ctx*/) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
     }).detach();
+
+    // ========================================================================
+    // PHASE 6 (lane a) — MM_WIDE widescreen-cull experiment.
+    //
+    // Problem: with --widescreen (RT64 AspectRatio::Expand) the render field
+    // widens, but the game only paints/culls its 4:3 region. Sprites/scenery
+    // that cross the 4:3 edge get drawn once (while straddling the edge) and
+    // then freeze in the side "wings" — they stop being redrawn once fully
+    // past the edge, so stale framebuffer accumulates. Evidence the game does
+    // NOT hard-scissor: it draws past x=320 (the frozen pixels prove that),
+    // it just stops *updating* there.
+    //
+    // The lever (found by decomp spelunking, see PHASE6_NOTES_a.md): the game
+    // computes a per-frame view cull rectangle in FixedCoord (Q16.16) and every
+    // actor/sprite draw function culls against it:
+    //   D_800BE568 = LEFT  bound  = gScreenPosCurrentX.whole - 0x90  (0x90 = 144)
+    //   D_800BE56C = RIGHT bound  = gScreenPosCurrentX.whole + 0x90
+    //   D_800BE570 = TOP   bound  = gScreenPosCurrentY.whole - 0x70  (0x70 = 112)
+    //   D_800BE574 = BOTTOM bound = gScreenPosCurrentY.whole + 0x70
+    // (Camera_UpdateViewBounds @ 0x800462F0 + func_800463C0 in decomp
+    // src/438E0.c:290. Overlay readers, e.g. func_8019B314, do
+    // `slt actorX, D_800BE568; beqz skip` and `slt D_800BE56C, actorX; beqz
+    // skip` — a straight draw-cull test.) The half-extents 0x90/0x70 are
+    // baked as addiu immediates, so the lever is the OUTPUT variables: widen
+    // them at runtime and actors past the 4:3 edge stop being culled and get
+    // redrawn live into the wings.
+    //
+    // The game overwrites these bounds every frame (Camera_UpdateViewBounds
+    // runs in the per-frame camera update), so a one-shot poke won't persist.
+    // Mirror the AI_LEN pattern: a detached ~1ms host thread recomputes them
+    // from the LIVE camera position with a widened half-extent. At 60 fps
+    // (16 ms/frame) several pokes land inside each frame's draw window, so the
+    // widened bound reaches the cull test. Self-terminates on `exited` (rdram
+    // is munmap'd only after the event threads join, same teardown safety as
+    // the AI_LEN mirror).
+    //
+    // Gate: env MM_WIDE=1 enables. MM_WIDE_HALF (default 0x100=256) sets the
+    // horizontal half-extent in pixels (game default 0x90=144; screen half is
+    // 0xA0=160, so anything > 0xA0 fills the 4:3 edge + wings). MM_WIDE_Y_HALF
+    // (default 0 = leave Y to the game) optionally widens the vertical bounds.
+    const char* wide_env = getenv("MM_WIDE");
+    if (wide_env != nullptr && wide_env[0] != '0') {
+        // rdram offsets = vaddr - 0x80000000. All in committed .data, aligned.
+        constexpr uintptr_t kCamXOff = 0x800BE558u - 0x80000000u; // gScreenPosCurrentX
+        constexpr uintptr_t kCamYOff = 0x800BE55Cu - 0x80000000u; // gScreenPosCurrentY
+        constexpr uintptr_t kLeftOff = 0x800BE568u - 0x80000000u; // D_800BE568
+        constexpr uintptr_t kRightOff = 0x800BE56Cu - 0x80000000u; // D_800BE56C
+        constexpr uintptr_t kTopOff = 0x800BE570u - 0x80000000u; // D_800BE570
+        constexpr uintptr_t kBotOff = 0x800BE574u - 0x80000000u; // D_800BE574
+
+        const char* half_env = getenv("MM_WIDE_HALF");
+        int half = half_env ? std::atoi(half_env) : 0x100; // 256 px; > 0xA0 screen half
+        if (half < 0xA0) half = 0xA0; // never narrower than the screen half
+        const char* yhalf_env = getenv("MM_WIDE_Y_HALF");
+        int yhalf = yhalf_env ? std::atoi(yhalf_env) : 0; // 0 = leave vertical untouched
+
+        std::fprintf(stderr, "[mm_wide] on: half=%dpx (game 0x90=144), y_half=%dpx\n",
+                     half, yhalf);
+
+        // FixedCoord is Q16.16: raw s32, .whole (integer) = bits 16..31. The
+        // cull test reads .whole via a sign-extended halfword load, so only the
+        // integer part matters; we rewrite .whole and keep the low 16 (frac).
+        // MEM_W is a plain aligned host word load (no swizzle), so a host s32
+        // store is read back verbatim by the recompiled lw/sh. volatile: these
+        // are game-visible cull registers; the store must issue every tick.
+        auto write_whole = [](volatile int32_t* p, int32_t whole) {
+            *p = (*p & 0x0000FFFF) | (static_cast<uint32_t>(static_cast<int16_t>(whole)) << 16);
+        };
+        auto read_whole = [](volatile const int32_t* p) -> int16_t {
+            return static_cast<int16_t>((*p >> 16) & 0xFFFF);
+        };
+
+        std::thread([=]() {
+            while (!exited.load(std::memory_order_relaxed)) {
+                volatile int32_t* camX = reinterpret_cast<volatile int32_t*>(rdram + kCamXOff);
+                volatile int32_t* left = reinterpret_cast<volatile int32_t*>(rdram + kLeftOff);
+                volatile int32_t* right = reinterpret_cast<volatile int32_t*>(rdram + kRightOff);
+                int16_t cx = read_whole(camX); // camera center, integer px
+                write_whole(left,  static_cast<int32_t>(cx) - half);
+                write_whole(right, static_cast<int32_t>(cx) + half);
+                if (yhalf > 0) {
+                    volatile int32_t* camY = reinterpret_cast<volatile int32_t*>(rdram + kCamYOff);
+                    volatile int32_t* top = reinterpret_cast<volatile int32_t*>(rdram + kTopOff);
+                    volatile int32_t* bot = reinterpret_cast<volatile int32_t*>(rdram + kBotOff);
+                    int16_t cy = read_whole(camY);
+                    write_whole(top, static_cast<int32_t>(cy) - yhalf);
+                    write_whole(bot, static_cast<int32_t>(cy) + yhalf);
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+        }).detach();
+    }
 }
 
 } // namespace troublemakers

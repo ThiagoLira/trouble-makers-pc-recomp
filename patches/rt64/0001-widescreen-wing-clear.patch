@@ -1,0 +1,149 @@
+diff --git a/src/common/rt64_enhancement_configuration.cpp b/src/common/rt64_enhancement_configuration.cpp
+index 7050102..6026064 100644
+--- a/src/common/rt64_enhancement_configuration.cpp
++++ b/src/common/rt64_enhancement_configuration.cpp
+@@ -11,6 +11,7 @@ namespace RT64 {
+         framebuffer.reinterpretFixULS = true;
+         presentation.mode = Presentation::Mode::SkipBuffering;
+         rect.fixRectLR = true;
++        rect.clearWings = false; // [MM] opt-in via host MM_CLEAR_WINGS=1
+         f3dex.forceBranch = false;
+         s2dex.fixBilerpMismatch = true;
+         s2dex.framebufferFastPath = true;
+diff --git a/src/common/rt64_enhancement_configuration.h b/src/common/rt64_enhancement_configuration.h
+index ffabdbf..dab74d9 100644
+--- a/src/common/rt64_enhancement_configuration.h
++++ b/src/common/rt64_enhancement_configuration.h
+@@ -24,6 +24,12 @@ namespace RT64 {
+         
+         struct Rect {
+             bool fixRectLR;
++            // [MM] Clear the extended "wing" regions (the HD render-target area
++            // outside the game's 4:3 drawn region) to a solid color at the start
++            // of each framebuffer's render pass, so AspectRatio::Expand doesn't
++            // leave stale framebuffer content frozen in the wings. See
++            // PHASE6_NOTES_b.md. Gated from the host via MM_CLEAR_WINGS=1.
++            bool clearWings;
+         };
+ 
+         struct F3DEX {
+diff --git a/src/hle/rt64_state.cpp b/src/hle/rt64_state.cpp
+index 6b0bb31..bff475d 100644
+--- a/src/hle/rt64_state.cpp
++++ b/src/hle/rt64_state.cpp
+@@ -1248,6 +1248,7 @@ namespace RT64 {
+                         drawParams.deltaTimeMs = 0.0f;
+                         drawParams.ubershadersOnly = false;
+                         drawParams.fixRectLR = false;
++                        drawParams.clearWings = false;
+                         drawParams.postBlendNoise = ext.emulatorConfig->dither.postBlendNoise;
+                         drawParams.postBlendNoiseNegative = ext.emulatorConfig->dither.postBlendNoiseNegative;
+                         drawParams.maxGameCall = UINT_MAX;
+diff --git a/src/hle/rt64_workload_queue.cpp b/src/hle/rt64_workload_queue.cpp
+index 5b0b726..2db3f9e 100644
+--- a/src/hle/rt64_workload_queue.cpp
++++ b/src/hle/rt64_workload_queue.cpp
+@@ -247,6 +247,7 @@ namespace RT64 {
+ #   endif
+         
+         workloadConfig.fixRectLR = ext.sharedResources->enhancementConfig.rect.fixRectLR;
++        workloadConfig.clearWings = ext.sharedResources->enhancementConfig.rect.clearWings;
+         workloadConfig.postBlendNoise = ext.sharedResources->emulatorConfig.dither.postBlendNoise;
+         workloadConfig.postBlendNoiseNegative = ext.sharedResources->emulatorConfig.dither.postBlendNoiseNegative;
+         
+@@ -620,6 +621,7 @@ namespace RT64 {
+                     drawParams.deltaTimeMs = deltaTimeMs;
+                     drawParams.ubershadersOnly = ubershadersOnly;
+                     drawParams.fixRectLR = workloadConfig.fixRectLR;
++                    drawParams.clearWings = workloadConfig.clearWings;
+                     drawParams.postBlendNoise = workloadConfig.postBlendNoise;
+                     drawParams.postBlendNoiseNegative = workloadConfig.postBlendNoiseNegative;
+                     drawParams.maxGameCall = std::min(gameCallCountMax - gameCallCursor, fbPair.gameCallCount);
+diff --git a/src/hle/rt64_workload_queue.h b/src/hle/rt64_workload_queue.h
+index e9d7a02..6db9d52 100644
+--- a/src/hle/rt64_workload_queue.h
++++ b/src/hle/rt64_workload_queue.h
+@@ -56,6 +56,7 @@ namespace RT64 {
+             float extAspectPercentage = 1.0f;
+             uint32_t targetRate = 0;
+             bool fixRectLR = false;
++            bool clearWings = false; // [MM] wing-clear passthrough
+             bool postBlendNoise = false;
+             bool postBlendNoiseNegative = false;
+         };
+diff --git a/src/render/rt64_framebuffer_renderer.cpp b/src/render/rt64_framebuffer_renderer.cpp
+index c4cf1bf..b53e6d1 100644
+--- a/src/render/rt64_framebuffer_renderer.cpp
++++ b/src/render/rt64_framebuffer_renderer.cpp
+@@ -1274,6 +1274,41 @@ namespace RT64 {
+ 
+         bool depthState = false;
+         worker->commandList->setFramebuffer(targetDrawCall.fbStorage->colorDepthWrite.get());
++
++        // [MM] Widescreen wing clear. Under AspectRatio::Expand the HD color
++        // target is wider than the game's 4:3 framebuffer (the render-target
++        // width is fbWidth * resolutionScale.x, and resolutionScale.x carries
++        // the aspect-ratio scale). 2D draws (fillrect/texrect) keep their 4:3
++        // size and are *centered* (they use invRatioScale = 1/aspectRatioScale),
++        // so the HD pixels on either side of the centered 4:3 region are never
++        // written by the game and would otherwise accumulate stale framebuffer
++        // content across frames. Clear those two wing rects here, before the
++        // scene draws, so 3D geometry (whose projection IS widened by the
++        // aspect-ratio scale) redraws fresh into the wings while 2D stays put.
++        // See PHASE6_NOTES_b.md. Gated by enhancementConfig.rect.clearWings.
++        if (framebuffer.clearWings && (colorTarget != nullptr) && (colorTarget->width > 0) && (colorTarget->height > 0)) {
++            const float aspectScale = framebuffer.aspectScale;
++            if (aspectScale > 1.0f + 1e-4f) {
++                // 4:3 HD width = full target width / aspectScale; it is centered.
++                const int32_t fullW = static_cast<int32_t>(colorTarget->width);
++                const int32_t fullH = static_cast<int32_t>(colorTarget->height);
++                const int32_t innerW = static_cast<int32_t>(std::lround(static_cast<float>(fullW) / aspectScale));
++                const int32_t leftEdge = (fullW - innerW) / 2;
++                const int32_t rightEdge = leftEdge + innerW;
++                // [MM] Wing clear color — black by default. Tweak here if the
++                // game's natural off-stage background is a different solid color.
++                const RenderColor wingColor(0.0f, 0.0f, 0.0f, 1.0f);
++                if (leftEdge > 0) {
++                    const RenderRect leftWing(0, 0, leftEdge, fullH);
++                    worker->commandList->clearColor(0, wingColor, &leftWing, 1);
++                }
++                if (rightEdge < fullW) {
++                    const RenderRect rightWing(rightEdge, 0, fullW, fullH);
++                    worker->commandList->clearColor(0, wingColor, &rightWing, 1);
++                }
++            }
++        }
++
+         for (const auto &pair : targetDrawCall.sceneIndices) {
+ #       if RT_ENABLED
+             if (pair.second) {
+@@ -1359,6 +1394,8 @@ namespace RT64 {
+         }
+ 
+         Framebuffer &framebuffer = framebufferVector[framebufferCount - 1];
++        framebuffer.clearWings = p.clearWings;
++        framebuffer.aspectScale = (p.aspectRatioSource > 0.0f) ? (p.aspectRatioTarget / p.aspectRatioSource) : 1.0f;
+         void *paramBufferBytes = framebuffer.paramsBuffer->map();
+         memcpy(paramBufferBytes, &fbParams, sizeof(interop::FramebufferParams));
+         framebuffer.paramsBuffer->unmap();
+diff --git a/src/render/rt64_framebuffer_renderer.h b/src/render/rt64_framebuffer_renderer.h
+index f593ab0..15f7964 100644
+--- a/src/render/rt64_framebuffer_renderer.h
++++ b/src/render/rt64_framebuffer_renderer.h
+@@ -117,6 +117,8 @@ namespace RT64 {
+             std::unique_ptr<FramebufferRendererDescriptorFramebufferSet> descDummyFbSet;
+             std::set<RenderTarget *> transitionRenderTargetSet;
+             RenderTargetDrawCall renderTargetDrawCall;
++            bool clearWings = false; // [MM] per-framebuffer wing-clear request
++            float aspectScale = 1.0f; // [MM] aspectRatioTarget/Source (1.0 = no widen)
+         };
+ 
+         std::vector<Framebuffer> framebufferVector;
+@@ -144,6 +146,7 @@ namespace RT64 {
+             float deltaTimeMs;
+             bool ubershadersOnly;
+             bool fixRectLR;
++            bool clearWings;
+             bool postBlendNoise;
+             bool postBlendNoiseNegative;
+             uint32_t maxGameCall;

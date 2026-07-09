@@ -50,10 +50,12 @@ cd trouble-makers-pc-recomp
 # EEPROM semantics):
 git -C lib/N64ModernRuntime am "$(pwd)"/patches/N64ModernRuntime/*.patch
 
-# RT64 (renderer), pinned to the fork/commit Zelda64Recomp uses:
+# RT64 (renderer), pinned to the fork/commit Zelda64Recomp uses, plus the
+# widescreen wing-clear patch:
 git clone https://github.com/rt64/rt64 lib/rt64
 git -C lib/rt64 checkout 23cab603
 git -C lib/rt64 submodule update --init --recursive
+git -C lib/rt64 apply "$(pwd)"/patches/rt64/0001-widescreen-wing-clear.patch
 
 # Translate the game + audio microcode:
 cp ../trouble-makers-ai-recomp/build/troublemakers.elf input/
@@ -72,7 +74,9 @@ cmake --build build --target mm_game -j8
 ./build/src/game/mm_game path/to/your.z64                # windowed 1280x960
 ./build/src/game/mm_game rom.z64 --fullscreen
 ./build/src/game/mm_game rom.z64 --window 1920x1440 --msaa 4
-./build/src/game/mm_game rom.z64 --widescreen    # opt-in: 2D games can show off-stage areas
+./build/src/game/mm_game rom.z64 --widescreen    # hybrid widescreen: live wings
+#   (world layers & sprites render into the 16:9 wings; areas the engine
+#    never draws stay clean black — no stale-frame garbage)
 ```
 
 Options persist to `~/.config/troublemakers-recomp/display.cfg` (CLI

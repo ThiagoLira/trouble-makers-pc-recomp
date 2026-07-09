@@ -13,6 +13,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <memory>
 
 #ifndef HLSL_CPU
@@ -202,6 +203,22 @@ public:
 
         app_->setFullScreen(ultramodern::renderer::get_graphics_config().wm_option
                             == ultramodern::renderer::WindowMode::Fullscreen);
+
+        // [MM] Opt-in widescreen wing clear. With --widescreen (AspectRatio::Expand)
+        // the HD color target is wider than the game's 4:3 framebuffer; the side
+        // "wings" are never written by the game's 2D draws and otherwise freeze
+        // stale framebuffer content. MM_CLEAR_WINGS=1 makes RT64 clear those wing
+        // rects at the start of each framebuffer's render pass. See
+        // PHASE6_NOTES_b.md (lane b).
+        bool clear_wings = ultramodern::renderer::get_graphics_config().ar_option
+                           == ultramodern::renderer::AspectRatio::Expand; // default ON in widescreen
+        if (const char* env = std::getenv("MM_CLEAR_WINGS")) {
+            clear_wings = (std::atoi(env) != 0);
+        }
+        if (clear_wings) {
+            app_->enhancementConfig.rect.clearWings = true;
+            app_->updateEnhancementConfig();
+        }
     }
 
     ~Rt64Context() override = default;

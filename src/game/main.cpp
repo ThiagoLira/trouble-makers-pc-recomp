@@ -355,6 +355,13 @@ int main(int argc, char** argv) {
     apply_display_config();
     save_display_config();
 
+    // Widescreen implies the in-game cull widening (the game only paints its
+    // 4:3 region otherwise; see register_overlays.cpp). setenv with
+    // overwrite=0 keeps MM_WIDE / MM_WIDE_HALF usable as tuning overrides.
+    if (g_widescreen) {
+        setenv("MM_WIDE", "1", 0);
+    }
+
     // Store config (mods, saves) under a per-project folder in the user's
     // config dir. Sibling workers may relocate this.
     namespace fs = std::filesystem;
