@@ -80,7 +80,7 @@ instruction = [
     # register claims for it were wrong; see drafts/). The band is a 7x10
     # grid of 32px tiles (exactly 320px wide) drawn from a caller-passed
     # tile array ($a3). The entry hook below repacks that array into SCRATCH
-    # rdram as 7x20 with horizontal modulo wrap and repoints ctx->r7 at the
+    # rdram as 7x20 with horizontal EDGE REFLECTION (mirror the columns nearest each edge; modulo wrap mapped empty/unrelated map columns into the wings — asymmetric black + spliced-seam artifacts) and repoints ctx->r7 at the
     # scratch copy — no game memory is written. These five instruction
     # patches widen the draw loop to match (cols -5..14, 80-byte row stride,
     # wing-friendly edge handling). All original words ROM-verified.
@@ -105,13 +105,14 @@ instruction = [
 # system's shared array D_80180D90 (the ONLY buffer used by the backdrop
 # band — both the static and scrolling paths of func_80082F10 feed from it,
 # per the Phase 8 layer-log forensics), repack it into scratch rdram (top of
-# the committed 512MB) as 7x20 with horizontal modulo wrap + two zeroed
+# the committed 512MB) as 7x20 with horizontal EDGE REFLECTION (mirror the columns nearest each edge; modulo wrap mapped empty/unrelated map columns into the wings — asymmetric black + spliced-seam artifacts) + two zeroed
 # guard rows, and repoint the argument at the scratch copy. Any other
 # caller/buffer passes through untouched — this discrimination is what the
 # failed attempt 2 lacked (it repacked every caller's buffer and corrupted
-# non-backdrop draws). Static path takes the array in $a3/ctx->r7;
-# scrolling path in $a1/ctx->r5 (asm-verified; framebuffer is $a0 there).
+# non-backdrop draws). Static path takes the array in $a3/ctx->r7 (buffer 0x80180B60);
+# scrolling path in $a1/ctx->r5 (buffer 0x80180D90) — per a runtime pointer census
+# across the full intro/title/demo cycle, each path only ever receives its one buffer (asm-verified; framebuffer is $a0 there).
 hook = [
-    { func = "func_80082380", text = '{ if ((uint32_t)ctx->r7 == 0x80180D90u) { gpr b = ctx->r7; gpr s = (gpr)(int32_t)0x9FFFE000; int y; int c; for (y = 0; y < 7; y++) { for (c = 0; c < 20; c++) { int sc = c - 5; int w = ((sc % 10) + 10) % 10; MEM_W((y*20 + c)*4, s) = MEM_W((y*10 + w)*4, b); } } for (c = 0; c < 40; c++) { MEM_W((140 + c)*4, s) = 0; } ctx->r7 = s; } }' },
-    { func = "func_80082820", text = '{ if ((uint32_t)ctx->r5 == 0x80180D90u) { gpr b = ctx->r5; gpr s = (gpr)(int32_t)0x9FFFF000; int y; int c; for (y = 0; y < 7; y++) { for (c = 0; c < 20; c++) { int sc = c - 5; int w = ((sc % 10) + 10) % 10; MEM_W((y*20 + c)*4, s) = MEM_W((y*10 + w)*4, b); } } for (c = 0; c < 40; c++) { MEM_W((140 + c)*4, s) = 0; } ctx->r5 = s; } }' },
+    { func = "func_80082380", text = '{ static uint32_t seen[16]; static int ns = 0; uint32_t p = (uint32_t)ctx->r7; int k; int f = 0; for (k = 0; k < ns; k++) if (seen[k] == p) f = 1; if (!f && ns < 16) { seen[ns++] = p; do { extern int dprintf(int, const char*, ...); dprintf(2, "[80082380 r7] %08X\n", p); } while(0); } if ((uint32_t)ctx->r7 == 0x80180B60u) { gpr b = ctx->r7; gpr s = (gpr)(int32_t)0x9FFFE000; int y; int c; for (y = 0; y < 7; y++) { for (c = 0; c < 20; c++) { int sc = c - 5; int w = sc < 0 ? (-sc - 1) : (sc > 9 ? 19 - sc : sc); if (w < 0) w = 0; if (w > 9) w = 9; MEM_W((y*20 + c)*4, s) = MEM_W((y*10 + w)*4, b); } } for (c = 0; c < 40; c++) { MEM_W((140 + c)*4, s) = 0; } ctx->r7 = s + 20; } }' },
+    { func = "func_80082820", text = '{ static uint32_t seen[16]; static int ns = 0; uint32_t p = (uint32_t)ctx->r5; int k; int f = 0; for (k = 0; k < ns; k++) if (seen[k] == p) f = 1; if (!f && ns < 16) { seen[ns++] = p; do { extern int dprintf(int, const char*, ...); dprintf(2, "[80082820 r5] %08X\n", p); } while(0); } if ((uint32_t)ctx->r5 == 0x80180D90u) { gpr b = ctx->r5; gpr s = (gpr)(int32_t)0x9FFFF000; int y; int c; for (y = 0; y < 7; y++) { for (c = 0; c < 20; c++) { int sc = c - 5; int w = sc < 0 ? (-sc - 1) : (sc > 9 ? 19 - sc : sc); if (w < 0) w = 0; if (w > 9) w = 9; MEM_W((y*20 + c)*4, s) = MEM_W((y*10 + w)*4, b); } } for (c = 0; c < 40; c++) { MEM_W((140 + c)*4, s) = 0; } ctx->r5 = s + 20; } }' },
 ]
