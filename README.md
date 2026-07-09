@@ -29,11 +29,29 @@ translation runs locally from your legally dumped ROM's decomp build.
       [N64ModernRuntime](https://github.com/N64Recomp/N64ModernRuntime)
       (librecomp = libultra reimplementation, ultramodern = platform layer);
       implement game entry + section/function lookup tables
-- [ ] Phase 2 — graphics/audio: RSP microcode via RSPRecomp (game uses F3DEX);
-      RT64 for RDP rendering; audio microcode
+- [ ] Phase 2 — graphics/audio: RSP microcode via RSPRecomp (game uses
+      gspFast3D for graphics — not F3DEX — and aspMain for audio; only aspMain
+      is statically recompiled, RT64 interprets the display list); RT64 for
+      RDP rendering
 - [ ] Phase 3 — game-specific glue: controller/save (EEPROM), Trouble RLE
       asset streaming quirks, TLB if any, stability pass
 - [ ] Phase 4 — niceties: widescreen, high framerate, mod hooks (function
       names from the decomp make hooking pleasant)
 
 Reference integration to model on: Zelda64Recomp (same author/toolchain).
+
+## Licensing
+
+All code authored in this repository is **MIT** (see LICENSE) — the most
+permissive terms we control. Be aware of what the dependencies impose:
+
+- [N64Recomp](tools/N64Recomp) (the recompiler) and RT64 are MIT.
+- [N64ModernRuntime](lib/N64ModernRuntime) (librecomp + ultramodern, the
+  runtime `mm_game` statically links) is **GPLv3**. Our MIT sources may be
+  freely reused anywhere, but any *distributed binary* of `mm_game` is a
+  combined work with the GPLv3 runtime and must be distributed under
+  GPLv3-compatible terms.
+- reference/Zelda64Recomp (GPLv3) is study-only, gitignored, and not part of
+  the build; no code in this repo is derived from it.
+- No game code, ROM contents, or recompiler output is committed or covered by
+  the LICENSE — the translation runs locally from your own legally dumped ROM.

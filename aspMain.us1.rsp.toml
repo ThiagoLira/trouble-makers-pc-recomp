@@ -1,0 +1,37 @@
+# RSPRecomp configuration for the Mischief Makers (US 1.1) audio microcode.
+#
+# The game ships the standard Nintendo "aspMain" audio RSP ucode. Its text blob
+# lives in the US 1.1 ROM at offset 0xBCAB0 (size 0xE20 == 3616 bytes), proven
+# by byte-exact match of the decomp's assets/rsp/aspMain.textbin.bin against
+# baserom.us1.z64 (see PHASE2_NOTES_w2.md for the full evidence table).
+#
+# aspMain has no overlay slots (unlike naudio); it is a single flat IMEM image,
+# so this config needs only the text descriptor + the standard IMEM base address.
+#
+# rom_file_path points at the canonical US 1.1 ROM in the sibling decomp repo
+# (the same dump the whole pipeline uses; *.z64 is gitignored).
+
+text_offset = 0xBCAB0
+text_size = 0xE20
+text_address = 0x04001000
+rom_file_path = "../trouble-makers-ai-recomp/baserom.us1.z64"
+output_file_path = "src/rsp/generated/aspMain.cpp"
+output_function_name = "aspMain"
+
+# Indirect branch (jump-table) targets that static control-flow analysis can't
+# discover are OMITTED here. aspMain is data-driven: a few `jr` instructions
+# branch to addresses computed at runtime from small jump tables in DMEM.
+# RSPRecomp only auto-collects indirect targets from linking branches (jal/
+# jalr), so an unlisted target prints "Unhandled jump target" and aborts the
+# task at *runtime* — not a build-gate concern (compilation succeeds without
+# them). Supplying wrong targets is worse than omitting them: any target that
+# doesn't coincide with a real instruction vram emits a `goto L_XXXX` with no
+# matching label and breaks the build. The reference (Zelda64Recomp) lists 24
+# targets, but those are for the 0x1000-byte MM aspMain; this game's aspMain is
+# 0xE20 bytes (vram span 0x1000-0x1E20), so several of MM's targets (0x1F80,
+# 0x1EF8, 0x1E7C, ...) fall outside the text and must NOT be reused. Deriving
+# the correct set for *this* binary is a Phase-3 runtime-correctness follow-up
+# (run the ucode, dump the jump-table targets, add them here).
+
+# Jump-table targets discovered via the run->abort->add loop (see comment above).
+extra_indirect_branch_targets = [0x1118]

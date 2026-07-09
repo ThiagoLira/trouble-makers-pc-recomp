@@ -8,3 +8,7 @@ reference/
 *.elf
 reference/
 phase1_worker.log
+build_*/
+lib/rt64/
+*.log
+src/rsp/generated/

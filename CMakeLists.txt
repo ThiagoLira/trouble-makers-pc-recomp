@@ -35,6 +35,11 @@ set(RUNTIME_INCLUDES
 add_library(mm_recompiled STATIC)
 
 target_compile_options(mm_recompiled PRIVATE
+    # 30k+ flat extern-C symbols (including generic names like `send`, from
+    # translated static functions) must never enter the executable's dynamic
+    # symbol table: a linked shared lib with a matching undefined symbol (e.g.
+    # libdbus's send(2)) would resolve to translated MIPS code and crash.
+    -fvisibility=hidden
     -fno-strict-aliasing          # MEM_* macros type-pun rdram bytes
     -Wno-unused-variable
     -Wno-unused-but-set-variable
@@ -55,12 +60,24 @@ file(GLOB FUNC_CXX_SOURCES ${CMAKE_SOURCE_DIR}/RecompiledFuncs/*.cpp)
 target_sources(mm_recompiled PRIVATE ${FUNC_C_SOURCES} ${FUNC_CXX_SOURCES})
 
 # ----------------------------------------------------------------------------
-# Stretch: mm_runtime_probe — link the game against the runtime to surface the
-# Phase 2 undefined-symbol work plan. Off by default so the Phase 1 gate build
-# stays self-contained (no SDL2/RT64 coupling). Enable with -DMM_BUILD_PROBE=ON.
+# Phase 2 components — one directory per worker, each with its own
+# CMakeLists.txt. Hooks are guarded on existence so the plain mm_recompiled
+# gate build keeps working while components are absent. Workers: do NOT edit
+# this file — your directory is already included below.
 # ----------------------------------------------------------------------------
 option(MM_BUILD_PROBE "Link mm_recompiled against librecomp/ultramodern to enumerate unresolved symbols" OFF)
-if(MM_BUILD_PROBE)
+
+# `game` must come last: its CMakeLists links whichever component targets
+# exist (if(TARGET mm_graphics) etc.), so the components must be added first.
+set(MM_PHASE2_COMPONENTS rsp graphics audio_input game)
+set(MM_ANY_COMPONENT OFF)
+foreach(_c ${MM_PHASE2_COMPONENTS})
+    if(EXISTS ${CMAKE_SOURCE_DIR}/src/${_c}/CMakeLists.txt)
+        set(MM_ANY_COMPONENT ON)
+    endif()
+endforeach()
+
+if(MM_BUILD_PROBE OR MM_ANY_COMPONENT)
     # The runtime platform layer (ultramodern/src/audio.cpp) pulls in SDL2.
     # The runtime's own CMakeLists doesn't find_package it — the host app is
     # expected to. Provide SDL2 on the include path before adding the runtime.
@@ -68,7 +85,20 @@ if(MM_BUILD_PROBE)
     include_directories(${SDL2_INCLUDE_DIRS})
 
     add_subdirectory(${RUNTIME_DIR} ${CMAKE_BINARY_DIR}/N64ModernRuntime)
+endif()
 
+foreach(_c ${MM_PHASE2_COMPONENTS})
+    if(EXISTS ${CMAKE_SOURCE_DIR}/src/${_c}/CMakeLists.txt)
+        add_subdirectory(src/${_c})
+    endif()
+endforeach()
+
+# ----------------------------------------------------------------------------
+# Stretch: mm_runtime_probe — link the game against the runtime to surface the
+# Phase 2 undefined-symbol work plan. Off by default so the Phase 1 gate build
+# stays self-contained (no SDL2/RT64 coupling). Enable with -DMM_BUILD_PROBE=ON.
+# ----------------------------------------------------------------------------
+if(MM_BUILD_PROBE)
     add_executable(mm_runtime_probe
         ${CMAKE_SOURCE_DIR}/src/probe_main.cpp
         ${CMAKE_SOURCE_DIR}/src/probe_glue.cpp
