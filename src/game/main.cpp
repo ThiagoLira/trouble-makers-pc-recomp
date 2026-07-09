@@ -95,13 +95,75 @@ class StubRendererContext : public ultramodern::renderer::RendererContext {
     float get_resolution_scale() const override { return 1.0f; }
 };
 
-// Display options, set from the command line in main() before recomp::start.
-// The internal render resolution is RT64's job: with Resolution::Auto the
-// scene rasterizes at window-integer-scale (a 4K window ≈ 9x native), so a
-// bigger window IS higher resolution. ds_option supersamples on top (SSAA).
+// Display options: loaded from the config file, overridden by the command
+// line in main(), toggleable at runtime (F11). The internal render
+// resolution is RT64's job: with Resolution::Auto the scene rasterizes at
+// window-integer-scale (a 4K window ≈ 9x native), so a bigger window IS
+// higher resolution. ds_option supersamples on top (SSAA).
 static int g_window_w = 1280;
 static int g_window_h = 960;
 static bool g_fullscreen = false;
+static bool g_widescreen = false;
+static int g_ssaa = 1;
+static int g_msaa = 0;
+static SDL_Window* g_sdl_window = nullptr;
+
+// Build the renderer config from the globals. Safe to call at runtime too:
+// trigger_config_action() makes the gfx thread hand old/new configs to
+// RendererContext::update_config.
+static void apply_display_config() {
+    ultramodern::renderer::GraphicsConfig cfg{};
+    cfg.res_option = ultramodern::renderer::Resolution::Auto; // window-integer-scale
+    cfg.wm_option = g_fullscreen ? ultramodern::renderer::WindowMode::Fullscreen
+                                 : ultramodern::renderer::WindowMode::Windowed;
+    // Expand lets RT64 widen the rendered field to the window's aspect;
+    // Original letterboxes to the game's 4:3. Widescreen on a 2D game can
+    // reveal areas the artists never meant to be seen — it's opt-in.
+    cfg.ar_option = g_widescreen ? ultramodern::renderer::AspectRatio::Expand
+                                 : ultramodern::renderer::AspectRatio::Original;
+    cfg.msaa_option = g_msaa == 2 ? ultramodern::renderer::Antialiasing::MSAA2X
+                    : g_msaa == 4 ? ultramodern::renderer::Antialiasing::MSAA4X
+                    : g_msaa == 8 ? ultramodern::renderer::Antialiasing::MSAA8X
+                                  : ultramodern::renderer::Antialiasing::None;
+    cfg.rr_option = ultramodern::renderer::RefreshRate::Original; // natively 60Hz
+    cfg.hpfb_option = ultramodern::renderer::HighPrecisionFramebuffer::Auto;
+    cfg.ds_option = g_ssaa;
+    ultramodern::renderer::set_graphics_config(cfg);
+}
+
+// Persist display options across runs: a tiny key=value file next to the
+// saves. CLI flags override the file; runtime toggles write it back.
+static std::filesystem::path display_cfg_path() {
+    const char* home = getenv("HOME");
+    return std::filesystem::path(home ? home : ".") / ".config" / "troublemakers-recomp" / "display.cfg";
+}
+
+static void load_display_config() {
+    std::FILE* f = std::fopen(display_cfg_path().c_str(), "r");
+    if (!f) return;
+    char key[32];
+    int value;
+    while (std::fscanf(f, "%31[^=]=%d\n", key, &value) == 2) {
+        std::string_view k = key;
+        if (k == "window_w" && value >= 320) g_window_w = value;
+        else if (k == "window_h" && value >= 240) g_window_h = value;
+        else if (k == "fullscreen") g_fullscreen = value != 0;
+        else if (k == "widescreen") g_widescreen = value != 0;
+        else if (k == "ssaa" && value >= 1 && value <= 8) g_ssaa = value;
+        else if (k == "msaa" && (value == 0 || value == 2 || value == 4 || value == 8)) g_msaa = value;
+    }
+    std::fclose(f);
+}
+
+static void save_display_config() {
+    std::error_code ec;
+    std::filesystem::create_directories(display_cfg_path().parent_path(), ec);
+    std::FILE* f = std::fopen(display_cfg_path().c_str(), "w");
+    if (!f) return;
+    std::fprintf(f, "window_w=%d\nwindow_h=%d\nfullscreen=%d\nwidescreen=%d\nssaa=%d\nmsaa=%d\n",
+                 g_window_w, g_window_h, g_fullscreen ? 1 : 0, g_widescreen ? 1 : 0, g_ssaa, g_msaa);
+    std::fclose(f);
+}
 
 namespace mm::stub::gfx {
 // SEAM (graphics worker owns the real window). For bring-up we create a real
@@ -128,16 +190,32 @@ ultramodern::renderer::WindowHandle create_window(ultramodern::gfx_callbacks_t::
     if (g_fullscreen) {
         SDL_SetWindowFullscreen(win, SDL_WINDOW_FULLSCREEN_DESKTOP);
     }
+    g_sdl_window = win;
     return ultramodern::renderer::WindowHandle{win};
 }
 
 void update_gfx(ultramodern::gfx_callbacks_t::gfx_data_t) {
     // Drain SDL events so the OS/window manager stays responsive and so closing
-    // the window cleanly shuts the runtime down.
+    // the window cleanly shuts the runtime down. Hotkeys:
+    //   F11        toggle fullscreen (persisted)
+    //   Tab (hold) fast-forward 3x (game speed via the VI/timer multiplier)
     SDL_Event ev;
     while (SDL_PollEvent(&ev)) {
         if (ev.type == SDL_QUIT) {
             ultramodern::quit();
+        } else if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0) {
+            if (ev.key.keysym.scancode == SDL_SCANCODE_F11 && g_sdl_window != nullptr) {
+                g_fullscreen = !g_fullscreen;
+                SDL_SetWindowFullscreen(g_sdl_window,
+                    g_fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
+                apply_display_config();
+                ultramodern::trigger_config_action();
+                save_display_config();
+            } else if (ev.key.keysym.scancode == SDL_SCANCODE_TAB) {
+                ultramodern::set_speed_multiplier(3);
+            }
+        } else if (ev.type == SDL_KEYUP && ev.key.keysym.scancode == SDL_SCANCODE_TAB) {
+            ultramodern::set_speed_multiplier(1);
         }
     }
 }
@@ -225,7 +303,11 @@ static void print_usage(const char* argv0) {
         "  --window WxH        window size (default 1280x960); the scene renders\n"
         "                      at window-integer-scale, so bigger = sharper\n"
         "  --ssaa N            supersample N x on top of the window scale (1-8)\n"
-        "  --msaa N            multisample antialiasing (2, 4, or 8)\n",
+        "  --msaa N            multisample antialiasing (2, 4, or 8)\n"
+        "  --widescreen        expand the rendered field to the window aspect\n"
+        "                      (opt-in: can reveal off-stage areas in a 2D game)\n"
+        "options persist to ~/.config/troublemakers-recomp/display.cfg\n"
+        "in game: F11 = fullscreen toggle, hold Tab = 3x fast-forward\n",
         argv0);
 }
 
@@ -235,14 +317,16 @@ int main(int argc, char** argv) {
         exit_error("Invalid version string");
     }
 
-    // Display options (see the globals above the gfx seam).
+    // Display options: config file first, CLI overrides, then persist the
+    // resolved values so flags "stick" for the next flagless run.
+    load_display_config();
     const char* rom_arg = nullptr;
-    int ssaa = 1;
-    int msaa = 0;
     for (int i = 1; i < argc; i++) {
         std::string_view arg = argv[i];
         if (arg == "--fullscreen") {
             g_fullscreen = true;
+        } else if (arg == "--widescreen") {
+            g_widescreen = true;
         } else if (arg == "--window" && i + 1 < argc) {
             if (std::sscanf(argv[++i], "%dx%d", &g_window_w, &g_window_h) != 2 ||
                 g_window_w < 320 || g_window_h < 240) {
@@ -250,11 +334,11 @@ int main(int argc, char** argv) {
                 exit_error("--window expects WxH, at least 320x240");
             }
         } else if (arg == "--ssaa" && i + 1 < argc) {
-            ssaa = std::atoi(argv[++i]);
-            if (ssaa < 1 || ssaa > 8) { print_usage(argv[0]); exit_error("--ssaa expects 1-8"); }
+            g_ssaa = std::atoi(argv[++i]);
+            if (g_ssaa < 1 || g_ssaa > 8) { print_usage(argv[0]); exit_error("--ssaa expects 1-8"); }
         } else if (arg == "--msaa" && i + 1 < argc) {
-            msaa = std::atoi(argv[++i]);
-            if (msaa != 2 && msaa != 4 && msaa != 8) { print_usage(argv[0]); exit_error("--msaa expects 2, 4 or 8"); }
+            g_msaa = std::atoi(argv[++i]);
+            if (g_msaa != 2 && g_msaa != 4 && g_msaa != 8) { print_usage(argv[0]); exit_error("--msaa expects 2, 4 or 8"); }
         } else if (arg == "--help" || arg == "-h") {
             print_usage(argv[0]);
             return EXIT_SUCCESS;
@@ -268,21 +352,8 @@ int main(int argc, char** argv) {
 
     // Seed the renderer configuration before the runtime spawns the gfx
     // thread (the Rt64Context constructor reads it once at creation).
-    {
-        ultramodern::renderer::GraphicsConfig gfx_config{};
-        gfx_config.res_option = ultramodern::renderer::Resolution::Auto; // window-integer-scale
-        gfx_config.wm_option = g_fullscreen ? ultramodern::renderer::WindowMode::Fullscreen
-                                            : ultramodern::renderer::WindowMode::Windowed;
-        gfx_config.ar_option = ultramodern::renderer::AspectRatio::Original; // 4:3 game art
-        gfx_config.msaa_option = msaa == 2 ? ultramodern::renderer::Antialiasing::MSAA2X
-                               : msaa == 4 ? ultramodern::renderer::Antialiasing::MSAA4X
-                               : msaa == 8 ? ultramodern::renderer::Antialiasing::MSAA8X
-                                           : ultramodern::renderer::Antialiasing::None;
-        gfx_config.rr_option = ultramodern::renderer::RefreshRate::Original; // game is natively 60Hz
-        gfx_config.hpfb_option = ultramodern::renderer::HighPrecisionFramebuffer::Auto;
-        gfx_config.ds_option = ssaa;
-        ultramodern::renderer::set_graphics_config(gfx_config);
-    }
+    apply_display_config();
+    save_display_config();
 
     // Store config (mods, saves) under a per-project folder in the user's
     // config dir. Sibling workers may relocate this.

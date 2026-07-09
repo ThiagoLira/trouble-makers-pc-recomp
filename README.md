@@ -71,7 +71,11 @@ cmake --build build --target mm_game -j8
 ./build/src/game/mm_game path/to/your.z64                # windowed 1280x960
 ./build/src/game/mm_game rom.z64 --fullscreen
 ./build/src/game/mm_game rom.z64 --window 1920x1440 --msaa 4
+./build/src/game/mm_game rom.z64 --widescreen    # opt-in: 2D games can show off-stage areas
 ```
+
+Options persist to `~/.config/troublemakers-recomp/display.cfg` (CLI
+overrides). In game: **F11** toggles fullscreen, **hold Tab** fast-forwards 3x.
 
 The ROM is hash-validated (US 1.1 only), stored under
 `~/.config/troublemakers-recomp/` along with saves, and the game auto-starts.
