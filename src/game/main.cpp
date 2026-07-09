@@ -69,7 +69,11 @@ void on_game_init(uint8_t* rdram, recomp_context* ctx);
 // ----------------------------------------------------------------------------
 class StubRendererContext : public ultramodern::renderer::RendererContext {
   public:
-    bool valid() override { return false; }
+    // MM_HEADLESS_GFX=1 makes the stub renderer report valid, so the gfx
+    // thread's action loop runs (send_dl no-ops, dp_complete still fires)
+    // and the game's full frame loop executes with no renderer or display —
+    // the harness for headless testing with -DMM_BUILD_GRAPHICS=OFF.
+    bool valid() override { return getenv("MM_HEADLESS_GFX") != nullptr; }
     bool update_config(const ultramodern::renderer::GraphicsConfig&,
                        const ultramodern::renderer::GraphicsConfig&) override { return false; }
     void enable_instant_present() override {}
