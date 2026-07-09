@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <memory>
 
 #ifndef HLSL_CPU
@@ -234,12 +235,27 @@ public:
     void send_dl(const OSTask* task) override {
         // Fresh RSP state per task, load the task's microcode (gspFast3D for
         // this game), then let RT64 interpret the display list out of RDRAM.
+        // TEMP DIAGNOSTIC (pixels bring-up): trace DL traffic.
+        static uint64_t dl_count = 0;
+        if (dl_count < 3 || dl_count % 300 == 0) {
+            std::fprintf(stderr, "[gfx] send_dl #%llu ucode=%08X data_ptr=%08X data_size=%u\n",
+                (unsigned long long)dl_count, task->t.ucode, task->t.data_ptr, task->t.data_size);
+        }
+        dl_count++;
         app_->state->rsp->reset();
         app_->interpreter->loadUCodeGBI(physical(task->t.ucode), physical(task->t.ucode_data), true);
         app_->processDisplayLists(app_->core.RDRAM, physical(task->t.data_ptr), 0, true);
     }
 
     void update_screen() override {
+        // TEMP DIAGNOSTIC (pixels bring-up): trace VI scanout state.
+        static uint64_t vi_count = 0;
+        if (vi_count < 3 || vi_count % 600 == 0) {
+            ultramodern::renderer::ViRegs* vi = ultramodern::renderer::get_vi_regs();
+            std::fprintf(stderr, "[gfx] update_screen #%llu VI_ORIGIN=%08X VI_WIDTH=%u VI_STATUS=%08X\n",
+                (unsigned long long)vi_count, vi->VI_ORIGIN_REG, vi->VI_WIDTH_REG, vi->VI_STATUS_REG);
+        }
+        vi_count++;
         app_->updateScreen();
     }
 

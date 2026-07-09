@@ -33,5 +33,8 @@ output_function_name = "aspMain"
 # the correct set for *this* binary is a Phase-3 runtime-correctness follow-up
 # (run the ucode, dump the jump-table targets, add them here).
 
-# Jump-table targets discovered via the run->abort->add loop (see comment above).
-extra_indirect_branch_targets = [0x1118]
+# Jump-table targets extracted from the ucode DATA blob (ROM 0xEFE10, 0x2C0 bytes):
+# big-endian u16 IMEM addresses within text [0x1000,0x1E20) — the audio command
+# dispatch table. 0x1118 (found empirically first) is in the set, validating
+# the extraction. Extra labels that are never jumped to are harmless.
+extra_indirect_branch_targets = [0x1000, 0x10B4, 0x1118, 0x11DC, 0x11F0, 0x1214, 0x1254, 0x1294, 0x12D0, 0x12EC, 0x1328, 0x1338, 0x138C, 0x140C, 0x144C, 0x1470, 0x148C, 0x170C, 0x187C, 0x1A4C, 0x1B38, 0x1D6C]

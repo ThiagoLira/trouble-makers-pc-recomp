@@ -15,6 +15,35 @@
 // RspUcodeFunc = RspExitReason(uint8_t* rdram, uint32_t ucode_addr).
 extern RspUcodeFunc aspMain;
 
+// This game's aspMain build (SDK 2.0-era, 0xE20 bytes) enters its command
+// loop expecting the FIRST chunk of the audio command list to already be in
+// DMEM at 0x380 — on hardware the boot environment leaves it there, but
+// librecomp's generic run_task only loads ucode_data. Without the prefetch
+// the ucode dispatches on zeros: opcode 0 indexes a dispatch-table entry
+// that on real hardware is never exercised (real command lists contain no
+// zero opcodes), lands in the DMA-read helper, and returns through a stale
+// $ra into an infinite re-init loop — the audio task never completes and
+// the game's frame loop stalls after ~3 frames (see PHASE3_NOTES.md).
+//
+// Fix: copy the first chunk (the ucode's own streaming chunk size is 0x140
+// bytes; see its fetch routine at IMEM 0x10D4) into DMEM 0x380 before each
+// invocation. The ucode's own $27/$28 stream tracking self-manages every
+// subsequent chunk.
+static const OSTask* g_current_audio_task = nullptr;
+
+static RspExitReason aspMain_task(uint8_t* rdram, uint32_t ucode_addr) {
+    if (g_current_audio_task != nullptr) {
+        uint32_t data_ptr = g_current_audio_task->t.data_ptr;
+        uint32_t data_size = g_current_audio_task->t.data_size;
+        uint32_t chunk = data_size < 0x140 ? data_size : 0x140;
+        if (chunk > 0) {
+            // rd_len uses the hardware DMA length-minus-one encoding.
+            dma_rdram_to_dmem(rdram, 0x380, data_ptr, chunk - 1);
+        }
+    }
+    return aspMain(rdram, ucode_addr);
+}
+
 namespace mm_rsp {
 
 // recomp::rsp::callbacks_t::get_rsp_microcode — return the recompiled ucode
@@ -22,8 +51,10 @@ namespace mm_rsp {
 static RspUcodeFunc* get_rsp_microcode(const OSTask* task) {
     switch (task->t.type) {
     case M_AUDTASK:
-        // Audio task → run the recompiled aspMain ucode.
-        return aspMain;
+        // Audio task → recompiled aspMain, with the first-chunk prefetch the
+        // wrapper provides (see aspMain_task above).
+        g_current_audio_task = task;
+        return aspMain_task;
 
     case M_GFXTASK:
         // Graphics task: handled by RT64 (renderer_callbacks), not by the RSP
