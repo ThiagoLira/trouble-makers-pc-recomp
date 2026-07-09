@@ -13,7 +13,16 @@
 
 text_offset = 0xBCAB0
 text_size = 0xE20
-text_address = 0x04001000
+# text_address MUST be 0x04001080, NOT 0x04001000. The aspMain binary (a stock
+# Nintendo SDK-2.0 audio ucode) is assembled for IMEM base 0x1080: the data
+# blob's command-dispatch table (DMEM +0x10) and every j/jal target in the text
+# encode absolute IMEM addresses whose lowest handler, cmd_SPNOOP, lives at
+# 0x1118 (= text file offset 0x98 + 0x1080). With base 0x1000, RSPRecomp maps
+# every absolute address 0x80 too low, so the dispatch `jr` and the handlers'
+# `j 0x1118` "continue" jump land in the wrong code (the DMA helper tail), the
+# entry `jal 0x1150` (the ucode's own first-chunk prefetch) is misrouted, and the
+# command stream never advances — see PHASE4_NOTES_a.md.
+text_address = 0x04001080
 rom_file_path = "../trouble-makers-ai-recomp/baserom.us1.z64"
 output_file_path = "src/rsp/generated/aspMain.cpp"
 output_function_name = "aspMain"
@@ -33,8 +42,12 @@ output_function_name = "aspMain"
 # the correct set for *this* binary is a Phase-3 runtime-correctness follow-up
 # (run the ucode, dump the jump-table targets, add them here).
 
-# Jump-table targets extracted from the ucode DATA blob (ROM 0xEFE10, 0x2C0 bytes):
-# big-endian u16 IMEM addresses within text [0x1000,0x1E20) — the audio command
-# dispatch table. 0x1118 (found empirically first) is in the set, validating
-# the extraction. Extra labels that are never jumped to are harmless.
-extra_indirect_branch_targets = [0x1000, 0x10B4, 0x1118, 0x11DC, 0x11F0, 0x1214, 0x1254, 0x1294, 0x12D0, 0x12EC, 0x1328, 0x1338, 0x138C, 0x140C, 0x144C, 0x1470, 0x148C, 0x170C, 0x187C, 0x1A4C, 0x1B38, 0x1D6C]
+# Jump-table targets. The only indirect dispatch in this ucode is `jr $2` at the
+# command loop (IMEM 0x1108); its 16 targets are exactly the dispatch table at
+# DMEM +0x10 in the data blob (big-endian u16 IMEM addresses). `jr $5`/`jr $31`
+# are subroutine returns. With text base 0x1080 the dispatch entries are
+# 0x1118,0x1470,0x11DC,0x1B38,0x1214,0x187C,0x1254,0x12D0,0x12EC,0x1328,
+# 0x140C,0x1294,0x1E24,0x138C,0x170C,0x144C. The jr $5 (prefetch) return points
+# are 0x10C0 (entry-jal return) and 0x1130 (cmd_SPNOOP jal return). Extra labels
+# that are never jumped to are harmless (they just create unused goto labels).
+extra_indirect_branch_targets = [0x10C0, 0x1130, 0x1118, 0x1470, 0x11DC, 0x1B38, 0x1214, 0x187C, 0x1254, 0x12D0, 0x12EC, 0x1328, 0x140C, 0x1294, 0x1E24, 0x138C, 0x170C, 0x144C]

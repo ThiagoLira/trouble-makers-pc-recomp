@@ -237,7 +237,7 @@ public:
         // this game), then let RT64 interpret the display list out of RDRAM.
         // TEMP DIAGNOSTIC (pixels bring-up): trace DL traffic.
         static uint64_t dl_count = 0;
-        if (dl_count < 3 || dl_count % 300 == 0) {
+        if (dl_count < 3 || dl_count % 10 == 0) {
             std::fprintf(stderr, "[gfx] send_dl #%llu ucode=%08X data_ptr=%08X data_size=%u\n",
                 (unsigned long long)dl_count, task->t.ucode, task->t.data_ptr, task->t.data_size);
         }
