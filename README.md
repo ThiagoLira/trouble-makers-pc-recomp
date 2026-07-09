@@ -1,56 +1,60 @@
-# trouble-makers-pc-recomp
+# Mischief Makers: Recompiled
 
-Static recompilation of **Mischief Makers** (N64, US 1.1) to portable C via
-[N64Recomp](https://github.com/N64Recomp/N64Recomp) — the path to a native PC
-build. Sibling project of
-[trouble-makers-ai-recomp](../trouble-makers-ai-recomp), whose byte-perfect
-decompilation build supplies the symbol-rich ELF that drives this recompiler
-(every function the decomp names shows up named here).
+**A native PC port of Mischief Makers (N64, 1997) via static recompilation —
+playable, 60 fps, high-resolution, with correct sound.**
 
-## Pipeline
+![The intro cutscene rendering at 1920x1440](screenshots/intro-1920x1440.png)
 
-```
-decomp repo:  ./trouble build            -> build/troublemakers.elf  (byte-perfect, symbol-rich)
-this repo:    cp that ELF into input/
-              tools/N64Recomp/build/N64Recomp troublemakers.us1.toml
-              -> RecompiledFuncs/*.c     (whole game as portable C)
-```
+The whole game's MIPS code is translated to C once, ahead of time, by
+[N64Recomp](https://github.com/N64Recomp/N64Recomp), compiled natively, and
+linked against [N64ModernRuntime](https://github.com/N64Recomp/N64ModernRuntime)
+(a libultra re-implementation) with [RT64](https://github.com/rt64/rt64)
+rendering the display lists on Vulkan. Same approach as
+[Zelda64Recomp](https://github.com/Zelda64Recomp/Zelda64Recomp); this project
+covers a very different, very Treasure-shaped game.
 
-Build the recompiler once: `cmake -B tools/N64Recomp/build tools/N64Recomp && cmake --build tools/N64Recomp/build -j`
+Sibling project: [trouble-makers-ai-recomp](../trouble-makers-ai-recomp) — the
+byte-perfect decompilation whose symbol-rich ELF makes this translation
+legible (every function arrives named).
 
-No game code, ROM contents, or recompiler output is committed — the
-translation runs locally from your legally dumped ROM's decomp build.
+**No game assets, ROM contents, or recompiler output are in this repository.**
+Everything runs locally from your own legally dumped ROM.
 
-## Building and running the game
+## Status
 
-**Current state: the game boots, plays its full intro cutscene with correct
-music and graphics, and reaches the press-start screen at ~58 fps.**
+- ✅ Boots, plays the full intro with correct music, title screen, menus
+- ✅ Gameplay: first level verified playable (controller + keyboard)
+- ✅ Natively 60 fps (the game's own rate), correct audio pacing
+- ✅ High-resolution rendering (window-integer-scale via RT64), fullscreen, MSAA/SSAA
+- ✅ EEPROM saves persist to disk
+- 🚧 Untested beyond the early game; window occlusion freezes the game (present-paced); minor dither artifacts in translucent overlays at high res
+- 🗺️ Next: wider gameplay verification, widescreen, mod hooks
+
+## Building and running
 
 ### Prerequisites
 
-- A legally dumped **Mischief Makers (US 1.1)** ROM (`.z64`, big-endian).
-- The sibling decomp repo built once (`../trouble-makers-ai-recomp`, its
-  `./trouble build` produces the symbol-rich `troublemakers.elf`).
-- Linux with: gcc/g++ (C++20), CMake ≥ 3.20, SDL2, a Vulkan-capable GPU +
-  loader (`libvulkan.so`). RT64 bundles its own Vulkan headers and shader
-  compiler — no Vulkan SDK needed.
+- A legally dumped **Mischief Makers (US 1.1)** ROM (`.z64`, big-endian)
+- The sibling decomp built once (its `./trouble build` produces `troublemakers.elf`)
+- Linux: gcc/g++ (C++20), CMake ≥ 3.20, SDL2, a Vulkan-capable GPU + loader
+  (no Vulkan SDK needed — RT64 bundles headers and its shader compiler)
 
 ### One-time setup
 
 ```sh
-git clone --recurse-submodules <this repo>
+git clone --recurse-submodules https://github.com/ThiagoLira/trouble-makers-pc-recomp
 cd trouble-makers-pc-recomp
 
-# The runtime needs two local fixes not yet upstreamed (message-delivery
-# starvation + runtime overlay registration):
+# Runtime fixes not yet upstreamed (message delivery, overlay registration,
+# EEPROM semantics):
 git -C lib/N64ModernRuntime am "$(pwd)"/patches/N64ModernRuntime/*.patch
 
-# RT64 (renderer): clone the fork Zelda64Recomp pins into lib/rt64
+# RT64 (renderer), pinned to the fork/commit Zelda64Recomp uses:
 git clone https://github.com/rt64/rt64 lib/rt64
 git -C lib/rt64 checkout 23cab603
 git -C lib/rt64 submodule update --init --recursive
 
-# Build the recompilers, then translate the game + audio microcode
+# Translate the game + audio microcode:
 cp ../trouble-makers-ai-recomp/build/troublemakers.elf input/
 cmake -B tools/N64Recomp/build tools/N64Recomp
 cmake --build tools/N64Recomp/build --target N64Recomp RSPRecomp -j
@@ -58,25 +62,24 @@ tools/N64Recomp/build/N64Recomp troublemakers.us1.toml
 tools/N64Recomp/build/RSPRecomp aspMain.us1.rsp.toml
 ```
 
-### Build and run
+### Build and play
 
 ```sh
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --target mm_game -j8
 
-./build/src/game/mm_game path/to/your.z64
-
-# display options (the scene renders at window-integer-scale — a bigger
-# window IS higher internal resolution; the game is natively 60 fps):
+./build/src/game/mm_game path/to/your.z64                # windowed 1280x960
 ./build/src/game/mm_game rom.z64 --fullscreen
 ./build/src/game/mm_game rom.z64 --window 1920x1440 --msaa 4
-./build/src/game/mm_game rom.z64 --ssaa 2        # supersampling on top
 ```
 
-The ROM is validated by hash (only US 1.1 boots), stored under
-`~/.config/troublemakers-recomp/`, and the game auto-starts.
+The ROM is hash-validated (US 1.1 only), stored under
+`~/.config/troublemakers-recomp/` along with saves, and the game auto-starts.
+The scene renders at window-integer-scale: a bigger window IS higher internal
+resolution. Keep the window visible — a fully occluded window pauses the
+present and the game with it.
 
-### Controls (keyboard; first SDL game controller also works)
+### Controls
 
 | N64        | Key        | N64      | Key         |
 |------------|------------|----------|-------------|
@@ -85,56 +88,39 @@ The ROM is validated by hash (only US 1.1 boots), stored under
 | C-buttons  | I J K L    | Z        | Left Shift  |
 | L / R      | Q / E      | Start    | Enter       |
 
-### Developer modes & known issues
+The first SDL game controller is picked up automatically (rumble included).
 
-```sh
-# full game loop with no window/GPU (CI-friendly):
-cmake -B build_headless -DMM_BUILD_GRAPHICS=OFF && cmake --build build_headless --target mm_game -j8
-MM_HEADLESS_GFX=1 SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy ./build_headless/src/game/mm_game rom.z64
+## How it works / hacking on it
 
-# runtime message-flow tracing:
-MM_EVENT_TRACE=1 ./build/src/game/mm_game rom.z64 2> trace.log
-```
+Source layout: `src/game/` (host entry, overlay registration, OS shims),
+`src/rsp/` (recompiled aspMain audio microcode + dispatch),
+`src/graphics/` (RT64 renderer glue), `src/audio_input/` (SDL2 audio, input,
+save config), `patches/` (runtime patches pending upstream), `tools/` (the
+recompiler submodule + agent-workflow scripts).
 
-- Keep the window **visible**: if the compositor fully occludes it (lock
-  screen, minimize), the Vulkan present stalls and the game freezes with it
-  (occlusion policy is a TODO).
-- Gameplay beyond the press-start screen is untested frontier.
-- stderr prints bring-up counters (`[gfx]`, `[mm_rsp]`) — temporary.
+The complete engineering history — twelve root-caused bugs from "parks before
+boot" to "playable", every mission brief, and the debugging recipes — lives in
+[`point_your_ai_agent_here/`](point_your_ai_agent_here/). It is written to
+onboard an AI agent (or you) in one sitting. Headless dev harness:
+`MM_HEADLESS_GFX=1` runs the full game loop with no GPU.
 
-## Status / roadmap
-
-- [x] Phase 0 — recompiler builds; whole-ROM translation succeeds (30,260
-      symbols, 45MB of C, statically-linked overlays handled)
-- [x] Phase 1 — runtime groundwork: N64ModernRuntime submodule; ALL translated game code compiles native (libmm_recompiled.a); see PHASE1_NOTES.md. Remaining Phase 1→2: link probe unresolved-symbol list = the work plan. Original scope:
-      [N64ModernRuntime](https://github.com/N64Recomp/N64ModernRuntime)
-      (librecomp = libultra reimplementation, ultramodern = platform layer);
-      implement game entry + section/function lookup tables
-- [x] Phase 2 — graphics/audio: RSP microcode via RSPRecomp (game uses
-      gspFast3D for graphics — not F3DEX — and aspMain for audio; only aspMain
-      is statically recompiled, RT64 interprets the display list); RT64 for
-      RDP rendering. **The intro plays with correct picture and sound to the
-      press-start screen.** Bug ledger: PHASE2..PHASE5 notes files.
-- [ ] Phase 3 — game-specific glue: gameplay verification beyond press-start,
-      save-in-anger testing (EEPROM), asset streaming across levels, window
-      occlusion policy, stability pass, upstream the runtime patches
-- [ ] Phase 4 — niceties: widescreen, high framerate, mod hooks (function
-      names from the decomp make hooking pleasant)
-
-Reference integration to model on: Zelda64Recomp (same author/toolchain).
+This port was built in ~2 days by AI agents: Claude (Fable 5) as
+driver/reviewer with fleets of GLM 5.2 workers doing parallel
+investigation and implementation — worktree-isolated, race-judged,
+line-by-line reviewed. The receipts are in the phase notes.
 
 ## Licensing
 
-All code authored in this repository is **MIT** (see LICENSE) — the most
-permissive terms we control. Be aware of what the dependencies impose:
+- Code in this repository: **MIT** (see `LICENSE`)
+- `N64ModernRuntime` (statically linked): **GPLv3** — distributed binaries
+  are combined works and carry GPLv3 obligations
+- `N64Recomp`, `RT64`: MIT
+- No Nintendo/Treasure code or assets are included or distributed
 
-- [N64Recomp](tools/N64Recomp) (the recompiler) and RT64 are MIT.
-- [N64ModernRuntime](lib/N64ModernRuntime) (librecomp + ultramodern, the
-  runtime `mm_game` statically links) is **GPLv3**. Our MIT sources may be
-  freely reused anywhere, but any *distributed binary* of `mm_game` is a
-  combined work with the GPLv3 runtime and must be distributed under
-  GPLv3-compatible terms.
-- reference/Zelda64Recomp (GPLv3) is study-only, gitignored, and not part of
-  the build; no code in this repo is derived from it.
-- No game code, ROM contents, or recompiler output is committed or covered by
-  the LICENSE — the translation runs locally from your own legally dumped ROM.
+## Credits
+
+- [N64Recomp / N64ModernRuntime](https://github.com/N64Recomp) and
+  [Zelda64Recomp](https://github.com/Zelda64Recomp/Zelda64Recomp) — the
+  toolchain and the integration blueprint
+- [RT64](https://github.com/rt64/rt64) — the renderer
+- Treasure Co. Ltd — for the weirdest, most wonderful N64 game

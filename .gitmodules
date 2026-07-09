@@ -4,3 +4,7 @@
 [submodule "lib/N64ModernRuntime"]
 	path = lib/N64ModernRuntime
 	url = https://github.com/N64Recomp/N64ModernRuntime.git
+	# local working tree runs branch tm-fixes (= this pin + patches/N64ModernRuntime
+	# applied); the committed pin MUST stay on the upstream commit so clones work.
+	# Do not commit the submodule gitlink.
+	ignore = all
