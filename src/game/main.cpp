@@ -283,7 +283,16 @@ int main(int argc, char** argv) {
         .events_callbacks = events_callbacks,
         .error_handling_callbacks = error_handling_callbacks,
         .threads_callbacks = threads_callbacks,
-        .message_queue_control = {},
+        // requeue_sp = false restores the N64's lossy SP-event semantics. This
+        // game produces three SP completions per frame (one gfx task + two
+        // audio tasks) but its Sound code consumes only two from the size-1
+        // gAudioTaskMessageQueue — on hardware the surplus interrupt message
+        // is simply dropped. ultramodern's default (requeue until delivered)
+        // instead accumulates one undeliverable token per frame in the
+        // external-message queue, which livelocks the idle thread and starves
+        // delivery of the one-shot DP-complete message: the game froze after
+        // exactly three frames. See PHASE4_NOTES_a.md (driver appendix).
+        .message_queue_control = { .requeue_sp = false },
     };
 
     // Blocks until the runtime quits (window close via update_gfx above, or

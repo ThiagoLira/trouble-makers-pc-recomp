@@ -216,3 +216,34 @@ events.cpp). Instrumentation in place: [gfx] send_dl / [mm_rsp] aspMain
 stderr counters (TEMP). Diagnosis tools that worked: gdb breakpoint counters
 on dp_complete/sp_complete/submit_rsp_task, and rdram queue-struct dumps
 (x/6xw rdram+offset; ^3-swapped storage reads back correct via LE words).
+
+---
+
+## Bug #10 resolved (driver, second appendix): two stacked causes, 3 frames -> 770
+
+1. **SP-token surplus vs lossy hardware semantics.** Each frame produces
+   THREE OS_EVENT_SP completions (1 gfx task + 2 audio tasks — the game runs
+   the double-audio path every frame since frames outlast a VI) but the
+   Sound code consumes only TWO from the size-1 gAudioTaskMessageQueue. On
+   hardware the surplus interrupt message is dropped; ultramodern's default
+   requeue_sp=true preserved it forever, accumulating one undeliverable
+   token per frame (the 99-million-line MM_EVENT_TRACE log, the hot-spin
+   runs). Fix: `.message_queue_control = { .requeue_sp = false }` in
+   src/game/main.cpp — restore lossy semantics.
+2. **Delivery starvation in the runtime.** With the game parked on its DP
+   wait and only the idle thread draining external_messages one message per
+   wait_dequeue, the dp_complete enqueued by the GFX thread was never
+   returned by moodycamel while 60Hz VI messages kept flowing — traced
+   directly: dp#1/#2 were only ever delivered by game threads' full drains;
+   the idle wait path delivered VI- and SP-thread items but never a
+   gfx-thread item. Fix in lib/N64ModernRuntime (local branch tm-fixes,
+   commit 6d3448b — upstream-worthy): after the blocking wait, run the full
+   dequeue_external_messages drain.
+
+Result: send_dl #770 / aspMain 760-for-760 Broke in 45s (~17 fps) — the
+game runs continuously. New frontier (bug #11): at ~frame 770 boot jumps to
+0x801B9900 — ABOVE the static .main section — i.e. the game's custom
+RLE-compressed overlay streaming has loaded code the runtime doesn't know
+about (no standard DMA hook fired, section never marked loaded). This is
+the long-predicted "Trouble RLE asset streaming quirks" Phase 3 item.
+MM_EVENT_TRACE=1 enables the runtime event tracing (TEMP).
