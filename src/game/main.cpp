@@ -104,6 +104,7 @@ static int g_window_w = 1280;
 static int g_window_h = 960;
 static bool g_fullscreen = false;
 static bool g_widescreen = false;
+static bool g_wings = false;
 static int g_ssaa = 1;
 static int g_msaa = 0;
 static SDL_Window* g_sdl_window = nullptr;
@@ -149,6 +150,7 @@ static void load_display_config() {
         else if (k == "window_h" && value >= 240) g_window_h = value;
         else if (k == "fullscreen") g_fullscreen = value != 0;
         else if (k == "widescreen") g_widescreen = value != 0;
+        else if (k == "wings") g_wings = value != 0;
         else if (k == "ssaa" && value >= 1 && value <= 8) g_ssaa = value;
         else if (k == "msaa" && (value == 0 || value == 2 || value == 4 || value == 8)) g_msaa = value;
     }
@@ -160,8 +162,8 @@ static void save_display_config() {
     std::filesystem::create_directories(display_cfg_path().parent_path(), ec);
     std::FILE* f = std::fopen(display_cfg_path().c_str(), "w");
     if (!f) return;
-    std::fprintf(f, "window_w=%d\nwindow_h=%d\nfullscreen=%d\nwidescreen=%d\nssaa=%d\nmsaa=%d\n",
-                 g_window_w, g_window_h, g_fullscreen ? 1 : 0, g_widescreen ? 1 : 0, g_ssaa, g_msaa);
+    std::fprintf(f, "window_w=%d\nwindow_h=%d\nfullscreen=%d\nwidescreen=%d\nwings=%d\nssaa=%d\nmsaa=%d\n",
+                 g_window_w, g_window_h, g_fullscreen ? 1 : 0, g_widescreen ? 1 : 0, g_wings ? 1 : 0, g_ssaa, g_msaa);
     std::fclose(f);
 }
 
@@ -306,6 +308,8 @@ static void print_usage(const char* argv0) {
         "  --msaa N            multisample antialiasing (2, 4, or 8)\n"
         "  --widescreen        expand the rendered field to the window aspect\n"
         "                      (opt-in: can reveal off-stage areas in a 2D game)\n"
+        "  --wings             fill the pillarbox bars with a mirrored, dimmed\n"
+        "                      continuation of the scene (implies --widescreen)\n"
         "options persist to ~/.config/troublemakers-recomp/display.cfg\n"
         "in game: F11 = fullscreen toggle, hold Tab = 3x fast-forward\n",
         argv0);
@@ -327,6 +331,8 @@ int main(int argc, char** argv) {
             g_fullscreen = true;
         } else if (arg == "--widescreen") {
             g_widescreen = true;
+        } else if (arg == "--wings") {
+            g_wings = true;
         } else if (arg == "--window" && i + 1 < argc) {
             if (std::sscanf(argv[++i], "%dx%d", &g_window_w, &g_window_h) != 2 ||
                 g_window_w < 320 || g_window_h < 240) {
@@ -348,6 +354,13 @@ int main(int argc, char** argv) {
             print_usage(argv[0]);
             exit_error("unknown option");
         }
+    }
+
+    // Wings need the wide render target, so they imply widescreen. Must run
+    // before apply_display_config() reads g_widescreen.
+    if (g_wings) {
+        g_widescreen = true;
+        setenv("MM_MIRROR_WINGS", "1", 0); // read by the RT64 VI present pass
     }
 
     // Seed the renderer configuration before the runtime spawns the gfx
