@@ -177,9 +177,23 @@ ultramodern::gfx_callbacks_t::gfx_data_t create_gfx() {
 }
 
 ultramodern::renderer::WindowHandle create_window(ultramodern::gfx_callbacks_t::gfx_data_t) {
+    // MM_WIN_POS="x,y" pins the window at a fixed desktop position, and
+    // MM_DISPLAY=<index> centers it on a specific display (debug: keeps the
+    // game on one monitor so external captures — incl. fullscreen — land on
+    // the intended screen instead of a compositor-chosen one).
+    int pos_x = SDL_WINDOWPOS_CENTERED, pos_y = SDL_WINDOWPOS_CENTERED;
+    if (const char* di = getenv("MM_DISPLAY")) {
+        int idx = std::atoi(di);
+        pos_x = SDL_WINDOWPOS_CENTERED_DISPLAY(idx);
+        pos_y = SDL_WINDOWPOS_CENTERED_DISPLAY(idx);
+    }
+    if (const char* wp = getenv("MM_WIN_POS")) {
+        int px, py;
+        if (std::sscanf(wp, "%d,%d", &px, &py) == 2) { pos_x = px; pos_y = py; }
+    }
     SDL_Window* win = SDL_CreateWindow(
         "Mischief Makers: Recompiled",
-        SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+        pos_x, pos_y,
         g_window_w, g_window_h, SDL_WINDOW_RESIZABLE);
     if (win == nullptr) {
         std::fprintf(stderr, "Failed to create window: %s\n", SDL_GetError());
