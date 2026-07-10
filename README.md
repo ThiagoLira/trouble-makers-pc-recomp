@@ -27,7 +27,7 @@ Everything runs locally from your own legally dumped ROM.
 - ✅ Natively 60 fps (the game's own rate), correct audio pacing
 - ✅ High-resolution rendering (window-integer-scale via RT64), fullscreen, MSAA/SSAA
 - ✅ EEPROM saves persist to disk
-- ✅ Widescreen with mirrored "ambient wings" (`--wings`), F11 fullscreen, Tab fast-forward, persistent display config
+- ✅ Widescreen (opt-in), F11 fullscreen, Tab fast-forward, persistent display config
 - 🚧 Untested beyond the early game; window occlusion freezes the game (present-paced); minor dither artifacts in translucent overlays at high res
 - 🗺️ Next: wider gameplay verification, mod hooks, upstreaming the runtime patches
 
@@ -51,11 +51,11 @@ cd trouble-makers-pc-recomp
 git -C lib/N64ModernRuntime am "$(pwd)"/patches/N64ModernRuntime/*.patch
 
 # RT64 (renderer), pinned to the fork/commit Zelda64Recomp uses, plus the
-# widescreen patches (wing clear + mirrored wing fill):
+# widescreen wing-clear patch:
 git clone https://github.com/rt64/rt64 lib/rt64
 git -C lib/rt64 checkout 23cab603
 git -C lib/rt64 submodule update --init --recursive
-for p in "$(pwd)"/patches/rt64/*.patch; do git -C lib/rt64 apply "$p"; done
+git -C lib/rt64 apply "$(pwd)"/patches/rt64/0001-widescreen-wing-clear.patch
 
 # Translate the game + audio microcode:
 cp ../trouble-makers-ai-recomp/build/troublemakers.elf input/
@@ -74,14 +74,10 @@ cmake --build build --target mm_game -j8
 ./build/src/game/mm_game path/to/your.z64                # windowed 1280x960
 ./build/src/game/mm_game rom.z64 --fullscreen
 ./build/src/game/mm_game rom.z64 --window 1920x1440 --msaa 4
-./build/src/game/mm_game rom.z64 --wings         # fill the pillarbox bars with a
-#   mirrored, dimmed continuation of the scene (ambient wings) — works in
-#   every scene, gameplay stays untouched in the 4:3 band. Implies
-#   --widescreen.
-./build/src/game/mm_game rom.z64 --widescreen    # raw widescreen without the
-#   wing fill: sprites and some layers render into the 16:9 wings, but many
-#   scenes keep black bars — the game composes each scene from 4:3-authored
-#   layers. Default is clean pillarboxed 4:3.
+./build/src/game/mm_game rom.z64 --widescreen    # experimental; sprites and some
+#   layers render into the 16:9 wings, but many scenes keep black bars —
+#   the game composes each scene from 4:3-authored layers. Default is
+#   clean pillarboxed 4:3 (recommended).
 ```
 
 Options persist to `~/.config/troublemakers-recomp/display.cfg` (CLI
