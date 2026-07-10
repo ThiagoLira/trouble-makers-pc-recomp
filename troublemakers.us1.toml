@@ -73,4 +73,48 @@ instruction = [
     { func = "Camera_UpdateViewBounds", vram = 0x80046370, value = 0x2443FEE0 }, # LEFT  = camX - 0x120
     { func = "Camera_UpdateViewBounds", vram = 0x80046398, value = 0x24440120 }, # RIGHT = camX + 0x120
     { func = "func_800463C0",           vram = 0x800463E0, value = 0x25CFFEE0 }, # LEFT re-set = camX - 0x120
+
+    # REAL-CONTENT WIDESCREEN — scrolling background band (func_80082820).
+    # The band is a 7-row x 10-col grid of 32px CI8 tiles (exactly 320px) read
+    # from the dst array D_80180D90 (140 s32 slots, filled 70 at stride 10).
+    # Its ultimate source is the level's backdrop tilemap: a 16x16 byte grid
+    # that WRAPS on both axes (col = (srcX>>5)&0xF, rowblk = (srcY>>1)&0xF0),
+    # so tiles 5 columns beyond each 4:3 edge are genuine neighboring map
+    # tiles, not mirrored/stretched pixels. These 5 instruction patches widen
+    # the draw loop to 20 columns starting 5 left (cols -5..14) with an 80-byte
+    # (20-slot) row stride and the two 4:3 left-edge assumptions removed; the
+    # entry hook below rebuilds D_80180D90 at stride 20 with all 20 real
+    # columns. Fill path + every word here ROM-verified (Phase 8 forensics).
+    # The STATIC path func_80082380 is deliberately NOT patched: it is shared
+    # by 3 callers (midground/env/static-bg) and blind widening corrupts the
+    # non-backdrop draws (the Attempt-2 flicker). Env/midground come later via
+    # per-buffer-discriminated hooks of their own.
+    { func = "func_80082820", vram = 0x800829D0, value = 0x2414000F }, # col limit s4 10 -> 15
+    { func = "func_80082820", vram = 0x80082A08, value = 0x240CFFFB }, # col start t4 0 -> -5
+    { func = "func_80082820", vram = 0x80082A20, value = 0x24F900C0 }, # left-edge skip 0x20 -> 0xC0
+    { func = "func_80082820", vram = 0x80082B24, value = 0x04010003 }, # drop max(0,upper_x) clamp
+    { func = "func_80082820", vram = 0x80082A00, value = 0x00197900 }, # dst row stride <<3 -> <<4 (80B)
+]
+
+# Entry hook on the scrolling-background draw (func_80082820, sole caller
+# func_80082F10 always passes D_80180D90). Runs after the game's stride-10
+# fill; rebuilds the whole 7x20 grid at stride 20 directly from the wrapping
+# 16x16 backdrop tilemap so the 5 wing columns on each side are REAL tiles.
+# Center columns (window w=5..14) recompute identically to the game's own
+# fill, so with the draw loop clipped to 4:3 (no --widescreen) the visible
+# result is byte-identical. Formula (Phase 8 verified):
+#   P       = *(u32*)0x80137470                 backdrop map base (16x16 bytes)
+#   add     = *(u16*)0x80137478                 per-level tile-id addend (0)
+#   texbase = *(u32*)0x80180FC0 (= 0x80380600)  RDP texture-image pool base
+#   per row r: sy = (-0xC - *(u16*)0x800BE584) + r*32 ; rowblk = (sy>>1)&0xF0
+#              sx0 = (*(u16*)(0x8011D3B0 + r*4) - 2) & 0x1FF   (per-row parallax X)
+#   per window col w (0..19, w-5 = camera-relative): srcX = sx0 + (w-5)*32 (+512 to
+#              stay positive across one wrap period); col = (srcX>>5)&0xF;
+#              tile = map[col + rowblk]; slot = tile ? ((tile+add)<<10)+texbase : 0
+# MEM_* are recomp.h's canonical accessors (MEM_BU carries the big-endian ^3,
+# matching the original lbu). Reads only the static map + current scroll
+# globals, writes only the 140-slot dst array (exactly 7x20) -> no overrun,
+# no other buffer touched.
+hook = [
+    { func = "func_80082820", text = '{ if ((uint32_t)ctx->r5 == 0x80180D90u) { gpr b = ctx->r5; gpr s = (gpr)(int32_t)0x9FFFF000; gpr P = MEM_W(0, (gpr)(int32_t)0x80137470); int add = MEM_HU(0, (gpr)(int32_t)0x80137478); uint32_t texbase = (uint32_t)MEM_W(0, (gpr)(int32_t)0x80180FC0); int sy0 = ((-0xC) - (int)MEM_HU(0, (gpr)(int32_t)0x800BE584)) & 0x1FF; int r; int w; for (r = 0; r < 7; r++) { int syr = sy0 + r*32; int rowblk = (syr >> 1) & 0xF0; int sx0 = ((int)MEM_HU(0, (gpr)(int32_t)(0x8011D3B0 + r*4)) - 2) & 0x1FF; for (w = 0; w < 20; w++) { int x = w - 5; int32_t v; if (x >= 0 && x < 10) { v = MEM_W((r*10 + x)*4, b); } else { int srcX = sx0 + x*32 + 512; int col = (srcX >> 5) & 0xF; int mb = MEM_BU(col + rowblk, P); v = mb ? (int32_t)((((uint32_t)(mb + add)) << 10) + texbase) : 0; } MEM_W((r*20 + w)*4, s) = v; } } ctx->r5 = s + 20; } }' },
 ]
