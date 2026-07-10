@@ -85,15 +85,12 @@ instruction = [
     # (20-slot) row stride and the two 4:3 left-edge assumptions removed; the
     # entry hook below rebuilds D_80180D90 at stride 20 with all 20 real
     # columns. Fill path + every word here ROM-verified (Phase 8 forensics).
-    # The STATIC path func_80082380 is deliberately NOT patched: it is shared
-    # by 3 callers (midground/env/static-bg) and blind widening corrupts the
-    # non-backdrop draws (the Attempt-2 flicker). Env/midground come later via
-    # per-buffer-discriminated hooks of their own.
     { func = "func_80082820", vram = 0x800829D0, value = 0x2414000F }, # col limit s4 10 -> 15
     { func = "func_80082820", vram = 0x80082A08, value = 0x240CFFFB }, # col start t4 0 -> -5
     { func = "func_80082820", vram = 0x80082A20, value = 0x24F900C0 }, # left-edge skip 0x20 -> 0xC0
     { func = "func_80082820", vram = 0x80082B24, value = 0x04010003 }, # drop max(0,upper_x) clamp
     { func = "func_80082820", vram = 0x80082A00, value = 0x00197900 }, # dst row stride <<3 -> <<4 (80B)
+
 ]
 
 # Entry hook on the scrolling-background draw (func_80082820, sole caller
