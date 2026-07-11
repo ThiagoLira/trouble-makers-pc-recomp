@@ -84,9 +84,12 @@ cmake --build build --target mm_game -j8
 ```
 
 Widescreen uses the game's own wrapping maps and scene formulas—there is no
-mirroring, stretching, blur fill, or other cosmetic substitute. Layers whose
-off-frame map entries reference art that a scene never loads are left at a
+mirroring, stretching, blur fill, or other cosmetic substitute. Every layer
+extends in every scene; individual off-frame tiles whose art a scene never
+loads are validated per-tile against the loaded texture bank and left at a
 clean authored boundary instead of displaying uninitialized texture memory.
+Entity spawn/despawn windows are widened to match, so objects no longer pop
+in at the wing edges.
 Opening/in-stage cinematics automatically switch back to centered 4:3 and
 return to widescreen only after player control is stable. Three fixed-canvas
 playable scenes (36, 57, and 71) also remain 4:3 by design.

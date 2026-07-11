@@ -162,21 +162,83 @@ The corrected warp harness was used to sweep scenes 0, 10, 13, 20, 22, 23, 24,
 36, 37, 40, 42, 46, 47, 48, 52, 53, 55, 57, 65, 68, 69, and 77. Isolating each
 layer showed that several scene layouts send different data through the shared
 buffers or contain off-frame tile ids whose texture slots are never loaded.
-Those layers now have per-scene safety guards:
+Those layers initially got per-scene blacklists (band/static: 21 scenes; env:
+6; mid: 5) that fell back to black wings.
 
-- scrolling band/static backdrop: 0, 10, 20, 23, 24, 36, 40, 42, 46, 47, 48,
-  52, 53, 54, 55, 57, 65, 68, 71, 77, 78;
-- environment: 0, 36, 39, 57, 69, 71;
-- midground: 0, 36, 39, 52, 71.
+### Second pass (same day) — blacklists replaced by ground truth
 
-Every other verified layer remains extended. These are intentional clean
-fallbacks at authored map boundaries, not cosmetic fill. In particular, the
-forest's off-frame sky map entries point at texture-pool slots the scene never
-loads; drawing them was the random sky noise reported during playtesting.
-The fix and broad regression evidence are in
-`screenshots/widescreen-forest-fix.png` and
-`screenshots/widescreen-regression-scenes.png`; the original labeled sheet is
-`screenshots/widescreen-coverage-scenes.png`.
+Decomp research (community repo: `func_8001107C`, `func_800255B4`,
+`func_80026220`) established that **every scene fills every layer with the
+same generic wrapping-map formulas** — per-scene differences are entirely
+captured by readable globals (mode selectors `*0x800BE588/58C/6FC`, masks
+`*0x800BE64C/650/654`, scroll registers, map pointers, addends). The
+garbage that motivated the blacklists was **texture residency**: wing
+columns can reference tile ids whose textures lie past the RLE-decompressed
+end of the map bank, recorded at `*0x80137728` by `func_80026220`. That was
+the forest sky noise.
+
+The layer hooks now live in `src/game/widescreen.cpp` (thin toml hooks call
+`mm_ws_band_repack` / `mm_ws_static_repack`): exact per-variant fill
+formulas for all parallax modes (mid modes 0–3 incl. the /1.55 factors, env
+16×16 vs 128×8, band per-row vs single-scroll) and a per-tile residency
+check `pool + ((tile+addend)<<10) + 0x400 <= bankEnd` replacing every scene
+blacklist. Two companion pieces:
+
+- `func_80026428` (scenes 10, 24, 46–51) reloads the bank without updating
+  the recorded extent; a hook at vram 0x80026484 captures
+  `Trouble_RLE_Type1`'s returned size. The corrected bound is kept
+  **host-side only** (`g_host_bank_end`, cleared on `func_80026220`) — do
+  NOT write 0x80137724/28 from the host.
+
+### THE display-list arena overflow (root cause of the intermittent noise)
+
+Extending the wings surfaced a hard capacity bug: each layer's DL output
+arena (six of them, double-buffered mid/env/band: D_80178470, D_80179A90,
+D_8017B0B0, D_8017C6D0, D_8017DCF0, D_8017F310) is 0x1620 bytes = exactly
+70 tiles × 80 bytes + G_ENDDL + 0x38 slack. The widened 7×20 loops emit up
+to 140 tiles (0x2BC8), and the draw loop has **no bounds check**. Overrun
+from the last arena (D_8017F310) stomps the s32 layer grids at 0x80180930+
+and can reach the texture-pool base ptr at 0x80180FC0 → intermittent
+full-frame tile noise (center included, since the center columns are copied
+from the stomped grids). This was ALSO the real reason several scenes ended
+up on the original blacklists — heavy scenes overflowed, light scenes
+didn't.
+
+Fix: the arena base is parameter-borne ($a0); the draw funcs keep the
+cursor in a register and emit both the G_ENDDL and the gSPDisplayList
+submission from that same base. `remap_arena()` in the two entry hooks
+substitutes six 0x4000 arenas at 0x80400000..0x80418000 — real low RDRAM
+the 4MB game never touches (runtime extended allocations start at
+0x80800000), so RT64's display-list walker reads them without issues.
+With capacity fixed, wing tiles keep the game's exact tile-0 semantics
+(map byte 0 draws pool slot addend<<10 — skipping it leaves holes).
+
+### Entity pop-in (same pass)
+
+The view-cull rect is only one of the game's visibility systems. Three more
+windows used 4:3-sized X margins, so objects appeared/vanished inside the
+16:9 wings (~±214 px needed). All X-only, Y untouched, instruction words
+verified against the decomp asm:
+
+- `func_80016D94` (per-frame despawner): kills `ACTOR_FLAG_ONSCREEN_ONLY`
+  actors (projectiles, particles, drops) outside camX ±0xD0 → ±0x150
+  (48 px slack over the ±0x120 draw cull; pure despawn, no spawn
+  hysteresis to break).
+- `func_800451E4` (gem/prop sprite windowing): items only get one of 64
+  sprite slots inside camX ±0xA8 → ±0xE8. Rebuilt statelessly every frame,
+  risk-free; the wide-mode window (`D_800BE710`, ±0x100) already covered
+  16:9 and is untouched. Watch the 64-slot cap in gem-dense rooms.
+- `Actor_IsOutsideRegion` (shared `|x| > 0x90+len`, 19 call sites:
+  positional SFX radius + behavior gates): 0x90 → 0xD8.
+
+Remaining long tail (not addressed): ~69 per-actor-type asm sites compare
+camera-relative `posX.whole` against private constants (±0x70…±0x100);
+densest in `overlay_0/6EE580`, `overlay_3/7C0B20`, `overlay_2/766110`.
+Patch individually if a specific actor type still pops.
+
+Older evidence sheets (`widescreen-forest-fix.png`,
+`widescreen-regression-scenes.png`, `widescreen-coverage-scenes.png`)
+predate the second pass.
 
 ## 4. Falsified conclusions — do not re-believe these
 
