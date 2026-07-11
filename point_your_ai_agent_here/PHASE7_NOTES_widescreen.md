@@ -97,20 +97,86 @@ zeroing — each falsified in turn before the real cause surfaced).
    `colorTarget->width` (the aspect param is zeroed in the state path — do
    not trust it); cleared once per `submissionFrame` per target via a
    `wingClearFrame` map so later passes don't erase wing content.
-6. **Debug warp** (`MM_WARP=<scene>` on the `func_80001670` dispatcher hook;
-   `MM_WARP_AT`/`MM_WARP_DELAY` optional): sets `gCurrentScene 0x800BE5D0`,
+6. **Debug warp** (`MM_WARP=<scene>` or exact-row `MM_WARP_STAGE=<index>` on
+   the `func_80001670` dispatcher hook;
+   `MM_WARP_AT`/`MM_WARP_DELAY` optional): resolves the requested scene through
+   `gStageScenes`, selects the corresponding progression row (`gCurrentStage`,
+   stage id, and unlock index), sets `gCurrentScene 0x800BE5D0`,
    `gSkipStageIntro 0x800D2908=1`, `gGameState 0x800BE4F0=LOADING(5)`, and
    **zeroes the canvas RAM at 0x8027CEE8/0x8027EEE8** that normal boot
    would have initialized (skip that and you get warp-only stale-canvas
-   artifacts). Scene ids in decomp `include/Scene.h`: 0=MEETMARINA intro,
-   0x16=TRAPPED metal level, 0x25=3D dungeon.
+   artifacts). Selecting only `gCurrentScene` is invalid: it silently reuses
+   the previous row's map and overlay assets. Scene ids in decomp
+   `include/Scene.h`: 0=MEETMARINA intro, 0x16=TRAPPED metal level,
+   0x25=3D dungeon.
 7. **Window targeting** (`src/game/main.cpp`): `MM_DISPLAY=<n>` →
    `SDL_WINDOWPOS_CENTERED_DISPLAY`, `MM_WIN_POS="x,y"`. Wayland/KWin
    ignores plain positioning — fullscreen-on-target-display is the only
    reliable placement.
 
-Run recipe: `MM_WARP=0x16 MM_DISPLAY=1 ./build/src/game/mm_game <rom>
---fullscreen --widescreen` (+ `MM_BAND_WINGS=1` for the showcase).
+Run recipe: `MM_WARP=22 MM_DISPLAY=1 ./build/src/game/mm_game <rom>
+--fullscreen --widescreen` (`MM_WARP`'s current debug parser expects decimal).
+
+### Gameplay-only widescreen and final 52-level suite
+
+Widescreen presentation is now stateful rather than a process-lifetime flag.
+`mm_widescreen_sync_mode` switches RT64 to Expand only when all of these are
+true: game state is gameplay, `gStageTime` is actively advancing, and the game
+permits pausing. Cinema/dialogue freezes the timer and/or asserts
+`gCannotPause`, returning the renderer and every tile-wing hook to centered
+4:3. Entry to 4:3 is fast; return to widescreen requires 30 stable frames so
+one-frame stage-script pulses cannot thrash renderer configuration.
+
+Scenes 36, 57, and 71 are fixed-canvas playable compositions and are always
+4:3. This is deliberate: widening their renderer reveals compositing buffers,
+not additional authored world content.
+
+`tools/test_widescreen_playable.sh` enumerates the 52 player-controlled rows in
+`gStageScenes` (excluding opening, demo, attract, ending, and extra rows), uses
+`MM_WARP_STAGE` to avoid duplicate-scene ambiguity, and injects L/Z only under
+the test-only `MM_TEST_AUTO_ADVANCE=1` flag. It waits for stable gameplay before
+capturing. The final run completed **52 pass / 0 fail**; evidence is in
+`screenshots/widescreen-playable-suite.png` and
+`screenshots/widescreen-cutscenes-4x3.png`.
+
+### 2026-07-11 completion pass
+
+The remaining layer work is now integrated into `--widescreen` by default:
+
+- Band, environment, and midground wings are enabled together; the midground
+  modes use the original horizontal/parallax formulas rather than guessed
+  offsets.
+- Static backgrounds fill their side columns from the same wrapping 16×16 map
+  used by the original ten-column buffer.
+- Vertical `Gfx_DrawBorderRect` strips are suppressed only while widescreen is
+  active; the original top/bottom letterbox behavior is retained.
+- RT64 expands full-frame rectangle scissors and sign-extends negative 12-bit
+  texture-rectangle X coordinates only on the widescreen wing path. This lets
+  genuine left-side tiles render instead of being decoded as large positive X.
+
+The production host automatically enables the layer hooks; the `MM_*_WINGS`
+variables remain useful only for translated-code diagnostics. A successful
+1600×900 live run is captured in `screenshots/widescreen-scene-22.png`.
+
+The corrected warp harness was used to sweep scenes 0, 10, 13, 20, 22, 23, 24,
+36, 37, 40, 42, 46, 47, 48, 52, 53, 55, 57, 65, 68, 69, and 77. Isolating each
+layer showed that several scene layouts send different data through the shared
+buffers or contain off-frame tile ids whose texture slots are never loaded.
+Those layers now have per-scene safety guards:
+
+- scrolling band/static backdrop: 0, 10, 20, 23, 24, 36, 40, 42, 46, 47, 48,
+  52, 53, 54, 55, 57, 65, 68, 71, 77, 78;
+- environment: 0, 36, 39, 57, 69, 71;
+- midground: 0, 36, 39, 52, 71.
+
+Every other verified layer remains extended. These are intentional clean
+fallbacks at authored map boundaries, not cosmetic fill. In particular, the
+forest's off-frame sky map entries point at texture-pool slots the scene never
+loads; drawing them was the random sky noise reported during playtesting.
+The fix and broad regression evidence are in
+`screenshots/widescreen-forest-fix.png` and
+`screenshots/widescreen-regression-scenes.png`; the original labeled sheet is
+`screenshots/widescreen-coverage-scenes.png`.
 
 ## 4. Falsified conclusions — do not re-believe these
 
@@ -140,14 +206,11 @@ Run recipe: `MM_WARP=0x16 MM_DISPLAY=1 ./build/src/game/mm_game <rom>
   0x800218FC / `Gfx_DrawBorderRect` 0x80021690, visible area x 14–306,
   y 20–212) — that's the thin seam at the 4:3 edges in widescreen.
 
-## 6. Remaining tail (bounded, documented, not mysteries)
+## 6. Original remaining tail (completed by the 2026-07-11 pass)
 
-1. Band/env wing formulas misfire in some camera states (flying-high
-   attract sky) — derive per-scene/per-camera scroll variants from the
-   community decomp so the wings can default ON.
-2. Midground FP parallax modes 1–3 formula (currently known-bad, opt-in).
-3. Suppress/widen `Gfx_DrawBorderRect` side bars in widescreen only
-   (coordinates known, §5) to kill the 4:3-edge seam.
-4. Strip warp/debug scaffolding + write user-facing README before any
-   merge of `real-widescreen` into main.
-5. User playtest verdict.
+1. Band/environment formulas derived and enabled by the host.
+2. Midground parallax modes 0–3 derived from the original assembly.
+3. `Gfx_DrawBorderRect` side bars suppressed in widescreen only.
+4. Temporary tracing stripped and the user-facing README updated. The
+   intentionally gated debug warp remains useful for stage coverage runs.
+5. User playtest verdict remains the final coverage check across every stage.

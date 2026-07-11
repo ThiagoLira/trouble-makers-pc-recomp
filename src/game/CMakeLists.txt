@@ -20,6 +20,7 @@ add_executable(mm_game
     main.cpp
     register_overlays.cpp
     os_stubs.cpp
+    widescreen.cpp
 )
 
 target_include_directories(mm_game PRIVATE

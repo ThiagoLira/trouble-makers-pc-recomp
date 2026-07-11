@@ -28,8 +28,11 @@ Everything runs locally from your own legally dumped ROM.
 - ✅ High-resolution rendering (window-integer-scale via RT64), fullscreen, MSAA/SSAA
 - ✅ EEPROM saves persist to disk
 - ✅ Widescreen (opt-in), F11 fullscreen, Tab fast-forward, persistent display config
-- 🚧 Untested beyond the early game; window occlusion freezes the game (present-paced); minor dither artifacts in translucent overlays at high res
-- 🗺️ Next: wider gameplay verification, mod hooks, upstreaming the runtime patches
+- 🚧 Automated widescreen sweep passes all 52 playable progression rows;
+  a full controller-driven playthrough is still pending. Window
+  occlusion freezes the game (present-paced); minor dither artifacts remain in
+  translucent overlays at high res.
+- 🗺️ Next: full-playthrough verification, mod hooks, upstreaming runtime patches
 
 ## Building and running
 
@@ -74,11 +77,36 @@ cmake --build build --target mm_game -j8
 ./build/src/game/mm_game path/to/your.z64                # windowed 1280x960
 ./build/src/game/mm_game rom.z64 --fullscreen
 ./build/src/game/mm_game rom.z64 --window 1920x1440 --msaa 4
-./build/src/game/mm_game rom.z64 --widescreen    # experimental; sprites and some
-#   layers render into the 16:9 wings, but many scenes keep black bars —
-#   the game composes each scene from 4:3-authored layers. Default is
-#   clean pillarboxed 4:3 (recommended).
+./build/src/game/mm_game rom.z64 --widescreen    # real 16:9 scene rendering:
+#   entities, foreground, scrolling backdrops, environment and midground
+#   tile maps are drawn beyond the original 4:3 frame. Plain launches retain
+#   the original presentation.
 ```
+
+Widescreen uses the game's own wrapping maps and scene formulas—there is no
+mirroring, stretching, blur fill, or other cosmetic substitute. Layers whose
+off-frame map entries reference art that a scene never loads are left at a
+clean authored boundary instead of displaying uninitialized texture memory.
+Opening/in-stage cinematics automatically switch back to centered 4:3 and
+return to widescreen only after player control is stable. Three fixed-canvas
+playable scenes (36, 57, and 71) also remain 4:3 by design.
+See the live [scene 22 capture](screenshots/widescreen-scene-22.png), the
+[forest artifact comparison](screenshots/widescreen-forest-fix.png), and the
+labeled [coverage](screenshots/widescreen-coverage-scenes.png) and
+[regression](screenshots/widescreen-regression-scenes.png) sheets. The final
+[playable-level sample](screenshots/widescreen-playable-suite.png) and
+[4:3 cinematic sample](screenshots/widescreen-cutscenes-4x3.png) show the
+automatic mode boundary.
+
+Run the complete playable-level screenshot/crash suite with:
+
+```sh
+tools/test_widescreen_playable.sh ./build/src/game/mm_game path/to/rom.z64 /tmp/mm-widescreen-suite
+```
+
+The suite targets exact progression-table stage indices, advances dialogue
+through a test-only input pulse, waits for authoritative player-control state,
+and writes a TSV manifest plus one screenshot/log per level.
 
 Options persist to `~/.config/troublemakers-recomp/display.cfg` (CLI
 overrides). In game: **F11** toggles fullscreen, **hold Tab** fast-forwards 3x.

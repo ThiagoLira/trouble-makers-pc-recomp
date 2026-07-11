@@ -27,6 +27,76 @@ index ffabdbf..dab74d9 100644
          };
  
          struct F3DEX {
+diff --git a/src/gbi/rt64_gbi_rdp.cpp b/src/gbi/rt64_gbi_rdp.cpp
+index 6255872..a4338c1 100644
+--- a/src/gbi/rt64_gbi_rdp.cpp
++++ b/src/gbi/rt64_gbi_rdp.cpp
+@@ -10,6 +10,17 @@
+ 
+ namespace RT64 {
+     namespace GBI_RDP {
++        static int32_t rectX(State *state, uint32_t value) {
++            // The RDP rectangle fields are 12-bit fixed-point values. MM's
++            // widescreen hooks intentionally submit rectangles left of x=0;
++            // preserve their two's-complement sign while the wing path is on.
++            if (state->ext.enhancementConfig->rect.clearWings && ((value & 0x800U) != 0)) {
++                return static_cast<int32_t>(value | ~0xFFFU);
++            }
++
++            return static_cast<int32_t>(value);
++        }
++
+         void noOp(State *state, DisplayList **dl) {
+             // Do nothing.
+         }
+@@ -169,9 +180,9 @@ namespace RT64 {
+         }
+ 
+         void texrect(State *state, DisplayList **dl) {
+-            const int32_t ulx = (*dl)->p1(12, 12);
++            const int32_t ulx = rectX(state, (*dl)->p1(12, 12));
+             const int32_t uly = (*dl)->p1(0, 12);
+-            const int32_t lrx = (*dl)->p0(12, 12);
++            const int32_t lrx = rectX(state, (*dl)->p0(12, 12));
+             const int32_t lry = (*dl)->p0(0, 12);
+             const uint8_t tile = (*dl)->p1(24, 3);
+             *dl = *dl + 1;
+@@ -186,9 +197,9 @@ namespace RT64 {
+         }
+         
+         void texrectFlip(State *state, DisplayList **dl) {
+-            const int32_t ulx = (*dl)->p1(12, 12);
++            const int32_t ulx = rectX(state, (*dl)->p1(12, 12));
+             const int32_t uly = (*dl)->p1(0, 12);
+-            const int32_t lrx = (*dl)->p0(12, 12);
++            const int32_t lrx = rectX(state, (*dl)->p0(12, 12));
+             const int32_t lry = (*dl)->p0(0, 12);
+             const uint8_t tile = (*dl)->p1(24, 3);
+             *dl = *dl + 1;
+@@ -205,9 +216,9 @@ namespace RT64 {
+ 
+         // TODO replace the normal rect commands with these and pass a temporary RDP buffer when rdphalf_2 is run in the RSP
+         void texrectLLE(State* state, DisplayList** dl) {
+-            const int32_t ulx = (*dl)[0].p1(12, 12);
++            const int32_t ulx = rectX(state, (*dl)[0].p1(12, 12));
+             const int32_t uly = (*dl)[0].p1(0, 12);
+-            const int32_t lrx = (*dl)[0].p0(12, 12);
++            const int32_t lrx = rectX(state, (*dl)[0].p0(12, 12));
+             const int32_t lry = (*dl)[0].p0(0, 12);
+             const uint8_t tile = (*dl)[0].p1(24, 3);
+ 
+@@ -219,9 +230,9 @@ namespace RT64 {
+         }
+ 
+         void texrectFlipLLE(State* state, DisplayList** dl) {
+-            const int32_t ulx = (*dl)[0].p1(12, 12);
++            const int32_t ulx = rectX(state, (*dl)[0].p1(12, 12));
+             const int32_t uly = (*dl)[0].p1(0, 12);
+-            const int32_t lrx = (*dl)[0].p0(12, 12);
++            const int32_t lrx = rectX(state, (*dl)[0].p0(12, 12));
+             const int32_t lry = (*dl)[0].p0(0, 12);
+             const uint8_t tile = (*dl)[0].p1(24, 3);
+ 
 diff --git a/src/hle/rt64_state.cpp b/src/hle/rt64_state.cpp
 index 6b0bb31..5b22912 100644
 --- a/src/hle/rt64_state.cpp
@@ -72,7 +142,7 @@ index e9d7a02..6db9d52 100644
              bool postBlendNoiseNegative = false;
          };
 diff --git a/src/render/rt64_framebuffer_renderer.cpp b/src/render/rt64_framebuffer_renderer.cpp
-index c4cf1bf..007a7b9 100644
+index c4cf1bf..b34e3cb 100644
 --- a/src/render/rt64_framebuffer_renderer.cpp
 +++ b/src/render/rt64_framebuffer_renderer.cpp
 @@ -1274,6 +1274,51 @@ namespace RT64 {
@@ -138,6 +208,43 @@ index c4cf1bf..007a7b9 100644
          void *paramBufferBytes = framebuffer.paramsBuffer->map();
          memcpy(paramBufferBytes, &fbParams, sizeof(interop::FramebufferParams));
          framebuffer.paramsBuffer->unmap();
+@@ -1688,7 +1737,28 @@ namespace RT64 {
+                             break;
+                         }
+ 
+-                        triangles.scissor = convertFixedRect(call.callDesc.scissorRect, p.resolutionScale, p.fbWidth, invRatioScale, extOriginPercentage, int32_t(horizontalMisalignment), call.callDesc.scissorLeftOrigin, call.callDesc.scissorRightOrigin);
++                        FixedRect callScissor = call.callDesc.scissorRect;
++                        // [MM] Expanded 2D tile draws use genuine negative and
++                        // >320 framebuffer coordinates for their wing columns.
++                        // RT64 keeps ordinary rectangles centered by ratio-
++                        // scaling them, but the game's full-frame 0..320 RDP
++                        // scissor would still clip those new coordinates. Grow
++                        // only full-width rectangle scissors by the matching
++                        // logical extent; individual UI/overlay scissors and
++                        // all rectangle coordinates remain unchanged.
++                        const bool fullWidthRectScissor =
++                            (proj.type == Projection::Type::Rectangle) && adjustRatio &&
++                            (aspectRatioScale > 1.0f) &&
++                            (callScissor.ulx <= fbPair.scissorRect.ulx) &&
++                            (callScissor.lrx >= fbPair.scissorRect.lrx);
++                        if (fullWidthRectScissor) {
++                            const int32_t logicalWing = int32_t(std::ceil(
++                                (float(p.fbWidth) * (aspectRatioScale - 1.0f) * 0.5f) * 4.0f));
++                            callScissor.ulx -= logicalWing;
++                            callScissor.lrx += logicalWing;
++                        }
++
++                        triangles.scissor = convertFixedRect(callScissor, p.resolutionScale, p.fbWidth, invRatioScale, extOriginPercentage, int32_t(horizontalMisalignment), call.callDesc.scissorLeftOrigin, call.callDesc.scissorRightOrigin);
+                         
+                         if (triangles.vertexTestZ) {
+                             if ((proj.type == Projection::Type::Perspective) || (proj.type == Projection::Type::Orthographic)) {
+@@ -1926,4 +1996,4 @@ namespace RT64 {
+         unsigned int im3dVertexCount;
+     };
+ };
+-*/
+\ No newline at end of file
++*/
 diff --git a/src/render/rt64_framebuffer_renderer.h b/src/render/rt64_framebuffer_renderer.h
 index f593ab0..cd2e8b9 100644
 --- a/src/render/rt64_framebuffer_renderer.h
