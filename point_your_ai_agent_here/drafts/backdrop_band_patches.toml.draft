@@ -1,3 +1,11 @@
+# ============================================================================
+# OBSOLETE DRAFT — superseded by branch `real-widescreen` @ f1b0a85.
+# See PHASE7_NOTES_widescreen.md. CRITICAL: the "ATTEMPT 2" conclusions at
+# the bottom of this file were FALSIFIED — func_80082380 has exactly 3
+# callers, all 7x10 grids (community decomp verified); the flicker was the
+# walking-pointer repoint bug (both draw loops WALK the buffer pointer, so
+# the repoint must be the scratch BASE, never base+20). Kept for archaeology.
+# ============================================================================
     # Widescreen backdrop band: the tree-line/meadow "wall" is a tiled CI8
     # background drawn as a fixed 10x7 grid of 32px tiles = exactly 320x224
     # (the 4:3 framebuffer), so in --widescreen it stops at the 4:3 edge and

@@ -15,6 +15,8 @@ re-deriving two days of hard-won context. Read in this order:
 | `PHASE4_NOTES_a.md` | Bugs #8–#10: aspMain IMEM base 0x1080 (not 0x1000!), lossy SP semantics, delivery starvation. Both driver appendices matter |
 | `PHASE5_NOTES_a.md` | Bug #11: runtime overlay DMA registration (the fix that unlocked gameplay) |
 | `PHASE5_NOTES_c.md` | Release build + the AI_LEN mirror (real audio pacing; fixed pacing 17→58fps) |
+| `PHASE6_NOTES_a/b.md` | Widescreen groundwork: the view cull rect lever (D_800BE568..574); RT64 Expand + stale-wing analysis |
+| `PHASE7_NOTES_widescreen.md` | **Real widescreen** (branch `real-widescreen` @ f1b0a85): walking-pointer root cause, catch-all repack, RT64 dual-path wing clear, MM_WARP debug tool, opt-in wing fills. Read §2 and §4 BEFORE touching the tile draws — §4 lists conclusions we falsified |
 
 ## 2. Mission prompts (`prompts/`)
 
@@ -56,7 +58,9 @@ the worktree MUST get its own COPY of RecompiledFuncs and its own
 `output_func_path` — the default worktree setup symlinks it SHARED, and a
 regeneration writes through the symlink into every checkout at once,
 invalidating A/B tests and contaminating the main tree. (Recovery: regenerate
-from main's toml.) Draft work parked in `drafts/backdrop_band_patches.toml.draft`.
+from main's toml.) Draft work parked in `drafts/backdrop_band_patches.toml.draft`
+— NOTE: that draft is now OBSOLETE (its Attempt-2 conclusions were falsified);
+the landed work and corrections live in `PHASE7_NOTES_widescreen.md`.
 
 ## 4. Worker orchestration (how the waves were run)
 
