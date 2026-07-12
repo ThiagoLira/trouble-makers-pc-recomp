@@ -7,7 +7,7 @@ set -u
 
 usage() {
     echo "usage: $0 GAME_BINARY ROM OUTPUT_DIR STAGE_INDEX" >&2
-    echo "env: MM_CAPTURE_FRAMES=12 MM_CAPTURE_INTERVAL=0.25 MM_CAPTURE_DELAY=60 MM_CAPTURE_GEOMETRY=1602x1022+39+59 MM_WINDOW=1600x900 MM_WIDESCREEN=1" >&2
+    echo "env: MM_CAPTURE_FRAMES=12 MM_CAPTURE_INTERVAL=0.25 MM_CAPTURE_DELAY=60 MM_CAPTURE_GEOMETRY=1602x1022+39+59 MM_WINDOW=1600x900 MM_WIDESCREEN=1 MM_TEST_MOVE=1" >&2
 }
 
 if (( $# != 4 )); then
@@ -26,6 +26,7 @@ capture_delay=${MM_CAPTURE_DELAY:-60}
 capture_geometry=${MM_CAPTURE_GEOMETRY:-1602x1022+39+59}
 window_size=${MM_WINDOW:-1600x900}
 widescreen=${MM_WIDESCREEN:-1}
+test_move=${MM_TEST_MOVE:-1}
 
 if [[ ! -x "$game" ]]; then
     echo "not executable: $game" >&2
@@ -49,14 +50,34 @@ log="$output_dir/stage-$(printf '%02d' "$stage").log"
 args=("$game" "$rom" --window "$window_size")
 if [[ $widescreen == 1 ]]; then
     args+=(--widescreen)
+else
+    args+=(--no-widescreen)
 fi
 
 setsid env MM_WARP_STAGE="$stage" MM_WARP_AT=1 MM_WARP_DELAY=1 \
-    MM_TEST_AUTO_ADVANCE=1 MM_WIN_POS=40,40 SDL_VIDEODRIVER=x11 \
+    MM_TEST_AUTO_ADVANCE=1 MM_TEST_MOVE="$test_move" \
+    MM_WIN_POS=40,40 SDL_VIDEODRIVER=x11 \
     "${args[@]}" >"$log" 2>&1 &
 pid=$!
+fast_window=
+
+if command -v xdotool >/dev/null; then
+    for ((attempt = 0; attempt < 50; ++attempt)); do
+        window=$(xdotool search --onlyvisible --pid "$pid" 2>/dev/null | tail -1)
+        if [[ -n $window ]]; then
+            xdotool windowactivate --sync "$window" 2>/dev/null || true
+            xdotool keydown --window "$window" Tab 2>/dev/null || true
+            fast_window=$window
+            break
+        fi
+        sleep 0.1
+    done
+fi
 
 cleanup() {
+    if [[ -n $fast_window ]]; then
+        xdotool keyup --window "$fast_window" Tab 2>/dev/null || true
+    fi
     if kill -0 "$pid" 2>/dev/null; then
         kill -KILL -- "-$pid" 2>/dev/null || true
     fi
@@ -66,7 +87,7 @@ trap cleanup EXIT INT TERM
 
 is_fixed_4x3_stage() {
     case $1 in
-        11|13|21|22|27|30|47|52|54|56|57) return 0 ;;
+        11|27|47|52|56|57) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -78,6 +99,9 @@ for ((second = 0; second < capture_delay; ++second)); do
         echo "game exited before capture; see $log" >&2
         exit 1
     fi
+    if ! grep -q "\[warp\] stage=$stage " "$log" 2>/dev/null; then
+        continue
+    fi
     if [[ $widescreen == 1 ]] && ! is_fixed_4x3_stage "$stage"; then
         current_mode=$(grep '\[widescreen\] mode=' "$log" 2>/dev/null | tail -1)
         if [[ $current_mode == *mode=gameplay-expand ]]; then
@@ -85,7 +109,8 @@ for ((second = 0; second < capture_delay; ++second)); do
             ready=1
             break
         fi
-    elif (( second >= 12 )); then
+    elif grep -q '\[widescreen\] gameplay-ready scene=' \
+        "$log" 2>/dev/null; then
         ready=1
         break
     fi
@@ -94,6 +119,11 @@ done
 if (( ! ready )); then
     echo "stage did not reach stable gameplay; see $log" >&2
     exit 1
+fi
+
+if [[ -n $fast_window ]]; then
+    xdotool keyup --window "$fast_window" Tab 2>/dev/null || true
+    fast_window=
 fi
 
 frames=()

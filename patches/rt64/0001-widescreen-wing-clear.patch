@@ -98,10 +98,47 @@ index 6255872..a4338c1 100644
              const uint8_t tile = (*dl)[0].p1(24, 3);
  
 diff --git a/src/hle/rt64_state.cpp b/src/hle/rt64_state.cpp
-index 6b0bb31..5b22912 100644
+index 6b0bb31..5c156c1 100644
 --- a/src/hle/rt64_state.cpp
 +++ b/src/hle/rt64_state.cpp
-@@ -1248,6 +1248,7 @@ namespace RT64 {
+@@ -298,14 +298,21 @@ namespace RT64 {
+                     dstRDPTile.stride = int(tile.line) << 3;
+                     dstRDPTile.address = int(tile.tmem) << 3;
+                     dstRDPTile.palette = tile.palette;
+-                    dstRDPTile.masks = (tile.masks > 0) ? (1 << tile.masks) : 0;
+-                    dstRDPTile.maskt = (tile.maskt > 0) ? (1 << tile.maskt) : 0;
++                    extern int mm_widescreen_rotation_wall_wrap();
++                    const bool rotationWallWrap =
++                        mm_widescreen_rotation_wall_wrap() != 0;
++                    dstRDPTile.masks = (tile.masks > 0) ? (1 << tile.masks) :
++                        (rotationWallWrap ? 32 : 0);
++                    dstRDPTile.maskt = (tile.maskt > 0) ? (1 << tile.maskt) :
++                        (rotationWallWrap ? 32 : 0);
+                     dstRDPTile.shifts = ShiftScaleMap[tile.shifts];
+                     dstRDPTile.shiftt = ShiftScaleMap[tile.shiftt];
+                     dstRDPTile.uls = float(tile.uls);
+                     dstRDPTile.ult = float(tile.ult);
+-                    dstRDPTile.cms = tile.cms | ((tile.masks == 0) ? G_TX_CLAMP : 0);
+-                    dstRDPTile.cmt = tile.cmt | ((tile.maskt == 0) ? G_TX_CLAMP : 0);
++                    dstRDPTile.cms = tile.cms |
++                        (((tile.masks == 0) && !rotationWallWrap) ? G_TX_CLAMP : 0);
++                    dstRDPTile.cmt = tile.cmt |
++                        (((tile.maskt == 0) && !rotationWallWrap) ? G_TX_CLAMP : 0);
+ 
+                     // Since we can't simulate not sending the triangle coefficients individually and it falls in the realm
+                     // of undefined behavior, when the texture state is off, we merely clamp the result.
+@@ -399,8 +406,8 @@ namespace RT64 {
+                             }
+                         };
+ 
+-                        uint8_t nativeCms = (tile.masks == 0) ? (tile.cms | G_TX_CLAMP) : tile.cms;
+-                        uint8_t nativeCmt = (tile.maskt == 0) ? (tile.cmt | G_TX_CLAMP) : tile.cmt;
++                        uint8_t nativeCms = ((tile.masks == 0) && !rotationWallWrap) ? (tile.cms | G_TX_CLAMP) : tile.cms;
++                        uint8_t nativeCmt = ((tile.maskt == 0) && !rotationWallWrap) ? (tile.cmt | G_TX_CLAMP) : tile.cmt;
+                         dstRDPTile.nativeSampler = nativeSamplerFromAddressing(nativeCms, nativeCmt);;
+                     }
+                     else {
+@@ -1248,6 +1255,7 @@ namespace RT64 {
                          drawParams.deltaTimeMs = 0.0f;
                          drawParams.ubershadersOnly = false;
                          drawParams.fixRectLR = false;
@@ -109,6 +146,13 @@ index 6b0bb31..5b22912 100644
                          drawParams.postBlendNoise = ext.emulatorConfig->dither.postBlendNoise;
                          drawParams.postBlendNoiseNegative = ext.emulatorConfig->dither.postBlendNoiseNegative;
                          drawParams.maxGameCall = UINT_MAX;
+@@ -2736,4 +2744,4 @@ namespace RT64 {
+             break;
+         }
+     }
+-};
+\ No newline at end of file
++};
 diff --git a/src/hle/rt64_workload_queue.cpp b/src/hle/rt64_workload_queue.cpp
 index 5b0b726..2db3f9e 100644
 --- a/src/hle/rt64_workload_queue.cpp
@@ -142,7 +186,7 @@ index e9d7a02..6db9d52 100644
              bool postBlendNoiseNegative = false;
          };
 diff --git a/src/render/rt64_framebuffer_renderer.cpp b/src/render/rt64_framebuffer_renderer.cpp
-index c4cf1bf..b34e3cb 100644
+index c4cf1bf..eef8d11 100644
 --- a/src/render/rt64_framebuffer_renderer.cpp
 +++ b/src/render/rt64_framebuffer_renderer.cpp
 @@ -1274,6 +1274,63 @@ namespace RT64 {
@@ -287,3 +331,29 @@ index f593ab0..cd2e8b9 100644
              bool postBlendNoise;
              bool postBlendNoiseNegative;
              uint32_t maxGameCall;
+diff --git a/src/shaders/TextureSampler.hlsli b/src/shaders/TextureSampler.hlsli
+index 5164e16..54fc73f 100644
+--- a/src/shaders/TextureSampler.hlsli
++++ b/src/shaders/TextureSampler.hlsli
+@@ -65,8 +65,11 @@ void computeLOD(OtherMode otherMode, uint rdpTileCount, float2 primLOD, float re
+         tileIndex1 = clamp(tileBase + 1, 0, tileMax);
+     }
+     else {
+-        lodFraction = 1.0f;
+-
++        // [MM] With texture LOD disabled (G_TL_TILE) the RDP resolves
++        // LOD_FRAC to 0, so TRILERP-style combiners collapse to TEXEL0.
++        // 1.0 here made Mischief Makers' rotation-stage wall panels sample
++        // the stale, never-configured tile 1 instead of their texture.
++        lodFraction = 0.0f;
+     }
+ }
+ 
+@@ -355,4 +358,4 @@ float4 sampleTexture(OtherMode otherMode, RenderFlags renderFlags, float2 inputU
+     }
+     
+     return textureColor;
+-}
+\ No newline at end of file
++}
+

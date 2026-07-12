@@ -27,12 +27,29 @@ Everything runs locally from your own legally dumped ROM.
 - ✅ Natively 60 fps (the game's own rate), correct audio pacing
 - ✅ High-resolution rendering (window-integer-scale via RT64), fullscreen, MSAA/SSAA
 - ✅ EEPROM saves persist to disk
-- ✅ Widescreen (opt-in), F11 fullscreen, Tab fast-forward, persistent display config
+- 🧪 Experimental widescreen (opt-in), F11 fullscreen, Tab fast-forward,
+  persistent display config
 - 🚧 Automated widescreen sweep passes all 52 playable progression rows;
   a full controller-driven playthrough is still pending. Window
   occlusion freezes the game (present-paced); minor dither artifacts remain in
   translucent overlays at high res.
 - 🗺️ Next: full-playthrough verification, mod hooks, upstreaming runtime patches
+
+## Experimental widescreen
+
+`--widescreen` expands playable scenes beyond the N64's original 4:3 frame.
+This is real scene rendering: actors, 3D geometry, and the game's scrolling
+background, environment, and midground tile maps can draw into both side
+wings. It is still experimental while level-specific masks, framebuffer
+effects, and off-map boundaries are tested across the full game.
+
+| Original 4:3 (`--no-widescreen`) | Experimental 16:9 (`--widescreen`) |
+|:--:|:--:|
+| ![Marina idling in the first level at the original 4:3 aspect ratio](screenshots/gameplay-vanilla-idle.gif) | ![Marina idling in the first level with the scene expanded to 16:9](screenshots/gameplay-widescreen-idle.gif) |
+
+Both GIFs were captured from this build in the first playable level at the
+same idle sequence. Cinematics automatically use the original presentation;
+the renderer reopens the wings only after stable player control is detected.
 
 ## Building and running
 
@@ -81,23 +98,22 @@ cmake --build build --target mm_game -j8
 #   entities, foreground, scrolling backdrops, environment and midground
 #   tile maps are drawn beyond the original 4:3 frame. Plain launches retain
 #   the original presentation.
+./build/src/game/mm_game rom.z64 --no-widescreen # force original 4:3
 ```
 
 Widescreen uses the game's own wrapping maps and scene formulas—there is no
 mirroring, stretching, blur fill, or other cosmetic substitute. Every layer
-extends in every scene; individual off-frame tiles whose art a scene never
-loads are validated per-tile against the loaded texture bank and left at a
-clean authored boundary instead of displaying uninitialized texture memory.
+in ordinary scrolling scenes is eligible to extend; individual off-frame
+tiles whose art a scene never loads are validated against the loaded texture
+bank and left at a clean authored boundary instead of displaying uninitialized
+texture memory.
 Entity spawn/despawn windows are widened to match, so objects no longer pop
 in at the wing edges.
 Opening/in-stage cinematics automatically switch back to centered 4:3 and
-return to widescreen only after player control is stable. Playable scenes that
-rotate/composite the original framebuffer or use fixed boss canvases also stay
-4:3 by design (scenes 5, 13, 25, 26, 27, 36, 57, 69, 71, 79, and 85); their
-authored image has no valid world outside the original frame.
-The two rotating-camera stages also reset RT64's persistent HD color canvas to
-their authored burgundy base every frame, preventing moving sprites from
-accumulating into framebuffer-feedback trails.
+return to widescreen only after player control is stable. A small remaining
+fallback set currently stays 4:3 while its fixed-canvas composition is being
+validated (scenes 25, 27, 57, 71, 79, and 85). Vertigo and Seasick Climb now
+render their rotating textured walls in widescreen without framebuffer trails.
 See the live [scene 22 capture](screenshots/widescreen-scene-22.png), the
 [forest artifact comparison](screenshots/widescreen-forest-fix.png), and the
 labeled [coverage](screenshots/widescreen-coverage-scenes.png) and
@@ -112,11 +128,11 @@ Run the complete playable-level screenshot/crash suite with:
 tools/test_widescreen_playable.sh ./build/src/game/mm_game path/to/rom.z64 /tmp/mm-widescreen-suite
 ```
 
-The suite targets exact progression-table stage indices, advances dialogue
-through a test-only input pulse, waits for authoritative player-control state,
-audits every expanded tile layer for complete wing coverage, and writes a TSV
-manifest plus one screenshot/log per level. For transient 3D problems, capture
-a sustained frame sequence with `tools/test_render_burst.sh`.
+The suite targets exact progression-table stage indices, advances dialogue,
+waits for authoritative player-control state, moves Marina in short alternating
+bursts, audits expanded tile layers for wing coverage, and writes a TSV manifest
+plus a multi-frame contact sheet and log for every level. For transient 3D
+problems, capture a sustained frame sequence with `tools/test_render_burst.sh`.
 
 Options persist to `~/.config/troublemakers-recomp/display.cfg` (CLI
 overrides). In game: **F11** toggles fullscreen, **hold Tab** fast-forwards 3x.

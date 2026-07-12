@@ -320,6 +320,7 @@ static void print_usage(const char* argv0) {
         "  --msaa N            multisample antialiasing (2, 4, or 8)\n"
         "  --widescreen        expand the rendered field to the window aspect\n"
         "                      (opt-in: can reveal off-stage areas in a 2D game)\n"
+        "  --no-widescreen     force the original 4:3 presentation\n"
         "options persist to ~/.config/troublemakers-recomp/display.cfg\n"
         "in game: F11 = fullscreen toggle, hold Tab = 3x fast-forward\n",
         argv0);
@@ -341,6 +342,8 @@ int main(int argc, char** argv) {
             g_fullscreen = true;
         } else if (arg == "--widescreen") {
             g_widescreen = true;
+        } else if (arg == "--no-widescreen") {
+            g_widescreen = false;
         } else if (arg == "--window" && i + 1 < argc) {
             if (std::sscanf(argv[++i], "%dx%d", &g_window_w, &g_window_h) != 2 ||
                 g_window_w < 320 || g_window_h < 240) {

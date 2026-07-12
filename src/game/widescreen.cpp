@@ -63,6 +63,15 @@ constexpr uint32_t kStageIds = 0x800C83F8u;
 constexpr uint32_t kCurrentStage = 0x80178162u;
 constexpr uint32_t kHighestUnlockedStage = 0x80171B18u;
 constexpr uint32_t kCurrentStageId = 0x800D28E4u;
+constexpr uint32_t kMarinaHold = 0x801370CCu;
+constexpr uint32_t kMarinaPress = 0x801370CEu;
+constexpr uint32_t kButtonHoldHistory = 0x801225F0u;
+constexpr uint32_t kButtonPressHistory = 0x8011DD70u;
+constexpr uint32_t kButtonDLeft = 0x800BE50Cu;
+constexpr uint32_t kButtonDRight = 0x800BE510u;
+constexpr uint32_t kMarinaActorPosX = 0x800EF598u;
+constexpr uint32_t kGlobalButtonHold = 0x800BE4F8u;
+constexpr uint32_t kGlobalButtonPress = 0x800BE4FCu;
 
 bool env_enabled(const char* name) {
     const char* value = std::getenv(name);
@@ -75,6 +84,7 @@ bool valid_rdram_ptr(uint32_t ptr) {
 
 int g_gameplay_wide_active = 0;
 std::atomic<int> g_force_frame_clear{0};
+std::atomic<int> g_rotation_wall_wrap{0};
 
 // These gameplay scenes transform or composite an authored 320x240 canvas
 // rather than drawing a scrollable world. Expanding the projection reveals
@@ -84,20 +94,60 @@ std::atomic<int> g_force_frame_clear{0};
 // remain genuinely expanded.
 bool scene_requires_original(int scene) {
     switch (scene) {
-        case 5:  // Migen Brawl: fixed precomposed boss arena
-        case 13: // Seasick Climb: rotating framebuffer
         case 25: // SASQUATCH beta: fixed vertical boss canvas
-        case 26: // PHOENIX gamma: fixed vertical boss canvas
         case 27: // Final Battle: fixed boss backdrop
-        case 36: // Snowstorm Maze: fixed authored canvas
         case 57: // Volcano: fixed authored canvas
-        case 69: // Vertigo: rotating framebuffer
         case 71: // Clanball Lift: fixed authored canvas
         case 79: // Inner Struggle: 4:3 post-process canvas
         case 85: // MERCO: fixed boss backdrop
             return true;
         default:
             return false;
+    }
+}
+
+// Emit a renderer-independent test marker after the stage timer has advanced
+// for 30 controlled ticks. Fixed-canvas and vanilla 4:3 runs never enter
+// expanded mode, so the screenshot harness cannot use "gameplay-expand" as
+// their readiness signal. This also avoids wall-clock delays, which become
+// wildly inaccurate while the harness holds the fast-forward key.
+void report_gameplay_ready(uint8_t* rdram, int scene) {
+    (void)rdram;
+    static int tracked_scene = -1;
+    static int previous_stage_time = -1;
+    static int advancing_ticks = 0;
+    static bool reported = false;
+
+    const int stage_time = MEM_HU(
+        0, static_cast<gpr>(static_cast<int32_t>(kStageTime)));
+    if (scene != tracked_scene) {
+        tracked_scene = scene;
+        previous_stage_time = stage_time;
+        advancing_ticks = 0;
+        reported = false;
+    }
+
+    const int game_state = MEM_HU(
+        0, static_cast<gpr>(static_cast<int32_t>(kGameState)));
+    const int cannot_pause = MEM_HU(
+        0, static_cast<gpr>(static_cast<int32_t>(kCannotPause)));
+    if (game_state != 6 || cannot_pause != 0) {
+        previous_stage_time = stage_time;
+        advancing_ticks = 0;
+        return;
+    }
+
+    if (stage_time != previous_stage_time) {
+        previous_stage_time = stage_time;
+        if (advancing_ticks < 30) {
+            ++advancing_ticks;
+        }
+    }
+
+    if (!reported && advancing_ticks >= 30) {
+        reported = true;
+        std::fprintf(stderr,
+            "[widescreen] gameplay-ready scene=%d\n", scene);
     }
 }
 
@@ -131,10 +181,15 @@ int raw_gameplay_active(uint8_t* rdram) {
     }
 
     // gStageTime is incremented by func_80020024 only during active stage
-    // control; it freezes for cinema/dialogue. The timer saturates at 36000,
-    // where the ordinary pause permission becomes the remaining signal.
-    return cannot_pause == 0 &&
-        (frames_since_stage_time_changed < 3 || stage_time >= 36000);
+    // control and freezes for cinema/dialogue. Some gameplay events (most
+    // visibly Rolling Rock impacts) briefly assert gCannotPause while that
+    // timer continues advancing; treating those pulses as cinematics made
+    // the entire renderer snap into a 4:3 rectangle for several frames.
+    // Trust the advancing timer until it saturates. At 36000 it can no longer
+    // distinguish gameplay from cinema, so pause permission is the fallback.
+    return stage_time < 36000
+        ? frames_since_stage_time_changed < 3
+        : cannot_pause == 0;
 }
 
 } // namespace
@@ -157,6 +212,10 @@ namespace RT64 {
 int mm_widescreen_force_frame_clear() {
     return g_force_frame_clear.load(std::memory_order_relaxed);
 }
+
+int mm_widescreen_rotation_wall_wrap() {
+    return g_rotation_wall_wrap.load(std::memory_order_relaxed);
+}
 } // namespace RT64
 
 // Flip RT64 between its native 4:3 and expanded projection only when the
@@ -168,8 +227,31 @@ extern "C" void mm_widescreen_sync_mode(uint8_t* rdram) {
     static int candidate_frames = 0;
     const int scene = static_cast<int16_t>(MEM_HU(
         0, static_cast<gpr>(static_cast<int32_t>(kCurrentScene))));
-    g_force_frame_clear.store(scene == 13 || scene == 69,
+    report_gameplay_ready(rdram, scene);
+    g_rotation_wall_wrap.store(scene == 13 || scene == 69,
         std::memory_order_relaxed);
+    // With the wall panels rendering (RT64 LOD_FRAC fix), the rotation
+    // stages' own opaque wall covers the playfield every frame, exactly as
+    // on hardware — no clear needed, and a per-frame clear races the wall
+    // draw mid-frame (geometry flickering in and out). Keep a brief seed
+    // pulse at gameplay entry only, so RT64's two double-buffered HD
+    // targets start from a common base instead of diverging (the 30 Hz
+    // beige/burgundy flicker seen in older builds).
+    static int rotation_seed_frames = 0;
+    const int rotation_game_state = MEM_HU(
+        0, static_cast<gpr>(static_cast<int32_t>(kGameState)));
+    int force_clear = 0;
+    if (scene != 13 && scene != 69) {
+        rotation_seed_frames = 0;
+    }
+    else if (rotation_game_state != 6) {
+        rotation_seed_frames = 6;
+    }
+    else if (rotation_seed_frames > 0) {
+        --rotation_seed_frames;
+        force_clear = 1;
+    }
+    g_force_frame_clear.store(force_clear, std::memory_order_relaxed);
     const int raw_active = raw_gameplay_active(rdram);
 
     if (previous_active < 0) {
@@ -190,10 +272,15 @@ extern "C" void mm_widescreen_sync_mode(uint8_t* rdram) {
             ++candidate_frames;
         }
 
-        // Hide a cinematic almost immediately, but do not reopen the wings
-        // until control has remained stable for half a second. Several stage
-        // scripts pulse gCannotPause for one or two frames during gameplay.
-        const int required_frames = raw_active ? 30 : 3;
+        // Enter either presentation only after it has remained stable. Stage
+        // effects can freeze gStageTime and assert gCannotPause for dozens of
+        // frames (Rolling Rock does this repeatedly); switching aspect ratio
+        // during those effects exposes the centered 4:3 composite and can
+        // split RT64's layer targets into missing squares. Opening cinematics
+        // still start in Original mode because their initial raw state is 0;
+        // an in-stage cinema gets one second of hysteresis before the wings
+        // close, which is preferable to destructive gameplay flicker.
+        const int required_frames = raw_active ? 30 : 60;
         if (candidate_frames < required_frames) {
             return;
         }
@@ -233,10 +320,58 @@ extern "C" int mm_debug_warp_prepare(
         MEM_B(0, static_cast<gpr>(static_cast<int32_t>(kHighestUnlockedStage))) = stage;
         MEM_H(0, static_cast<gpr>(static_cast<int32_t>(kCurrentStageId))) =
             MEM_HU(stage * 2, stage_ids);
+        std::fprintf(stderr, "[warp] stage=%d scene=%d\n", stage,
+            static_cast<int16_t>(MEM_HU(stage * 2, scenes)));
         return MEM_HU(stage * 2, scenes);
     }
     return static_cast<int16_t>(MEM_HU(
         0, static_cast<gpr>(static_cast<int32_t>(kCurrentScene))));
+}
+
+// Test-only controller driver. The hook runs after the game has copied its
+// controller state into Marina's per-frame input words, so it can exercise
+// camera scrolling and actor streaming without depending on X11 focus. Move
+// right, pause, then left; the neutral gaps also expose stale-frame trails.
+extern "C" void mm_test_drive_marina(uint8_t* rdram) {
+    static int motion_frame = 0;
+    static uint16_t previous_direction = 0;
+    if (!env_enabled("MM_TEST_MOVE") ||
+        !mm_widescreen_gameplay_active(rdram) ||
+        MEM_HU(0, static_cast<gpr>(static_cast<int32_t>(kGameState))) != 6 ||
+        MEM_HU(0, static_cast<gpr>(static_cast<int32_t>(kCannotPause))) != 0) {
+        motion_frame = 0;
+        previous_direction = 0;
+        return;
+    }
+
+    const int phase = motion_frame++ % 120;
+    uint16_t direction = 0;
+    if (phase < 15) {
+        direction = MEM_HU(0,
+            static_cast<gpr>(static_cast<int32_t>(kButtonDRight)));
+    }
+    else if (phase >= 60 && phase < 75) {
+        direction = MEM_HU(0,
+            static_cast<gpr>(static_cast<int32_t>(kButtonDLeft)));
+    }
+    const uint16_t pressed = direction != previous_direction ? direction : 0;
+    previous_direction = direction;
+
+    MEM_H(0, static_cast<gpr>(static_cast<int32_t>(kMarinaHold))) = direction;
+    MEM_H(0, static_cast<gpr>(static_cast<int32_t>(kMarinaPress))) = pressed;
+    MEM_H(0, static_cast<gpr>(static_cast<int32_t>(kGlobalButtonHold))) = direction;
+    MEM_H(0, static_cast<gpr>(static_cast<int32_t>(kGlobalButtonPress))) = pressed;
+    MEM_H(0, static_cast<gpr>(static_cast<int32_t>(kButtonHoldHistory))) = direction;
+    MEM_H(0, static_cast<gpr>(static_cast<int32_t>(kButtonPressHistory))) = pressed;
+    if ((motion_frame % 60) == 0) {
+        std::fprintf(stderr,
+            "[test-move] phase=%d direction=%04x actor-x=%d camera-x=%d\n",
+            phase, direction,
+            static_cast<int32_t>(MEM_W(0, static_cast<gpr>(
+                static_cast<int32_t>(kMarinaActorPosX)))),
+            static_cast<int32_t>(MEM_W(0, static_cast<gpr>(
+                static_cast<int32_t>(kCamX)))));
+    }
 }
 
 namespace {
