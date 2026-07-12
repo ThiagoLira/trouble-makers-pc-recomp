@@ -1,10 +1,13 @@
 # Phase 8 — The rotation-stage wall (scenes 13 & 69): UNSOLVED, but mapped
 
-Status: the port is intentionally rolled back to `73dc088` (every-frame
-burgundy clear in these scenes — stable but wrong). A one-commit fix attempt
-(`079ddff`, seed-pulse clear) was reverted at the user's request; it lives in
-the reflog. This note preserves everything learned so the next attempt starts
-at the finish line, not the starting line.
+Status: `real-widescreen` is at `73dc088` (every-frame burgundy clear in
+these scenes — stable but wrong). Branch **`rotation-wall-fix`** carries the
+two verified improvements (RT64 LOD_FRAC fix + entry-pulse clear instead of
+per-frame); the wall itself still renders untextured there. A first fix
+attempt (`079ddff`, seed-pulse only) was reverted and lives in the reflog.
+This note preserves everything learned so the next attempt starts at the
+finish line, not the starting line. §"Texgen experiment" below records a
+second attempt that FAILED — do not re-run it as-is.
 
 ## Ground truth (real hardware — do not re-derive from theory)
 
@@ -94,44 +97,76 @@ resolves this combiner to TEXEL0 (bricks visible on hardware ⇒ LOD_FRAC=0).
 Changing it to `0.0f` verifiably stopped the flicker (panels became stable).
 One-line change, worth re-applying — but NOT sufficient on its own.
 
-## The remaining unknown (exact next step)
+## Texgen experiment (2026-07-12, branch `rotation-wall-fix`) — FAILED, learn from it
 
-After the LOD fix the wall is still FLAT (one texel stretched, correct
-lighting). Everything upstream is proven good, so the loss is in how RT64
-turns per-vertex ST into GPU texcoords. Prime suspect, not yet confirmed:
+The wall's live geometry mode is **0x000A2205** = ZBUFFER|SHADE|
+SHADING_SMOOTH|CULL_BACK|LIGHTING|**G_TEXTURE_GEN_LINEAR** — the LINEAR bit
+WITHOUT G_TEXTURE_GEN. RSP LookAt is set (X=(0,1,0), Y=(1,0,0)), texture
+scale 0x8000. RT64 only enables texgen when G_TEXTURE_GEN is present, so it
+uses the raw vertex ST.
 
-`lib/rt64/src/hle/rt64_rsp.cpp` `setVertexCommon()`:
-```
-const uint32_t textureGenMask = G_LIGHTING | G_TEXTURE_GEN;
-const bool usesTextureGen = (geometryMode & textureGenMask) == textureGenMask;
-...
-if (usesTextureGen) {           // <- STUB: constant texcoords for all verts
-    tcFloats.emplace_back(TextureSc);
-    tcFloats.emplace_back(TextureTc);
-}
-```
-If the wall's geometry mode has `G_TEXTURE_GEN` set alongside `G_LIGHTING`
-(the setup DLs D_800E3C60/D_800E3CC8 must be dumped to check — the decomp
-transcription listed only SHADE|CULL_BACK|LIGHTING|SHADING_SMOOTH, but that
-was read from the mode-0 variant D_800E3AC8), then RT64 replaces every
-texcoord with a CONSTANT → exactly one texel → exactly the flat lit wall.
-Verification is one line away: log
-`geometryModeStack[geometryModeStackSize - 1]` (NOT `geometryMode`, which
-isn't in scope in `setVertex`) next to the existing vertex probe, or just
-dump the 8 words of D_800E3C60/D_800E3CC8 from RDRAM.
+Hypothesis tested: Fast3D honors LINEAR alone as a texgen enable, so RT64
+should too. Result of widening the enable mask (plus fixing an apparent
+÷32 unit bug in TextureGen.hlsli — texgenUV is s10.5, the pipeline unit is
+texels): **the whole scene degraded** — Marina, blocks, everything except
+the HUD vanished under giant flat quads. The wall ALSO cannot become bricks
+this way: its quads have (apparently) uniform normals, so generated coords
+are constant per quad — flat by construction. Counter-evidence against
+texgen entirely: the game CPU-writes SCROLLING S coordinates
+(`(-0x40 - scroll>>16) << 5`) into the wall Vtx every frame — pointless if
+the microcode ignored vertex ST. Both texgen changes were reverted. (The
+÷32 unit suspicion in `computeTextureGen` may still be a real RT64 bug for
+actual texgen content — it returns s10.5-scaled values where the rest of
+the pipeline uses texels — but this game gave no case to validate it.)
 
-If TEXGEN is confirmed: hardware texgen maps the LIT NORMAL through the
-lookAt vectors to ST (spherical env mapping). Fast3D texgen on a wall with
-per-vertex normals would produce varying coords — the fix is implementing
-real texgen in setVertexCommon (the lookAt data is already tracked;
-RasterPS may even support it via RSP_LOOKAT_INDEX_ENABLED — check whether
-the constant fill is a leftover CPU fallback that should defer to the GPU
-path). CAUTION: if TEXGEN is set, the CPU-written S coords are ignored by
-hardware too, so the "scrolling" comes from somewhere else — re-read
-func_801B3A14 in that light.
+## The real remaining contradiction — needs LLE ground truth
 
-If TEXGEN is NOT set: instrument `tcFloats` right after the else-branch fill
-for the wall vertices and follow the values into RasterPS.
+- Vertex ST spans −192..+128 texels (×0.5 scale) against a 32×32 tile with
+  **mask=0, cm=WRAP**.
+- RT64 (and, per its comment, the "hardware rule") forces CLAMP when
+  mask==0 → everything outside 0..31 samples the border texel → flat wall
+  with at most a narrow textured band. That IS what the port renders.
+- Hardware shows repeating bricks across the full quad. If hardware truly
+  clamped mask-0 tiles, it could not.
+- Reconciliation candidate: on real RDP, an out-of-range coordinate on an
+  unmasked tile may address TMEM linearly (taddr = tmem + t*line + s*size,
+  wrapping TMEM) — i.e., ALIAS through the loaded texture with a row shift,
+  which visually tiles it. RT64's `sampleTMEM()` (TextureDecoder.hlsli)
+  already implements hardware-faithful TMEM addressing incl. the CI
+  lower-half mask — routing mask-0 WRAP tiles with out-of-range texcoords
+  to the rawTMEM path WITHOUT the forced clamp would reproduce that, IF the
+  aliasing theory is right.
+- **Decide it with an LLE reference**: run scene 69 in angrylion/ParaLLEl
+  (or read angrylion's `tcclamp`/`tcmask` — does its clamp-enable really OR
+  in `mask==0`, and does the texel fetch alias TMEM before or after
+  clamping?). Do NOT keep guessing from HLE captures; that loop was run
+  twice and both times produced a confident wrong theory.
+
+## Shipped on `rotation-wall-fix` (verified improvements, wall still flat)
+
+1. `TextureSampler.hlsli` `computeLOD`: `lodFraction = 0.0f` when LOD is
+   disabled (was 1.0 → TRILERP sampled the stale tile 1 → per-frame color
+   flicker; hardware resolves to TEXEL0). Verified: wall color stable.
+2. `widescreen.cpp`: per-frame burgundy clear replaced by a 6-frame seed
+   pulse at gameplay entry (rearmed outside game state 6). Verified:
+   no sprite trails, no mid-frame clear racing the wall draw.
+3. Known remaining issue AFTER these: the wall panels transiently stop
+   drawing entirely (Vertigo capture: solid frames alternating with black
+   over seconds — the pre-existing "transient geometry loss" GPT built
+   test_render_burst.sh to chase). With the per-frame clear that absence
+   read as burgundy; with the pulse it reads as black/stale. Root cause
+   unknown — possibly the wall-panel actors' own visibility/recycling
+   (they are normal actors; check the actor sort/cull path first).
+
+## (Resolved 2026-07-12) Earlier "next step": the texgen-stub theory
+
+The probe answered it: geometry mode is 0x000A2205 (LINEAR bit only, no
+G_TEXTURE_GEN), so RT64's `usesTextureGen` is false and the raw vertex ST
+path runs — the "constant texcoord stub" is NOT taken. (That path is also
+not a stub: it stores the texture scale and the GPU computes real texgen in
+RSPProcessCS.hlsl via `computeTextureGen`.) See "Texgen experiment" above
+for why force-enabling texgen made things worse. The live question is the
+mask-0 clamp-vs-TMEM-alias contradiction in the section above it.
 
 ## The clear policy (once the wall renders)
 
