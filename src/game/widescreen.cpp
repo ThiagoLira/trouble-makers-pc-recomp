@@ -180,16 +180,13 @@ int raw_gameplay_active(uint8_t* rdram) {
         ++frames_since_stage_time_changed;
     }
 
-    // gStageTime is incremented by func_80020024 only during active stage
-    // control and freezes for cinema/dialogue. Some gameplay events (most
-    // visibly Rolling Rock impacts) briefly assert gCannotPause while that
-    // timer continues advancing; treating those pulses as cinematics made
-    // the entire renderer snap into a 4:3 rectangle for several frames.
-    // Trust the advancing timer until it saturates. At 36000 it can no longer
-    // distinguish gameplay from cinema, so pause permission is the fallback.
-    return stage_time < 36000
-        ? frames_since_stage_time_changed < 3
-        : cannot_pause == 0;
+    // gStageTime normally advances during control and freezes for cinema,
+    // while gCannotPause prevents an early expand during the tail of stage
+    // intros whose timer has already started. Some gameplay effects briefly
+    // assert gCannotPause too; mm_widescreen_sync_mode's one-second exit
+    // hysteresis absorbs those pulses without snapping back to 4:3.
+    return cannot_pause == 0 &&
+        (frames_since_stage_time_changed < 3 || stage_time >= 36000);
 }
 
 } // namespace
@@ -553,13 +550,34 @@ extern "C" void mm_ws_band_repack(uint8_t* rdram, recomp_context* ctx) {
     const int addend = MEM_HU(0, rdram_gpr(kBackdropAddend));
     const int y0 = (-12 - read_s16(rdram, kBackdropScrollY)) & 0x1FF;
 
-    repack_grid(wc, [&](int row, int col) -> int32_t {
+    const auto band_slot = [&](int row, int col) -> int32_t {
         const int row_block = ((y0 + row * 32) >> 1) & 0xF0;
         const int x0 = (read_s16(rdram, kBandRowScroll + row * 4) - 2) & 0x1FF;
         const int map_col = ((x0 + col * 32 + 512) >> 5) & 0xF;
         const int tile = MEM_BU(map_col + row_block, map);
         return wing_slot(rdram, tile, addend, wc.texture_pool);
-    }, wings);
+    };
+    repack_grid(wc, band_slot, wings);
+    if (env_enabled("MM_TEST_AUTO_ADVANCE")) {
+        int mismatches = 0;
+        for (int row = 0; row < 7; ++row) {
+            for (int col = 0; col < 10; ++col) {
+                if (MEM_W((row * 10 + col) * 4, wc.src) !=
+                    band_slot(row, col)) {
+                    ++mismatches;
+                }
+            }
+        }
+        static int audited_scene = -1;
+        const int scene = static_cast<int16_t>(
+            MEM_HU(0, rdram_gpr(kCurrentScene)));
+        if (scene != audited_scene) {
+            audited_scene = scene;
+            std::fprintf(stderr,
+                "[widescreen-formula] scene=%d layer=band mismatches=%d/70\n",
+                scene, mismatches);
+        }
+    }
     trace_layer_once(rdram, "band", wc.dst);
     ctx->r5 = wc.dst;
 }
@@ -587,13 +605,34 @@ extern "C" void mm_ws_static_repack(uint8_t* rdram, recomp_context* ctx) {
         const int x0 = (read_s16(rdram, kEnvScrollX) - 2) & (wide ? 0xFFF : 0x1FF);
         const int y0 = (-12 - read_s16(rdram, kEnvScrollY)) & (wide ? 0xFF : 0x1FF);
 
-        repack_grid(wc, [&](int row, int col) -> int32_t {
+        const auto env_slot = [&](int row, int col) -> int32_t {
             const int y = y0 + row * 32;
             const int row_block = wide ? ((y << 2) & 0x380) : ((y >> 1) & 0xF0);
             const int map_col = ((x0 + col * 32 + 0x1000) >> 5) & (wide ? 0x7F : 0xF);
             const int tile = MEM_BU(map_col + row_block, map);
             return wing_slot(rdram, tile, addend, wc.texture_pool);
-        }, wings);
+        };
+        repack_grid(wc, env_slot, wings);
+        if (env_enabled("MM_TEST_AUTO_ADVANCE")) {
+            int mismatches = 0;
+            for (int row = 0; row < 7; ++row) {
+                for (int col = 0; col < 10; ++col) {
+                    if (MEM_W((row * 10 + col) * 4, wc.src) !=
+                        env_slot(row, col)) {
+                        ++mismatches;
+                    }
+                }
+            }
+            static int audited_scene = -1;
+            const int scene = static_cast<int16_t>(
+                MEM_HU(0, rdram_gpr(kCurrentScene)));
+            if (scene != audited_scene) {
+                audited_scene = scene;
+                std::fprintf(stderr,
+                    "[widescreen-formula] scene=%d layer=env mismatches=%d/70\n",
+                    scene, mismatches);
+            }
+        }
     }
     else if (buffer == kMidBuffer) {
         wc.dst = rdram_gpr(kMidScratch);

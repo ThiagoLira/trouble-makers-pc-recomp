@@ -89,7 +89,15 @@ instruction = [
     { func = "func_80082820", vram = 0x80082A08, value = 0x240CFFFB }, # col start t4 0 -> -5
     { func = "func_80082820", vram = 0x80082A20, value = 0x24F900C0 }, # left-edge skip 0x20 -> 0xC0
     { func = "func_80082820", vram = 0x80082B24, value = 0x04010003 }, # drop max(0,upper_x) clamp
+    # The original x<0 path compensated for clipping by starting texture S at
+    # -x. Wing rectangles are no longer clipped, so their S must remain zero.
+    { func = "func_80082820", vram = 0x80082B70, value = 0x10000003 }, # always take S=0 path
     { func = "func_80082820", vram = 0x80082A00, value = 0x00197900 }, # dst row stride <<3 -> <<4 (80B)
+    # Clamp fractional high-resolution samples at the edge of each 32x32
+    # slice instead of wrapping them to texel 0 of that same slice. The next
+    # rectangle supplies the genuine neighboring map tile.
+    { func = "func_80082820", vram = 0x80082AAC, value = 0x3C190009 }, # render tile CMT=CLAMP
+    { func = "func_80082820", vram = 0x80082ABC, value = 0x37394250 }, # render tile CMS=CLAMP
 
     # REAL-CONTENT WIDESCREEN — shared static tile-grid draw func_80082380
     # (midground D_80180930 / env D_80180B60 / static-bg D_80180D90 / possible
@@ -105,7 +113,10 @@ instruction = [
     { func = "func_80082380", vram = 0x80082534, value = 0x240DFFFB }, # col start t5 0 -> -5
     { func = "func_80082380", vram = 0x8008254C, value = 0x24EE00C0 }, # left-edge skip 0x20 -> 0xC0
     { func = "func_80082380", vram = 0x80082644, value = 0x04010003 }, # drop max(0,upper_x) clamp
+    { func = "func_80082380", vram = 0x80082690, value = 0x10000003 }, # unclipped wing tile starts at S=0
     { func = "func_80082380", vram = 0x800826F4, value = 0x27190050 }, # dst row stride 0x28 -> 0x50 (20 slots)
+    { func = "func_80082380", vram = 0x800825DC, value = 0x3C180009 }, # render tile CMT=CLAMP
+    { func = "func_80082380", vram = 0x800825EC, value = 0x37184250 }, # render tile CMS=CLAMP
 
     # ENTITY POP-IN — the view-cull rect above is only one of the game's
     # visibility systems. Three more windows still used 4:3-sized X margins,
