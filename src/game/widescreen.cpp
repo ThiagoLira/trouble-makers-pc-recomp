@@ -168,28 +168,8 @@ extern "C" void mm_widescreen_sync_mode(uint8_t* rdram) {
     static int candidate_frames = 0;
     const int scene = static_cast<int16_t>(MEM_HU(
         0, static_cast<gpr>(static_cast<int32_t>(kCurrentScene))));
-    // With the wall panels rendering (RT64 LOD_FRAC fix), the rotation
-    // stages' own opaque wall covers the playfield every frame, exactly as
-    // on hardware — no clear needed, and a per-frame clear races the wall
-    // draw mid-frame (geometry flickering in and out). Keep a brief seed
-    // pulse at gameplay entry only, so RT64's two double-buffered HD
-    // targets start from a common base instead of diverging (the 30 Hz
-    // beige/burgundy flicker seen in older builds).
-    static int rotation_seed_frames = 0;
-    const int rotation_game_state = MEM_HU(
-        0, static_cast<gpr>(static_cast<int32_t>(kGameState)));
-    int force_clear = 0;
-    if (scene != 13 && scene != 69) {
-        rotation_seed_frames = 0;
-    }
-    else if (rotation_game_state != 6) {
-        rotation_seed_frames = 6;
-    }
-    else if (rotation_seed_frames > 0) {
-        --rotation_seed_frames;
-        force_clear = 1;
-    }
-    g_force_frame_clear.store(force_clear, std::memory_order_relaxed);
+    g_force_frame_clear.store(scene == 13 || scene == 69,
+        std::memory_order_relaxed);
     const int raw_active = raw_gameplay_active(rdram);
 
     if (previous_active < 0) {

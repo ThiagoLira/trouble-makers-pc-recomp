@@ -1,13 +1,13 @@
 # Phase 8 — The rotation-stage wall (scenes 13 & 69): UNSOLVED, but mapped
 
 Status: `real-widescreen` is at `73dc088` (every-frame burgundy clear in
-these scenes — stable but wrong). Branch **`rotation-wall-fix`** carries the
-two verified improvements (RT64 LOD_FRAC fix + entry-pulse clear instead of
-per-frame); the wall itself still renders untextured there. A first fix
-attempt (`079ddff`, seed-pulse only) was reverted and lives in the reflog.
-This note preserves everything learned so the next attempt starts at the
-finish line, not the starting line. §"Texgen experiment" below records a
-second attempt that FAILED — do not re-run it as-is.
+these scenes — stable but wrong), and branch **`rotation-wall-fix`** now
+carries the SAME runtime behavior after human playtest rejected both
+improvement variants (see "Playtest verdicts") — the branch's value is this
+document plus the recorded one-line LOD fix (`766b13c` in its history). A
+first fix attempt (`079ddff`, seed-pulse only) lives in the reflog.
+§"Texgen experiment" records a second attempt that FAILED — do not re-run
+it as-is.
 
 ## Ground truth (real hardware — do not re-derive from theory)
 
@@ -142,21 +142,41 @@ the pipeline uses texels — but this game gave no case to validate it.)
   clamping?). Do NOT keep guessing from HLE captures; that loop was run
   twice and both times produced a confident wrong theory.
 
-## Shipped on `rotation-wall-fix` (verified improvements, wall still flat)
+## Playtest verdicts (2026-07-12) — why the branch reverted to GPT behavior
 
-1. `TextureSampler.hlsli` `computeLOD`: `lodFraction = 0.0f` when LOD is
-   disabled (was 1.0 → TRILERP sampled the stale tile 1 → per-frame color
-   flicker; hardware resolves to TEXEL0). Verified: wall color stable.
-2. `widescreen.cpp`: per-frame burgundy clear replaced by a 6-frame seed
-   pulse at gameplay entry (rearmed outside game state 6). Verified:
-   no sprite trails, no mid-frame clear racing the wall draw.
-3. Known remaining issue AFTER these: the wall panels transiently stop
-   drawing entirely (Vertigo capture: solid frames alternating with black
-   over seconds — the pre-existing "transient geometry loss" GPT built
-   test_render_burst.sh to chase). With the per-frame clear that absence
-   read as burgundy; with the pulse it reads as black/stale. Root cause
-   unknown — possibly the wall-panel actors' own visibility/recycling
-   (they are normal actors; check the actor sort/cull path first).
+Both improvement variants were REJECTED by human playtest, and the reason
+generalizes:
+
+- LOD fix + per-frame burgundy clear: the now-solid wall panels race the
+  mid-frame clear → wall pops in and out against burgundy. Player-visible
+  flicker, worse than GPT's uniform burgundy.
+- LOD fix + entry-pulse clear: whenever the wall geometry transiently
+  drops out (see below), moving sprites smear into the uncleaned canvas —
+  CLEARLY visible motion trails during actual play in BOTH stages.
+- Conclusion: until BOTH the wall texture and the wall dropout are fixed,
+  GPT's per-frame clear (uniform burgundy + sprites, wall never visible)
+  is the least-bad state. The branch code was reverted to exactly that;
+  the two fixes remain in this note (LOD one-liner: computeLOD else-branch
+  lodFraction 0.0f) and in this branch's history (`766b13c`) for when the
+  real fixes land.
+
+**Harness blind spot (important):** test_render_burst.sh and the suite
+capture near-static spawn moments; the test-only input pulse barely moves
+Marina. Motion trails from the no-clear feedback are INVISIBLE to these
+tools — captures showed "no trails" while a player saw them instantly.
+Any future verification of clear-policy changes in scenes 13/69 needs
+sustained scripted movement (or a human) before claiming victory.
+
+## The transient wall dropout (pre-existing, unsolved)
+
+The wall panels stop drawing entirely for seconds at a time (Vertigo burst:
+solid frames alternating with black). Pre-existing — GPT built
+test_render_burst.sh chasing "transient geometry loss". With per-frame
+clear the absence reads burgundy; with a pulse it reads black/stale (and
+enables the trails above). Root cause unknown — the panels are ordinary
+actors (0x508, slots 0x91+, posX tracks the camera so hardware never culls
+them); check the actor sort/cull path and the per-frame panel state machine
+(func_801B3AF8_79B938) first.
 
 ## (Resolved 2026-07-12) Earlier "next step": the texgen-stub theory
 

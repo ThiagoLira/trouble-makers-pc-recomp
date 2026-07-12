@@ -142,7 +142,7 @@ index e9d7a02..6db9d52 100644
              bool postBlendNoiseNegative = false;
          };
 diff --git a/src/render/rt64_framebuffer_renderer.cpp b/src/render/rt64_framebuffer_renderer.cpp
-index c4cf1bf..eef8d11 100644
+index c4cf1bf..b34e3cb 100644
 --- a/src/render/rt64_framebuffer_renderer.cpp
 +++ b/src/render/rt64_framebuffer_renderer.cpp
 @@ -1274,6 +1274,63 @@ namespace RT64 {
@@ -287,21 +287,3 @@ index f593ab0..cd2e8b9 100644
              bool postBlendNoise;
              bool postBlendNoiseNegative;
              uint32_t maxGameCall;
-diff --git a/src/shaders/TextureSampler.hlsli b/src/shaders/TextureSampler.hlsli
-index 5164e16..f5c9dcd 100644
---- a/src/shaders/TextureSampler.hlsli
-+++ b/src/shaders/TextureSampler.hlsli
-@@ -65,8 +65,11 @@ void computeLOD(OtherMode otherMode, uint rdpTileCount, float2 primLOD, float re
-         tileIndex1 = clamp(tileBase + 1, 0, tileMax);
-     }
-     else {
--        lodFraction = 1.0f;
--
-+        // [MM] With texture LOD disabled (G_TL_TILE) the RDP resolves
-+        // LOD_FRAC to 0, so TRILERP-style combiners collapse to TEXEL0.
-+        // 1.0 here made Mischief Makers' rotation-stage wall panels sample
-+        // the stale, never-configured tile 1 instead of their texture.
-+        lodFraction = 0.0f;
-     }
- }
- 
