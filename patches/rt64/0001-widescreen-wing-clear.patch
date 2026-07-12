@@ -145,7 +145,7 @@ diff --git a/src/render/rt64_framebuffer_renderer.cpp b/src/render/rt64_framebuf
 index c4cf1bf..b34e3cb 100644
 --- a/src/render/rt64_framebuffer_renderer.cpp
 +++ b/src/render/rt64_framebuffer_renderer.cpp
-@@ -1274,6 +1274,51 @@ namespace RT64 {
+@@ -1274,6 +1274,63 @@ namespace RT64 {
  
          bool depthState = false;
          worker->commandList->setFramebuffer(targetDrawCall.fbStorage->colorDepthWrite.get());
@@ -161,7 +161,11 @@ index c4cf1bf..b34e3cb 100644
 +        // scene draws, so 3D geometry (whose projection IS widened by the
 +        // aspect-ratio scale) redraws fresh into the wings while 2D stays put.
 +        // See PHASE6_NOTES_b.md. Gated by enhancementConfig.rect.clearWings.
-+        if (framebuffer.clearWings && (colorTarget != nullptr) && (colorTarget->width > 0) && (colorTarget->height > 0) &&
++        // Mischief Makers host hook. Rotating-camera scenes require a fresh
++        // HD color canvas or old sprite pixels form long trails.
++        extern int mm_widescreen_force_frame_clear();
++        const bool forceFrameClear = mm_widescreen_force_frame_clear() != 0;
++        if ((framebuffer.clearWings || forceFrameClear) && (colorTarget != nullptr) && (colorTarget->width > 0) && (colorTarget->height > 0) &&
 +            (wingClearFrame[colorTarget] != framebuffer.submissionFrame)) {
 +            wingClearFrame[colorTarget] = framebuffer.submissionFrame;
 +            {
@@ -175,7 +179,15 @@ index c4cf1bf..b34e3cb 100644
 +                const int32_t fullW = static_cast<int32_t>(colorTarget->width);
 +                const int32_t fullH = static_cast<int32_t>(colorTarget->height);
 +                const int32_t innerW = static_cast<int32_t>(std::lround(framebuffer.contentWidth));
-+                if (innerW <= 0 || innerW + 2 > fullW) { /* no wings */ }
++                if (forceFrameClear) {
++                    // Both affected rotation stages author a dark burgundy
++                    // feedback canvas. Reset to its base tone: black removes
++                    // the trails too, but also erases the intended field.
++                    const RenderColor clearColor(0.20f, 0.035f, 0.0f, 1.0f);
++                    const RenderRect fullFrame(0, 0, fullW, fullH);
++                    worker->commandList->clearColor(0, clearColor, &fullFrame, 1);
++                }
++                else if (innerW <= 0 || innerW + 2 > fullW) { /* no wings */ }
 +                else {
 +                const int32_t leftEdge = (fullW - innerW) / 2;
 +                const int32_t rightEdge = leftEdge + innerW;
@@ -197,7 +209,7 @@ index c4cf1bf..b34e3cb 100644
          for (const auto &pair : targetDrawCall.sceneIndices) {
  #       if RT_ENABLED
              if (pair.second) {
-@@ -1359,6 +1404,10 @@ namespace RT64 {
+@@ -1359,6 +1416,10 @@ namespace RT64 {
          }
  
          Framebuffer &framebuffer = framebufferVector[framebufferCount - 1];
@@ -208,7 +220,7 @@ index c4cf1bf..b34e3cb 100644
          void *paramBufferBytes = framebuffer.paramsBuffer->map();
          memcpy(paramBufferBytes, &fbParams, sizeof(interop::FramebufferParams));
          framebuffer.paramsBuffer->unmap();
-@@ -1688,7 +1737,28 @@ namespace RT64 {
+@@ -1688,7 +1749,28 @@ namespace RT64 {
                              break;
                          }
  
@@ -238,7 +250,7 @@ index c4cf1bf..b34e3cb 100644
                          
                          if (triangles.vertexTestZ) {
                              if ((proj.type == Projection::Type::Perspective) || (proj.type == Projection::Type::Orthographic)) {
-@@ -1926,4 +1996,4 @@ namespace RT64 {
+@@ -1926,4 +2008,4 @@ namespace RT64 {
          unsigned int im3dVertexCount;
      };
  };

@@ -150,7 +150,9 @@ hook = [
     # func_80026428 reloads the map bank for scenes 10, 24 and 46..51 but
     # never updates the recorded decompressed extent at 0x80137724/28 that
     # the wing residency check relies on. Capture Trouble_RLE_Type1's return
-    # value ($v0 = decompressed size) right after the call returns.
+    # value ($v0 = decompressed size) right after the call returns; the host
+    # keeps the union of this replacement prefix and the still-resident tail
+    # of the authoritative bank loaded immediately beforehand.
     { func = "func_80026428", before_vram = 0x80026484, text = '{ extern void mm_ws_fix_bank_bound(uint8_t*, recomp_context*); mm_ws_fix_bank_bound(rdram, ctx); }' },
     { func = "func_80026220", text = '{ extern void mm_ws_bank_reloaded(uint8_t*, recomp_context*); mm_ws_bank_reloaded(rdram, ctx); }' },
     # DEBUG WARP (MM_WARP=<scene id> or exact MM_WARP_STAGE=<row>): the state

@@ -1,5 +1,6 @@
 // Host helpers for translated-code widescreen hooks.
 
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -73,6 +74,32 @@ bool valid_rdram_ptr(uint32_t ptr) {
 }
 
 int g_gameplay_wide_active = 0;
+std::atomic<int> g_force_frame_clear{0};
+
+// These gameplay scenes transform or composite an authored 320x240 canvas
+// rather than drawing a scrollable world. Expanding the projection reveals
+// outside the canvas (rotation voids, disconnected boss backdrops, or a
+// 4:3-only post-process rectangle), so present them faithfully in 4:3 just
+// like cinematics. Ordinary 2D/2.5D stages—including the road and Taurus—
+// remain genuinely expanded.
+bool scene_requires_original(int scene) {
+    switch (scene) {
+        case 5:  // Migen Brawl: fixed precomposed boss arena
+        case 13: // Seasick Climb: rotating framebuffer
+        case 25: // SASQUATCH beta: fixed vertical boss canvas
+        case 26: // PHOENIX gamma: fixed vertical boss canvas
+        case 27: // Final Battle: fixed boss backdrop
+        case 36: // Snowstorm Maze: fixed authored canvas
+        case 57: // Volcano: fixed authored canvas
+        case 69: // Vertigo: rotating framebuffer
+        case 71: // Clanball Lift: fixed authored canvas
+        case 79: // Inner Struggle: 4:3 post-process canvas
+        case 85: // MERCO: fixed boss backdrop
+            return true;
+        default:
+            return false;
+    }
+}
 
 int raw_gameplay_active(uint8_t* rdram) {
     static int previous_stage_time = -1;
@@ -89,7 +116,7 @@ int raw_gameplay_active(uint8_t* rdram) {
         0, static_cast<gpr>(static_cast<int32_t>(kStageTime)));
     const int cannot_pause = MEM_HU(
         0, static_cast<gpr>(static_cast<int32_t>(kCannotPause)));
-    if (game_state != 6 || scene == 36 || scene == 57 || scene == 71) {
+    if (game_state != 6 || scene_requires_original(scene)) {
         previous_stage_time = stage_time;
         frames_since_stage_time_changed = 1000;
         return 0;
@@ -122,6 +149,16 @@ extern "C" int mm_widescreen_gameplay_active(uint8_t* rdram) {
     return g_gameplay_wide_active;
 }
 
+// RT64 normally preserves the N64 framebuffer until the game's own draws
+// replace it. The two rotating-camera stages use a persistent burgundy canvas;
+// RT64's HD target otherwise feeds old sprite pixels back into that canvas,
+// producing a Solitaire-style trail.
+namespace RT64 {
+int mm_widescreen_force_frame_clear() {
+    return g_force_frame_clear.load(std::memory_order_relaxed);
+}
+} // namespace RT64
+
 // Flip RT64 between its native 4:3 and expanded projection only when the
 // gameplay/cinema boundary changes. The user's --widescreen preference remains
 // untouched; this is a transient presentation gate, not a config toggle.
@@ -129,6 +166,10 @@ extern "C" void mm_widescreen_sync_mode(uint8_t* rdram) {
     static int previous_active = -1;
     static int candidate_active = -1;
     static int candidate_frames = 0;
+    const int scene = static_cast<int16_t>(MEM_HU(
+        0, static_cast<gpr>(static_cast<int32_t>(kCurrentScene))));
+    g_force_frame_clear.store(scene == 13 || scene == 69,
+        std::memory_order_relaxed);
     const int raw_active = raw_gameplay_active(rdram);
 
     if (previous_active < 0) {
@@ -217,12 +258,13 @@ int16_t read_s16(uint8_t* rdram, uint32_t vaddr) {
 // decompressed map-bank end has no data loaded -- draw nothing instead of
 // noise. This per-tile residency check replaces the old per-scene
 // blacklists.
-// Host-side override for the bank extent: func_80026428 reloads the bank
-// without updating *0x80137728 (scenes 10, 24, 46..51). The override must
-// live OUTSIDE game memory — 0x80137724/28 sit inside the game's own bss
-// and other engine code may rely on them staying exactly as func_80026220
-// left them. Cleared whenever func_80026220 records a fresh authoritative
-// extent.
+// Host-side effective bank extent: func_80026428 reloads the beginning of a
+// bank without updating *0x80137728 (scenes 10, 24, 46..51). Importantly it
+// does NOT erase the still-resident tail loaded by func_80026220, so the
+// effective end is max(authoritative end, replacement end). Treating the
+// replacement's shorter end as the whole bank removed complete environment
+// and midground layers from Taurus's wings. Keep this host-side — the game's
+// own bss values must retain their original semantics.
 uint32_t g_host_bank_end = 0;
 
 int32_t wing_slot(uint8_t* rdram, int tile, int addend, uint32_t texture_pool) {
@@ -273,6 +315,63 @@ void repack_grid(const WingContext& wc, WingFn wing, bool wings_on) {
 
 bool wings_active(uint8_t* rdram, const char* layer_env) {
     return env_enabled(layer_env) && mm_widescreen_gameplay_active(rdram);
+}
+
+void trace_layer_once(uint8_t* rdram, const char* layer, gpr grid) {
+    if (!env_enabled("MM_TEST_AUTO_ADVANCE") ||
+        !mm_widescreen_gameplay_active(rdram)) {
+        return;
+    }
+
+    struct TraceKey {
+        int scene;
+        const char* layer;
+    };
+    static TraceKey seen[256]{};
+    static int seen_count = 0;
+    const int scene = static_cast<int16_t>(MEM_HU(0, rdram_gpr(kCurrentScene)));
+    for (int i = 0; i < seen_count; ++i) {
+        if (seen[i].scene == scene && seen[i].layer == layer) {
+            return;
+        }
+    }
+    if (seen_count < static_cast<int>(sizeof(seen) / sizeof(seen[0]))) {
+        seen[seen_count++] = {scene, layer};
+    }
+
+    int center = 0;
+    int wings = 0;
+    int center_past_bank = 0;
+    uint32_t min_value = 0xFFFFFFFFu;
+    uint32_t max_value = 0;
+    const uint32_t bank_end = g_host_bank_end != 0
+        ? g_host_bank_end
+        : static_cast<uint32_t>(MEM_W(0, rdram_gpr(kBankEnd)));
+    for (int row = 0; row < 7; ++row) {
+        for (int col = 0; col < 20; ++col) {
+            const uint32_t value = static_cast<uint32_t>(
+                MEM_W((row * 20 + col) * 4, grid));
+            if (value == 0) {
+                continue;
+            }
+            min_value = value < min_value ? value : min_value;
+            max_value = value > max_value ? value : max_value;
+            if (col >= 5 && col < 15) {
+                ++center;
+                if (bank_end > kPoolBase && value + 0x400u > bank_end) {
+                    ++center_past_bank;
+                }
+            }
+            else {
+                ++wings;
+            }
+        }
+    }
+    std::fprintf(stderr,
+        "[widescreen-layer] scene=%d layer=%s center=%d/70 wings=%d/70 "
+        "center_past_bank=%d range=%08x..%08x bank_end=%08x\n",
+        scene, layer, center, wings, center_past_bank,
+        min_value == 0xFFFFFFFFu ? 0 : min_value, max_value, bank_end);
 }
 
 // The game's six per-layer display-list arenas (double-buffered mid/env/band)
@@ -326,6 +425,7 @@ extern "C" void mm_ws_band_repack(uint8_t* rdram, recomp_context* ctx) {
         const int tile = MEM_BU(map_col + row_block, map);
         return wing_slot(rdram, tile, addend, wc.texture_pool);
     }, wings);
+    trace_layer_once(rdram, "band", wc.dst);
     ctx->r5 = wc.dst;
 }
 
@@ -423,27 +523,35 @@ extern "C" void mm_ws_static_repack(uint8_t* rdram, recomp_context* ctx) {
         // Unknown caller: center copy only, zero wings.
         repack_grid(wc, [](int, int) -> int32_t { return 0; }, false);
     }
+    trace_layer_once(rdram,
+        buffer == kEnvBuffer ? "env" :
+        buffer == kMidBuffer ? "mid" :
+        buffer == kBandBuffer ? "static" : "unknown",
+        wc.dst);
     ctx->r7 = wc.dst;
 }
 
 // func_80026428 decompresses a replacement map bank over 0x80380000 for
 // scenes 10, 24 and 46..51 but never updates the recorded bank extent, so
-// the residency check above would use the PREVIOUS bank's bound there.
-// Hooked right after its Trouble_RLE_Type1 call (before_vram 0x80026484),
-// where $v0 still holds the decompressed size. Host-side only; game memory
-// is never written.
+// the residency check above needs the union of the replacement prefix and
+// the still-resident authoritative bank tail. Hooked right after its
+// Trouble_RLE_Type1 call (before_vram 0x80026484), where $v0 still holds the
+// decompressed size. Host-side only; game memory is never written.
 extern "C" void mm_ws_fix_bank_bound(uint8_t* rdram, recomp_context* ctx) {
-    (void)rdram;
     const uint32_t size = static_cast<uint32_t>(ctx->r2);
     if (size == 0 || size > 0x40000u) {
         return;
     }
-    g_host_bank_end = kMapBankDest + size;
+    const uint32_t authoritative_end = static_cast<uint32_t>(
+        MEM_W(0, rdram_gpr(kBankEnd)));
+    const uint32_t replacement_end = kMapBankDest + size;
+    g_host_bank_end = authoritative_end > replacement_end
+        ? authoritative_end : replacement_end;
 }
 
 // func_80026220 is the authoritative bank loader (records the extent at
-// 0x80137724/28 itself); a fresh load supersedes any func_80026428
-// override from an earlier scene.
+// 0x80137724/28 itself); a fresh load supersedes any effective union from an
+// earlier scene.
 extern "C" void mm_ws_bank_reloaded(uint8_t* rdram, recomp_context* ctx) {
     (void)rdram;
     (void)ctx;

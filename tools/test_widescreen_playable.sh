@@ -69,7 +69,10 @@ is_requested() {
 }
 
 is_fixed_4x3_stage() {
-    [[ $1 == 11 || $1 == 27 || $1 == 30 ]]
+    case $1 in
+        11|13|21|22|27|30|47|52|54|56|57) return 0 ;;
+        *) return 1 ;;
+    esac
 }
 
 passes=0
@@ -113,11 +116,21 @@ for entry in "${playable[@]}"; do
         fi
     done
 
+    layer_ok=1
     if (( alive && reached_gameplay )); then
         if magick x:root -crop "$capture_geometry" +repage "$screenshot"; then
             capture_ok=1
         else
             capture_ok=0
+        fi
+        # Test builds log one audit row for every tile layer that actually
+        # draws in expanded gameplay. Any partially empty 70-tile wing is a
+        # render-quality failure even if the process stayed alive; this catches
+        # the Taurus 4:3 layer box that the original crash-only suite missed.
+        if ! is_fixed_4x3_stage "$stage" &&
+            grep -Eq 'wings=([0-9]|[1-6][0-9])/70' "$log"; then
+            layer_ok=0
+            echo "  FAILED incomplete widescreen layer (see $log)" >&2
         fi
     else
         capture_ok=0
@@ -140,7 +153,7 @@ for entry in "${playable[@]}"; do
     fi
     { wait "$pid"; } 2>/dev/null
     rc=$?
-    if (( capture_ok && stopped_by_suite )); then
+    if (( capture_ok && stopped_by_suite && layer_ok )); then
         status=pass
         ((passes += 1))
     else

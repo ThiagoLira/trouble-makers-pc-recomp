@@ -91,8 +91,13 @@ clean authored boundary instead of displaying uninitialized texture memory.
 Entity spawn/despawn windows are widened to match, so objects no longer pop
 in at the wing edges.
 Opening/in-stage cinematics automatically switch back to centered 4:3 and
-return to widescreen only after player control is stable. Three fixed-canvas
-playable scenes (36, 57, and 71) also remain 4:3 by design.
+return to widescreen only after player control is stable. Playable scenes that
+rotate/composite the original framebuffer or use fixed boss canvases also stay
+4:3 by design (scenes 5, 13, 25, 26, 27, 36, 57, 69, 71, 79, and 85); their
+authored image has no valid world outside the original frame.
+The two rotating-camera stages also reset RT64's persistent HD color canvas to
+their authored burgundy base every frame, preventing moving sprites from
+accumulating into framebuffer-feedback trails.
 See the live [scene 22 capture](screenshots/widescreen-scene-22.png), the
 [forest artifact comparison](screenshots/widescreen-forest-fix.png), and the
 labeled [coverage](screenshots/widescreen-coverage-scenes.png) and
@@ -109,7 +114,9 @@ tools/test_widescreen_playable.sh ./build/src/game/mm_game path/to/rom.z64 /tmp/
 
 The suite targets exact progression-table stage indices, advances dialogue
 through a test-only input pulse, waits for authoritative player-control state,
-and writes a TSV manifest plus one screenshot/log per level.
+audits every expanded tile layer for complete wing coverage, and writes a TSV
+manifest plus one screenshot/log per level. For transient 3D problems, capture
+a sustained frame sequence with `tools/test_render_burst.sh`.
 
 Options persist to `~/.config/troublemakers-recomp/display.cfg` (CLI
 overrides). In game: **F11** toggles fullscreen, **hold Tab** fast-forwards 3x.
