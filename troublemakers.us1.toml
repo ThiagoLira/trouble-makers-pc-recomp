@@ -106,40 +106,53 @@ instruction = [
     { func = "func_80082380", vram = 0x8008254C, value = 0x24EE00C0 }, # left-edge skip 0x20 -> 0xC0
     { func = "func_80082380", vram = 0x80082644, value = 0x04010003 }, # drop max(0,upper_x) clamp
     { func = "func_80082380", vram = 0x800826F4, value = 0x27190050 }, # dst row stride 0x28 -> 0x50 (20 slots)
+
+    # ENTITY POP-IN — the view-cull rect above is only one of the game's
+    # visibility systems. Three more windows still used 4:3-sized X margins,
+    # so objects appeared/vanished visibly inside the 16:9 wings (needs
+    # ~+/-214px). Y margins untouched everywhere (vertical view unchanged).
+    # All words verified against the community decomp asm.
+    #
+    # func_80016D94: per-frame despawner. Kills ACTOR_FLAG_ONSCREEN_ONLY
+    # actors (projectiles, particles, drops) outside camX +/- 0xD0 — INSIDE
+    # the wings. Widen to +/-0x150, keeping 48px slack over the 0x120 cull.
+    # Pure despawn (slot reclamation); widening only delays cleanup.
+    { func = "func_80016D94", vram = 0x80016E20, value = 0x28C1FEB0 }, # slti kill-left  -0xD0 -> -0x150
+    { func = "func_80016D94", vram = 0x80016E28, value = 0x28C10151 }, # slti kill-right  0xD1 ->  0x151
+    # func_800451E4: gem/prop sprite windowing. Rebuilt statelessly from the
+    # world-item table every frame; an item only gets one of the 64 sprite
+    # slots inside camX +/- 0xA8 (168px) — pops ~46px inside the wing. The
+    # alternate wide-mode window (D_800BE710, +/-0x100) already covers 16:9.
+    { func = "func_800451E4", vram = 0x8004527C, value = 0x2457FF18 }, # addiu window-left  -0xA8 -> -0xE8
+    { func = "func_800451E4", vram = 0x80045280, value = 0x245E00E8 }, # addiu window-right  0xA8 ->  0xE8
+    # Actor_IsOutsideRegion(actor, len): shared |x| > 0x90+len test used by
+    # 19 sites (positional SFX radius + a few behavior gates). 0x90 is the
+    # 4:3 half-width+margin; raise to 0xD8 (216 ~ the 16:9 half-width).
+    { func = "Actor_IsOutsideRegion", vram = 0x80028924, value = 0x270900D8 }, # +0x90 -> +0xD8
+    { func = "Actor_IsOutsideRegion", vram = 0x80028938, value = 0x240AFF28 }, # -0x90 -> -0xD8
 ]
 
-# Entry hook on the scrolling-background draw (func_80082820, sole caller
-# func_80082F10 always passes D_80180D90). Runs after the game's stride-10
-# fill; rebuilds the whole 7x20 grid at stride 20 directly from the wrapping
-# 16x16 backdrop tilemap so the 5 wing columns on each side are REAL tiles.
-# Center columns (window w=5..14) recompute identically to the game's own
-# fill, so with the draw loop clipped to 4:3 (no --widescreen) the visible
-# result is byte-identical. Formula (Phase 8 verified):
-#   P       = *(u32*)0x80137470                 backdrop map base (16x16 bytes)
-#   add     = *(u16*)0x80137478                 per-level tile-id addend (0)
-#   texbase = *(u32*)0x80180FC0 (= 0x80380600)  RDP texture-image pool base
-#   per row r: sy = (-0xC - *(u16*)0x800BE584) + r*32 ; rowblk = (sy>>1)&0xF0
-#              sx0 = (*(u16*)(0x8011D3B0 + r*4) - 2) & 0x1FF   (per-row parallax X)
-#   per window col w (0..19, w-5 = camera-relative): srcX = sx0 + (w-5)*32 (+512 to
-#              stay positive across one wrap period); col = (srcX>>5)&0xF;
-#              tile = map[col + rowblk]; slot = tile ? ((tile+add)<<10)+texbase : 0
-# MEM_* are recomp.h's canonical accessors (MEM_BU carries the big-endian ^3,
-# matching the original lbu). Reads only the static map + current scroll
-# globals, writes only the 140-slot dst array (exactly 7x20) -> no overrun,
-# no other buffer touched.
+# Layer-hook architecture: the two draw funcs get entry hooks that call into
+# src/game/widescreen.cpp (mm_ws_band_repack / mm_ws_static_repack). Each
+# repack copies the game's 7x10 center columns verbatim into a stride-20
+# scratch grid and computes the 5 wing columns per side from the SAME
+# wrapping-map formulas the game's fill func_8001107C uses (all parallax
+# modes), validated per-tile against the loaded texture bank. The hooks also
+# remap the display-list arena argument ($a0) to enlarged scratch arenas —
+# the originals hold exactly 70 tiles and the widened loops can emit 140
+# (see PHASE7_NOTES_widescreen.md, "display-list arena overflow").
 hook = [
     # The game draws 14px/18px black strips at x=0 and x=302 around its
     # original 4:3 safe area. They become seams in an expanded framebuffer.
     # Suppress only those vertical rectangles in widescreen; top/bottom bars
     # and dynamically animated letterboxing remain untouched.
     { func = "Gfx_DrawBorderRect", text = '{ static int wide = -1; if (wide < 0) { extern char* getenv(const char*); char* e = getenv("MM_WIDESCREEN_ACTIVE"); wide = (e && e[0] == 0x31); } extern int mm_widescreen_gameplay_active(uint8_t*); int gamewide = mm_widescreen_gameplay_active(rdram); if (wide && gamewide && (((int32_t)ctx->r5 == 0 && (int32_t)ctx->r7 <= 14) || ((int32_t)ctx->r5 >= 302 && (int32_t)ctx->r7 == 320))) { return; } }' },
-    # The primary func_80082380 hook maps the non-scrolling D_80180D90
-    # background to the catch-all scratch buffer. Finish its real map-backed
-    # wing columns after that entry hook and before the first original opcode.
-    { func = "func_80082380", before_vram = 0x80082380, text = '{ extern void mm_widescreen_finish_static_bg(uint8_t*, recomp_context*); mm_widescreen_finish_static_bg(rdram, ctx); }' },
-    # The repack hooks below guard incompatible layer layouts discovered during
-    # scene coverage. Each incompatible layer is independently disabled so
-    # every scene keeps all of its verified map-backed extensions.
+    # func_80026428 reloads the map bank for scenes 10, 24 and 46..51 but
+    # never updates the recorded decompressed extent at 0x80137724/28 that
+    # the wing residency check relies on. Capture Trouble_RLE_Type1's return
+    # value ($v0 = decompressed size) right after the call returns.
+    { func = "func_80026428", before_vram = 0x80026484, text = '{ extern void mm_ws_fix_bank_bound(uint8_t*, recomp_context*); mm_ws_fix_bank_bound(rdram, ctx); }' },
+    { func = "func_80026220", text = '{ extern void mm_ws_bank_reloaded(uint8_t*, recomp_context*); mm_ws_bank_reloaded(rdram, ctx); }' },
     # DEBUG WARP (MM_WARP=<scene id> or exact MM_WARP_STAGE=<row>): the state
     # dispatcher runs every
     # frame; on the first frame the game reaches the title screen (gGameState
@@ -149,6 +162,10 @@ hook = [
     # wait for widescreen iteration. Optional MM_WARP_AT overrides the trigger
     # state (default 2 = title; 1 = intro to skip more).
     { func = "func_80001670", text = '{ extern void mm_widescreen_sync_mode(uint8_t*); mm_widescreen_sync_mode(rdram); static int fc = 0; static int warped = 0; fc++; { extern char* getenv(const char*); char* te = getenv("MM_TEST_AUTO_ADVANCE"); if (te && te[0] == 0x31 && (fc % 120) == 0 && MEM_HU(0, (gpr)(int32_t)0x800BE4F0) == 6) { int buttons = MEM_HU(0, (gpr)(int32_t)0x800BE52C) | MEM_HU(0, (gpr)(int32_t)0x800BE530); MEM_H(0, (gpr)(int32_t)0x800BE4FC) = MEM_HU(0, (gpr)(int32_t)0x800BE4FC) | buttons; MEM_H(0, (gpr)(int32_t)0x800BE4F8) = MEM_HU(0, (gpr)(int32_t)0x800BE4F8) | buttons; } } if (!warped) { extern char* getenv(const char*); extern int atoi(const char*); char* e = getenv("MM_WARP"); char* se = getenv("MM_WARP_STAGE"); if (e != 0 || se != 0) { char* a = getenv("MM_WARP_AT"); int at = a ? atoi(a) : 1; char* d = getenv("MM_WARP_DELAY"); int dl = d ? atoi(d) : 90; int gs = MEM_HU(0, (gpr)(int32_t)0x800BE4F0); if (gs == at && fc > dl) { int requested_scene = e ? atoi(e) : -1; int requested_stage = se ? atoi(se) : -1; extern int mm_debug_warp_prepare(uint8_t*, int, int); int warp_scene = mm_debug_warp_prepare(rdram, requested_scene, requested_stage); MEM_H(0, (gpr)(int32_t)0x800BE5D0) = (int16_t)warp_scene; MEM_H(0, (gpr)(int32_t)0x800BE4EC) = 0; MEM_H(0, (gpr)(int32_t)0x800D2908) = 1; MEM_H(0, (gpr)(int32_t)0x800BE4F0) = 5; MEM_H(0, (gpr)(int32_t)0x800BE4F4) = 0; { int i; for (i = 0; i < 0x1000; i++) { MEM_W(i*4, (gpr)(int32_t)0x8027CEE8) = 0; } for (i = 0; i < 0xC00; i++) { MEM_W(i*4, (gpr)(int32_t)0x8027EEE8) = 0; } } warped = 1; } } } }' },
-    { func = "func_80082820", text = '{ if ((uint32_t)ctx->r5 == 0x80180D90u) { gpr b = ctx->r5; gpr s = (gpr)(int32_t)0x9FFFF000; static int wingsoff = -1; if (wingsoff < 0) { extern char* getenv(const char*); char* wv = getenv("MM_BAND_WINGS"); wingsoff = (wv && wv[0] == 0x31) ? 0 : 1; } gpr P = MEM_W(0, (gpr)(int32_t)0x80137470); uint32_t Pu = (uint32_t)P; int scene = (int)(int16_t)MEM_HU(0, (gpr)(int32_t)0x800BE5D0); extern int mm_widescreen_gameplay_active(uint8_t*); int gamewide = mm_widescreen_gameplay_active(rdram); int mapok = (!wingsoff) && gamewide && ((scene != 0) && (scene != 10) && (scene != 20) && (scene != 23) && (scene != 24) && (scene != 36) && (scene != 40) && (scene != 42) && (scene != 46) && (scene != 47) && (scene != 48) && (scene != 52) && (scene != 53) && (scene != 54) && (scene != 55) && (scene != 57) && (scene != 65) && (scene != 68) && (scene != 71) && (scene != 77) && (scene != 78)) && (Pu >= 0x80000000u) && (Pu < 0x80800000u); int add = MEM_HU(0, (gpr)(int32_t)0x80137478); uint32_t texbase = (uint32_t)MEM_W(0, (gpr)(int32_t)0x80180FC0); int sy0 = ((-0xC) - (int)MEM_HU(0, (gpr)(int32_t)0x800BE584)) & 0x1FF; int r; int w; for (r = 0; r < 7; r++) { int syr = sy0 + r*32; int rowblk = (syr >> 1) & 0xF0; int sx0 = ((int)MEM_HU(0, (gpr)(int32_t)(0x8011D3B0 + r*4)) - 2) & 0x1FF; for (w = 0; w < 20; w++) { int x = w - 5; int32_t v; if (x >= 0 && x < 10) { v = MEM_W((r*10 + x)*4, b); } else if (mapok) { int srcX = sx0 + x*32 + 512; int col = (srcX >> 5) & 0xF; int mb = MEM_BU(col + rowblk, P); v = mb ? (int32_t)((((uint32_t)((mb + add) & 0xFFFF)) << 10) + texbase) : 0; } else { v = 0; } MEM_W((r*20 + w)*4, s) = v; } } ctx->r5 = s; } }' },
-    { func = "func_80082380", text = '{ uint32_t buf = (uint32_t)ctx->r7; extern int mm_widescreen_gameplay_active(uint8_t*); int gamewide = mm_widescreen_gameplay_active(rdram); { gpr b = ctx->r7; uint32_t texbase = (uint32_t)MEM_W(0, (gpr)(int32_t)0x80180FC0); gpr s; int r; int w; if (buf == 0x80180B60u) { s = (gpr)(int32_t)0x9FFFD000; static int envoff = -1; if (envoff < 0) { extern char* getenv(const char*); char* wv = getenv("MM_ENV_WINGS"); envoff = (wv && wv[0] == 0x31) ? 0 : 1; } int sel = MEM_HU(0, (gpr)(int32_t)0x800BE58C); gpr P = MEM_W(0, (gpr)(int32_t)0x8013746C); uint32_t Pu = (uint32_t)P; int scene = (int)(int16_t)MEM_HU(0, (gpr)(int32_t)0x800BE5D0); int mapok = (!envoff) && gamewide && (scene != 0) && (scene != 36) && (scene != 39) && (scene != 57) && (scene != 69) && (scene != 71) && (Pu >= 0x80000000u) && (Pu < 0x80800000u); int add = MEM_HU(0, (gpr)(int32_t)0x80137476); int wide = (sel == 1); int base = ((int)(int16_t)MEM_HU(0, (gpr)(int32_t)0x800BE578) - 2) & (wide ? 0xFFF : 0x1FF); int cb = base >> 5; int t0i = ((-0xC) - (int)(int16_t)MEM_HU(0, (gpr)(int32_t)0x800BE580)) & (wide ? 0xFF : 0x1FF); for (r = 0; r < 7; r++) { int tr = (t0i + r*32) & (wide ? 0xFF : 0x1FF); int rowblk = wide ? ((tr << 2) & 0x380) : ((tr >> 1) & 0xF0); for (w = 0; w < 20; w++) { int x = w - 5; int32_t v; if (x >= 0 && x < 10) { v = MEM_W((r*10 + x)*4, b); } else if (mapok) { int col = (cb + x + (wide ? 128 : 16)) & (wide ? 0x7F : 0x0F); int mb = MEM_BU(col + rowblk, P); v = mb ? (int32_t)((((uint32_t)((mb + add) & 0xFFFF)) << 10) + texbase) : 0; } else { v = 0; } MEM_W((r*20 + w)*4, s) = v; } } } else if (buf == 0x80180930u) { s = (gpr)(int32_t)0x9FFFE000; static int midoff = -1; if (midoff < 0) { extern char* getenv(const char*); char* wv = getenv("MM_MID_WINGS"); midoff = (wv && wv[0] == 0x31) ? 0 : 1; } int md = MEM_HU(0, (gpr)(int32_t)0x800BE588); int midscene = (int)(int16_t)MEM_HU(0, (gpr)(int32_t)0x800BE5D0); int mapok = (!midoff) && gamewide && (midscene != 0) && (midscene != 36) && (midscene != 39) && (midscene != 52) && (midscene != 71); gpr P = (gpr)(int32_t)0x80108DE8; int add = MEM_HU(0, (gpr)(int32_t)0x80137474); int colmask = MEM_HU(0, (gpr)(int32_t)0x800BE64C); int rmask = MEM_HU(0, (gpr)(int32_t)0x800BE650); int shift = MEM_HU(0, (gpr)(int32_t)0x800BE654) & 0x1F; int sx = (int)(int16_t)MEM_HU(0, (gpr)(int32_t)0x800BE558); int sy = (int)(int16_t)MEM_HU(0, (gpr)(int32_t)0x800BE55C); int shake = (int)(int16_t)MEM_HU(0, (gpr)(int32_t)0x800BE594); int h = (md == 0) ? (sx - 0x92) : ((md == 1) ? (int)((double)sx / 1.55 - 2.0) : (int)((double)sx / 1.55)); int base = h & 0xFFFF; int cb = base >> 5; int anchor = (int)MEM_HU(0, (gpr)(int32_t)0x800BE648); int t0i = ((md == 3) ? (int)((double)anchor - ((double)sy / 1.55 + (double)shake - 92.0)) : (anchor - sy - shake + 0x5C)) & 0xFFFF; for (r = 0; r < 7; r++) { int t0 = (t0i - (6 - r)*32) & 0xFFFF; int rowblk = (t0 << shift) & rmask; for (w = 0; w < 20; w++) { int x = w - 5; int32_t v; if (x >= 0 && x < 10) { v = MEM_W((r*10 + x)*4, b); } else if (mapok) { int col = (cb + x + colmask + 1) & colmask; int mb = MEM_BU(col + rowblk, P); v = mb ? (int32_t)((((uint32_t)((mb + add) & 0xFFFF)) << 10) + texbase) : 0; } else { v = 0; } MEM_W((r*20 + w)*4, s) = v; } } } else { s = (gpr)(int32_t)0x9FFFC000; for (r = 0; r < 7; r++) { for (w = 0; w < 20; w++) { int x = w - 5; int32_t v = (x >= 0 && x < 10) ? MEM_W((r*10 + x)*4, b) : 0; MEM_W((r*20 + w)*4, s) = v; } } } ctx->r7 = s; } }' },
+    # Layer repacks: rebuild each 7x10 layer grid at stride 20 with real
+    # map-derived wing columns (exact func_8001107C formulas, all parallax
+    # modes) and a per-tile texture-residency check in place of the former
+    # per-scene blacklists. Logic lives in src/game/widescreen.cpp.
+    { func = "func_80082820", text = '{ extern void mm_ws_band_repack(uint8_t*, recomp_context*); mm_ws_band_repack(rdram, ctx); }' },
+    { func = "func_80082380", text = '{ extern void mm_ws_static_repack(uint8_t*, recomp_context*); mm_ws_static_repack(rdram, ctx); }' },
 ]

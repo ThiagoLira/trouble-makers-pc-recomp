@@ -9,12 +9,50 @@
 
 namespace {
 
-constexpr uint32_t kStaticScratch = 0x9FFFC000u;
+// Scratch grids (7x20 s32) the repack hooks hand to the widened draw loops.
+constexpr uint32_t kGenericScratch = 0x9FFFC000u;
+constexpr uint32_t kEnvScratch = 0x9FFFD000u;
+constexpr uint32_t kMidScratch = 0x9FFFE000u;
+constexpr uint32_t kBandScratch = 0x9FFFF000u;
+
+// The three 7x10 s32 layer grids the game passes to the draw funcs.
+constexpr uint32_t kMidBuffer = 0x80180930u;
+constexpr uint32_t kEnvBuffer = 0x80180B60u;
+constexpr uint32_t kBandBuffer = 0x80180D90u;
+
+// Layer fill inputs (all from the community decomp's func_8001107C).
+constexpr uint32_t kMidMap = 0x80108DE8u;
+constexpr uint32_t kMidAddend = 0x80137474u;
+constexpr uint32_t kEnvMapPtr = 0x8013746Cu;
+constexpr uint32_t kEnvAddend = 0x80137476u;
 constexpr uint32_t kBackdropMapPtr = 0x80137470u;
 constexpr uint32_t kBackdropAddend = 0x80137478u;
 constexpr uint32_t kTexturePoolPtr = 0x80180FC0u;
+constexpr uint32_t kMidMode = 0x800BE588u;      // 0..3, X/Y parallax variants
+constexpr uint32_t kEnvMode = 0x800BE58Cu;      // 1 = 128x8 map, else 16x16
+constexpr uint32_t kBandPerRow = 0x800BE6FCu;   // != 0: per-row parallax band
+constexpr uint32_t kEnvScrollX = 0x800BE578u;
+constexpr uint32_t kEnvScrollY = 0x800BE580u;
 constexpr uint32_t kBackdropScrollX = 0x800BE57Cu;
 constexpr uint32_t kBackdropScrollY = 0x800BE584u;
+constexpr uint32_t kCamX = 0x800BE558u;
+constexpr uint32_t kCamY = 0x800BE55Cu;
+constexpr uint32_t kCamShake = 0x800BE594u;
+constexpr uint32_t kMidColMask = 0x800BE64Cu;
+constexpr uint32_t kMidRowMask = 0x800BE650u;
+constexpr uint32_t kMidShift = 0x800BE654u;
+constexpr uint32_t kMidMapH = 0x800BE648u;       // 0x4000 >> shift
+constexpr uint32_t kBandRowScroll = 0x8011D3B0u; // s16[7], stride 4
+
+// Map-bank residency: func_80026220 records the RLE-decompressed extent of
+// the tile-texture bank here. Tile textures live at kPoolBase + slot*0x400;
+// map cells whose slot lies past the decompressed end have no texture loaded
+// (the source of the forest-sky wing noise and the old per-scene blacklists).
+constexpr uint32_t kBankStart = 0x80137724u;
+constexpr uint32_t kBankEnd = 0x80137728u;
+constexpr uint32_t kMapBankDest = 0x80380000u;
+constexpr uint32_t kPoolBase = 0x80380600u;
+
 constexpr uint32_t kCurrentScene = 0x800BE5D0u;
 constexpr uint32_t kCannotPause = 0x800BE4ECu;
 constexpr uint32_t kGameState = 0x800BE4F0u;
@@ -160,62 +198,254 @@ extern "C" int mm_debug_warp_prepare(
         0, static_cast<gpr>(static_cast<int32_t>(kCurrentScene))));
 }
 
-// The non-scrolling background shares D_80180D90 with the scrolling band,
-// but reaches func_80082380 instead of func_80082820. The main entry hook has
-// already copied its ten original columns into kStaticScratch when this runs.
-// Populate the five columns on either side from the same wrapping 16x16 map
-// formula used by the game's original func_8001107C fill.
-extern "C" void mm_widescreen_finish_static_bg(uint8_t* rdram, recomp_context* ctx) {
-    const uint32_t buffer = static_cast<uint32_t>(ctx->r7);
-    if (buffer != kStaticScratch ||
-        !env_enabled("MM_STATIC_WINGS") ||
-        !mm_widescreen_gameplay_active(rdram)) {
-        return;
+namespace {
+
+gpr rdram_gpr(uint32_t vaddr) {
+    return static_cast<gpr>(static_cast<int32_t>(vaddr));
+}
+
+int16_t read_s16(uint8_t* rdram, uint32_t vaddr) {
+    return static_cast<int16_t>(MEM_HU(0, rdram_gpr(vaddr)));
+}
+
+// Wing tile -> s32 texture-pointer slot, exactly like the game's own
+// s16-grid fill + draw-side conversion: value = ((tile + addend) << 10) +
+// pool base, INCLUDING tile 0 (the game draws pool slot addend<<10 for it;
+// skipping it leaves holes where authored maps use tile 0 -- safe now that
+// the display-list arenas are relocated and can hold all 140 tiles). The
+// single wing-only deviation: a slot whose texture lies past the
+// decompressed map-bank end has no data loaded -- draw nothing instead of
+// noise. This per-tile residency check replaces the old per-scene
+// blacklists.
+// Host-side override for the bank extent: func_80026428 reloads the bank
+// without updating *0x80137728 (scenes 10, 24, 46..51). The override must
+// live OUTSIDE game memory — 0x80137724/28 sit inside the game's own bss
+// and other engine code may rely on them staying exactly as func_80026220
+// left them. Cleared whenever func_80026220 records a fresh authoritative
+// extent.
+uint32_t g_host_bank_end = 0;
+
+int32_t wing_slot(uint8_t* rdram, int tile, int addend, uint32_t texture_pool) {
+    const uint32_t value = static_cast<uint32_t>(tile + addend) & 0xFFFFu;
+    uint32_t bank_end = static_cast<uint32_t>(MEM_W(0, rdram_gpr(kBankEnd)));
+    if (g_host_bank_end != 0) {
+        bank_end = g_host_bank_end;
     }
-
-    // These scenes route different kinds of data through this buffer;
-    // interpreting them as the generic wrapping backdrop produces invalid
-    // tile references. Their verified environment/midground layers still
-    // provide safe extension.
-    const int scene = static_cast<int16_t>(
-        MEM_HU(0, static_cast<gpr>(static_cast<int32_t>(kCurrentScene))));
-    if (scene == 0 || scene == 10 || scene == 20 || scene == 23 || scene == 24 ||
-        scene == 36 || scene == 40 || scene == 42 || scene == 46 ||
-        scene == 47 || scene == 48 || scene == 52 || scene == 53 ||
-        scene == 54 || scene == 55 || scene == 57 || scene == 65 ||
-        scene == 68 || scene == 71 || scene == 77 || scene == 78) {
-        return;
-    }
-
-    const gpr scratch = static_cast<gpr>(static_cast<int32_t>(kStaticScratch));
-    const gpr map = MEM_W(0, static_cast<gpr>(static_cast<int32_t>(kBackdropMapPtr)));
-    if (!valid_rdram_ptr(static_cast<uint32_t>(map))) {
-        return;
-    }
-
-    const int addend = MEM_HU(0, static_cast<gpr>(static_cast<int32_t>(kBackdropAddend)));
-    const uint32_t texture_pool = static_cast<uint32_t>(
-        MEM_W(0, static_cast<gpr>(static_cast<int32_t>(kTexturePoolPtr))));
-    const int scroll_x = static_cast<int16_t>(
-        MEM_HU(0, static_cast<gpr>(static_cast<int32_t>(kBackdropScrollX))));
-    const int scroll_y = static_cast<int16_t>(
-        MEM_HU(0, static_cast<gpr>(static_cast<int32_t>(kBackdropScrollY))));
-    const int source_x = (scroll_x - 2) & 0x1FF;
-    const int source_y = (-12 - scroll_y) & 0x1FF;
-
-    for (int row = 0; row < 7; ++row) {
-        const int row_block = ((source_y + row * 32) >> 1) & 0xF0;
-        for (int wide_col = 0; wide_col < 20; ++wide_col) {
-            const int col = wide_col - 5;
-            if (col >= 0 && col < 10) {
-                continue;
-            }
-
-            const int map_col = ((source_x >> 5) + col + 16) & 0xF;
-            const int tile = MEM_BU(map_col + row_block, map);
-            const int32_t texture = tile == 0 ? 0 : static_cast<int32_t>(
-                (static_cast<uint32_t>((tile + addend) & 0xFFFF) << 10) + texture_pool);
-            MEM_W((row * 20 + wide_col) * 4, scratch) = texture;
+    if (bank_end > kPoolBase && bank_end < 0x80800000u) {
+        const uint32_t slot_end = kPoolBase + (value << 10) + 0x400u;
+        if (slot_end > bank_end) {
+            return 0;
         }
     }
+    return static_cast<int32_t>((value << 10) + texture_pool);
+}
+
+struct WingContext {
+    uint8_t* rdram;
+    gpr src;            // game's 7x10 s32 grid (center columns, verbatim)
+    gpr dst;            // 7x20 scratch grid
+    uint32_t texture_pool;
+};
+
+// Repack the 7x10 grid to stride 20. wing(row, col) supplies the s32 slot
+// for camera-relative columns -5..-1 and 10..14; pass nullptr for zeroed
+// wings (unknown caller or wings disabled).
+template <typename WingFn>
+void repack_grid(const WingContext& wc, WingFn wing, bool wings_on) {
+    uint8_t* rdram = wc.rdram;
+    for (int row = 0; row < 7; ++row) {
+        for (int wide_col = 0; wide_col < 20; ++wide_col) {
+            const int col = wide_col - 5;
+            int32_t value;
+            if (col >= 0 && col < 10) {
+                value = MEM_W((row * 10 + col) * 4, wc.src);
+            }
+            else if (wings_on) {
+                value = wing(row, col);
+            }
+            else {
+                value = 0;
+            }
+            MEM_W((row * 20 + wide_col) * 4, wc.dst) = value;
+        }
+    }
+}
+
+bool wings_active(uint8_t* rdram, const char* layer_env) {
+    return env_enabled(layer_env) && mm_widescreen_gameplay_active(rdram);
+}
+
+// The game's six per-layer display-list arenas (double-buffered mid/env/band)
+// are 0x1620 bytes each: exactly 70 tiles x 80 bytes + an 8-byte G_ENDDL,
+// with 0x38 bytes of slack. The widened 7x20 loops can emit up to 140 tiles
+// (0x2BC8 bytes), and the draw loop has NO bounds check — the overrun from
+// the last arena (D_8017F310) stomps the layer texture-pointer grids at
+// 0x80180930+ and can reach the texture-pool base at 0x80180FC0, which is
+// the intermittent full-frame tile noise. The arena base is parameter-borne
+// ($a0): the draw func keeps its cursor in a register, and emits both the
+// G_ENDDL and the gSPDisplayList submission from that same base, so
+// remapping $a0 at function entry relocates everything, including what the
+// RSP reads. 0x80400000..0x80418000 is free: the game uses 4MB and the
+// runtime's extended allocations start at 0x80800000.
+uint32_t remap_arena(uint32_t base) {
+    switch (base) {
+        case 0x80178470u: return 0x80400000u; // midground, buffer A
+        case 0x80179A90u: return 0x80404000u; // midground, buffer B
+        case 0x8017B0B0u: return 0x80408000u; // env, buffer A
+        case 0x8017C6D0u: return 0x8040C000u; // env, buffer B
+        case 0x8017DCF0u: return 0x80410000u; // band/static, buffer A
+        case 0x8017F310u: return 0x80414000u; // band/static, buffer B
+        default: return base;                 // unknown caller: leave alone
+    }
+}
+
+} // namespace
+
+// Scrolling band (func_80082820 entry; sole live caller passes D_80180D90,
+// only when D_800BE6FC != 0). Per-row parallax X from D_8011D3B0[row]; rows
+// whose scroll is the -1 sentinel are skipped by the draw loop itself.
+extern "C" void mm_ws_band_repack(uint8_t* rdram, recomp_context* ctx) {
+    ctx->r4 = static_cast<gpr>(static_cast<int32_t>(
+        remap_arena(static_cast<uint32_t>(ctx->r4))));
+    if (static_cast<uint32_t>(ctx->r5) != kBandBuffer) {
+        return;
+    }
+
+    WingContext wc{rdram, static_cast<gpr>(ctx->r5), rdram_gpr(kBandScratch),
+        static_cast<uint32_t>(MEM_W(0, rdram_gpr(kTexturePoolPtr)))};
+    const gpr map = MEM_W(0, rdram_gpr(kBackdropMapPtr));
+    const bool wings = wings_active(rdram, "MM_BAND_WINGS") &&
+        valid_rdram_ptr(static_cast<uint32_t>(map));
+    const int addend = MEM_HU(0, rdram_gpr(kBackdropAddend));
+    const int y0 = (-12 - read_s16(rdram, kBackdropScrollY)) & 0x1FF;
+
+    repack_grid(wc, [&](int row, int col) -> int32_t {
+        const int row_block = ((y0 + row * 32) >> 1) & 0xF0;
+        const int x0 = (read_s16(rdram, kBandRowScroll + row * 4) - 2) & 0x1FF;
+        const int map_col = ((x0 + col * 32 + 512) >> 5) & 0xF;
+        const int tile = MEM_BU(map_col + row_block, map);
+        return wing_slot(rdram, tile, addend, wc.texture_pool);
+    }, wings);
+    ctx->r5 = wc.dst;
+}
+
+// Shared static tile-grid draw (func_80082380 entry). Serves the midground,
+// environment, and non-scrolling background grids; every caller passes a
+// 7x10 stride-10 grid, so ALWAYS repack to stride 20 (the draw loop is
+// statically widened). Known layers get real map-derived wing columns using
+// the exact fill formulas from the game's func_8001107C; anything else gets
+// zeroed wings and a byte-identical center.
+extern "C" void mm_ws_static_repack(uint8_t* rdram, recomp_context* ctx) {
+    ctx->r4 = static_cast<gpr>(static_cast<int32_t>(
+        remap_arena(static_cast<uint32_t>(ctx->r4))));
+    const uint32_t buffer = static_cast<uint32_t>(ctx->r7);
+    WingContext wc{rdram, static_cast<gpr>(ctx->r7), rdram_gpr(kGenericScratch),
+        static_cast<uint32_t>(MEM_W(0, rdram_gpr(kTexturePoolPtr)))};
+
+    if (buffer == kEnvBuffer) {
+        wc.dst = rdram_gpr(kEnvScratch);
+        const gpr map = MEM_W(0, rdram_gpr(kEnvMapPtr));
+        const bool wings = wings_active(rdram, "MM_ENV_WINGS") &&
+            valid_rdram_ptr(static_cast<uint32_t>(map));
+        const int addend = MEM_HU(0, rdram_gpr(kEnvAddend));
+        const bool wide = MEM_HU(0, rdram_gpr(kEnvMode)) == 1; // 128x8 map
+        const int x0 = (read_s16(rdram, kEnvScrollX) - 2) & (wide ? 0xFFF : 0x1FF);
+        const int y0 = (-12 - read_s16(rdram, kEnvScrollY)) & (wide ? 0xFF : 0x1FF);
+
+        repack_grid(wc, [&](int row, int col) -> int32_t {
+            const int y = y0 + row * 32;
+            const int row_block = wide ? ((y << 2) & 0x380) : ((y >> 1) & 0xF0);
+            const int map_col = ((x0 + col * 32 + 0x1000) >> 5) & (wide ? 0x7F : 0xF);
+            const int tile = MEM_BU(map_col + row_block, map);
+            return wing_slot(rdram, tile, addend, wc.texture_pool);
+        }, wings);
+    }
+    else if (buffer == kMidBuffer) {
+        wc.dst = rdram_gpr(kMidScratch);
+        const bool wings = wings_active(rdram, "MM_MID_WINGS");
+        const gpr map = rdram_gpr(kMidMap);
+        const int addend = MEM_HU(0, rdram_gpr(kMidAddend));
+        const int mode = MEM_HU(0, rdram_gpr(kMidMode));
+        const int col_mask = MEM_HU(0, rdram_gpr(kMidColMask));
+        const int row_mask = MEM_HU(0, rdram_gpr(kMidRowMask));
+        const int shift = MEM_HU(0, rdram_gpr(kMidShift)) & 0x1F;
+        const int map_h = MEM_HU(0, rdram_gpr(kMidMapH));
+        const int cam_x = read_s16(rdram, kCamX);
+        const int cam_y = read_s16(rdram, kCamY);
+        const int shake = read_s16(rdram, kCamShake);
+
+        // X/Y bases per parallax mode, from func_8001107C's switch.
+        int x0;
+        if (mode == 0) {
+            x0 = cam_x - 0x92;
+        }
+        else if (mode == 1) {
+            x0 = static_cast<int>(static_cast<double>(cam_x) / 1.55 - 2.0);
+        }
+        else {
+            x0 = static_cast<int>(static_cast<double>(cam_x) / 1.55);
+        }
+        const int y0 = (mode == 3)
+            ? static_cast<int>(static_cast<double>(map_h) -
+                (static_cast<double>(cam_y) / 1.55 + static_cast<double>(shake) - 92.0))
+            : (map_h - cam_y - shake + 0x5C);
+
+        repack_grid(wc, [&](int row, int col) -> int32_t {
+            // The game's fill writes rows in DESCENDING memory order (fill
+            // row rf lands at memory row 6-rf), stepping y down 32 per fill
+            // row; so memory/draw row r sits at y0 - (6-r)*32.
+            const uint32_t y = static_cast<uint32_t>((y0 - (6 - row) * 32) & 0xFFFF);
+            const int row_block = static_cast<int>((y << shift) &
+                static_cast<uint32_t>(row_mask));
+            const int map_col = (((x0 & 0xFFFF) + col * 32 + 0x10000) >> 5) & col_mask;
+            const int tile = MEM_BU(map_col + row_block, map);
+            return wing_slot(rdram, tile, addend, wc.texture_pool);
+        }, wings);
+    }
+    else if (buffer == kBandBuffer) {
+        // Non-scrolling background variant (D_800BE6FC == 0): same 16x16
+        // wrapping map as the band, single scroll register.
+        const gpr map = MEM_W(0, rdram_gpr(kBackdropMapPtr));
+        const bool wings = wings_active(rdram, "MM_STATIC_WINGS") &&
+            valid_rdram_ptr(static_cast<uint32_t>(map));
+        const int addend = MEM_HU(0, rdram_gpr(kBackdropAddend));
+        const int x0 = (read_s16(rdram, kBackdropScrollX) - 2) & 0x1FF;
+        const int y0 = (-12 - read_s16(rdram, kBackdropScrollY)) & 0x1FF;
+
+        repack_grid(wc, [&](int row, int col) -> int32_t {
+            const int row_block = ((y0 + row * 32) >> 1) & 0xF0;
+            const int map_col = ((x0 + col * 32 + 512) >> 5) & 0xF;
+            const int tile = MEM_BU(map_col + row_block, map);
+            return wing_slot(rdram, tile, addend, wc.texture_pool);
+        }, wings);
+    }
+    else {
+        // Unknown caller: center copy only, zero wings.
+        repack_grid(wc, [](int, int) -> int32_t { return 0; }, false);
+    }
+    ctx->r7 = wc.dst;
+}
+
+// func_80026428 decompresses a replacement map bank over 0x80380000 for
+// scenes 10, 24 and 46..51 but never updates the recorded bank extent, so
+// the residency check above would use the PREVIOUS bank's bound there.
+// Hooked right after its Trouble_RLE_Type1 call (before_vram 0x80026484),
+// where $v0 still holds the decompressed size. Host-side only; game memory
+// is never written.
+extern "C" void mm_ws_fix_bank_bound(uint8_t* rdram, recomp_context* ctx) {
+    (void)rdram;
+    const uint32_t size = static_cast<uint32_t>(ctx->r2);
+    if (size == 0 || size > 0x40000u) {
+        return;
+    }
+    g_host_bank_end = kMapBankDest + size;
+}
+
+// func_80026220 is the authoritative bank loader (records the extent at
+// 0x80137724/28 itself); a fresh load supersedes any func_80026428
+// override from an earlier scene.
+extern "C" void mm_ws_bank_reloaded(uint8_t* rdram, recomp_context* ctx) {
+    (void)rdram;
+    (void)ctx;
+    g_host_bank_end = 0;
 }
