@@ -1,5 +1,6 @@
 // Host helpers for translated-code widescreen hooks.
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <cstring>
@@ -19,7 +20,7 @@ constexpr uint32_t kBandScratch = 0x9FFFF000u;
 constexpr uint32_t kFilteredActorList = 0x9FFFA000u;
 constexpr uint32_t kActors = 0x800EF510u;
 constexpr uint32_t kActorsTop = 0x80171F10u;
-constexpr uint32_t kClanBlocks = 0x801069E0u;
+constexpr uint32_t kClanBlocks = 0x804269E0u;
 constexpr uint32_t kClanBlockCount = 0x801782C0u;
 
 // The three 7x10 s32 layer grids the game passes to the draw funcs.
@@ -338,45 +339,45 @@ extern "C" int mm_debug_warp_prepare(
 // to engage Marina's jet and traverse a meaningful part of the stage.
 extern "C" void mm_test_drive_marina(uint8_t* rdram) {
     static int motion_frame = 0;
-    static uint16_t previous_direction = 0;
+    static uint16_t previous_input = 0;
     const char* move_mode = std::getenv("MM_TEST_MOVE");
     if (move_mode == nullptr || move_mode[0] == '\0' || move_mode[0] == '0' ||
         !mm_widescreen_gameplay_active(rdram) ||
         MEM_HU(0, static_cast<gpr>(static_cast<int32_t>(kGameState))) != 6 ||
         MEM_HU(0, static_cast<gpr>(static_cast<int32_t>(kCannotPause))) != 0) {
         motion_frame = 0;
-        previous_direction = 0;
+        previous_input = 0;
         return;
     }
 
     const bool jet_right = std::strcmp(move_mode, "jet-right") == 0;
     const int cycle = jet_right ? 300 : 120;
     const int phase = motion_frame++ % cycle;
-    uint16_t direction = 0;
+    uint16_t input = 0;
     if (jet_right) {
         // Two distinct rising edges, then a long hold: R, neutral, R+hold.
         if ((phase >= 30 && phase < 32) ||
             (phase >= 34 && phase < 270)) {
-            direction = MEM_HU(0,
+            input |= MEM_HU(0,
                 static_cast<gpr>(static_cast<int32_t>(kButtonDRight)));
         }
     }
     else if (phase < 15) {
-        direction = MEM_HU(0,
+        input = MEM_HU(0,
             static_cast<gpr>(static_cast<int32_t>(kButtonDRight)));
     }
     else if (phase >= 60 && phase < 75) {
-        direction = MEM_HU(0,
+        input = MEM_HU(0,
             static_cast<gpr>(static_cast<int32_t>(kButtonDLeft)));
     }
-    const uint16_t pressed = direction != previous_direction ? direction : 0;
-    previous_direction = direction;
+    const uint16_t pressed = input & ~previous_input;
+    previous_input = input;
 
-    MEM_H(0, static_cast<gpr>(static_cast<int32_t>(kMarinaHold))) = direction;
+    MEM_H(0, static_cast<gpr>(static_cast<int32_t>(kMarinaHold))) = input;
     MEM_H(0, static_cast<gpr>(static_cast<int32_t>(kMarinaPress))) = pressed;
-    MEM_H(0, static_cast<gpr>(static_cast<int32_t>(kGlobalButtonHold))) = direction;
+    MEM_H(0, static_cast<gpr>(static_cast<int32_t>(kGlobalButtonHold))) = input;
     MEM_H(0, static_cast<gpr>(static_cast<int32_t>(kGlobalButtonPress))) = pressed;
-    MEM_H(0, static_cast<gpr>(static_cast<int32_t>(kButtonHoldHistory))) = direction;
+    MEM_H(0, static_cast<gpr>(static_cast<int32_t>(kButtonHoldHistory))) = input;
     MEM_H(0, static_cast<gpr>(static_cast<int32_t>(kButtonPressHistory))) = pressed;
     if ((motion_frame % (jet_right ? 15 : 60)) == 0) {
         const gpr marina = static_cast<gpr>(static_cast<int32_t>(kActors));
@@ -387,7 +388,7 @@ extern "C" void mm_test_drive_marina(uint8_t* rdram) {
         int clan_max_x = -32768;
         const gpr clan_blocks = static_cast<gpr>(
             static_cast<int32_t>(kClanBlocks));
-        for (int i = 0; i < clan_slots && i < 64; ++i) {
+        for (int i = 0; i < clan_slots && i < 128; ++i) {
             if (MEM_HU(i * 0x90 + 0x80, clan_blocks) == 0) {
                 continue;
             }
@@ -399,19 +400,199 @@ extern "C" void mm_test_drive_marina(uint8_t* rdram) {
         }
         std::fprintf(stderr,
             "[test-move] mode=%s frame=%d phase=%d hold=%04x press=%04x "
-            "actor-x=%d camera-x=%d velocity-x=%d state=%04x "
+            "actor=%d,%d camera=%d,%d velocity=%d,%d state=%04x "
             "clan=%d range=%d..%d\n",
             jet_right ? "jet-right" : "patrol", motion_frame, phase,
-            direction, pressed,
+            input, pressed,
             static_cast<int32_t>(MEM_W(0, static_cast<gpr>(
                 static_cast<int32_t>(kMarinaActorPosX)))) >> 16,
+            static_cast<int32_t>(MEM_W(0x8C, marina)) >> 16,
             static_cast<int32_t>(MEM_W(0, static_cast<gpr>(
                 static_cast<int32_t>(kCamX)))) >> 16,
+            static_cast<int32_t>(MEM_W(0, static_cast<gpr>(
+                static_cast<int32_t>(kCamY)))) >> 16,
             static_cast<int32_t>(MEM_W(0xEC, marina)) >> 16,
+            static_cast<int32_t>(MEM_W(0xF0, marina)) >> 16,
             MEM_HU(0xD0, marina), clan_count,
             clan_count == 0 ? 0 : clan_min_x,
             clan_count == 0 ? 0 : clan_max_x);
     }
+}
+
+// Test-only census for the world-record loader. This catches streaming limits
+// that a static screenshot cannot: the widened loader may admit more
+// candidates than its original 64-entry destination can hold.
+extern "C" void mm_test_trace_streaming(
+    uint8_t* rdram, recomp_context* ctx) {
+    if (!env_enabled("MM_TEST_STREAM_TRACE") ||
+        !mm_widescreen_gameplay_active(rdram)) {
+        return;
+    }
+
+    static int frame = 0;
+
+    if (const char* forced_camera = std::getenv("MM_TEST_STREAM_CAMERA")) {
+        int x = 0;
+        int y = 0;
+        if (std::sscanf(forced_camera, "%d,%d", &x, &y) >= 1) {
+            MEM_W(0, static_cast<gpr>(static_cast<int32_t>(kCamX))) = x << 16;
+            if (std::strchr(forced_camera, ',') != nullptr) {
+                MEM_W(0, static_cast<gpr>(static_cast<int32_t>(kCamY))) = y << 16;
+            }
+        }
+    }
+    const int cam_x = static_cast<int16_t>(MEM_HU(
+        0, static_cast<gpr>(static_cast<int32_t>(kCamX))));
+    const int cam_y = static_cast<int16_t>(MEM_HU(
+        0, static_cast<gpr>(static_cast<int32_t>(kCamY))));
+    const bool alternate = MEM_BU(
+        0, static_cast<gpr>(static_cast<int32_t>(0x800BE710u))) != 0;
+    const int left = cam_x - 0x180;
+    const int right = cam_x + 0x180;
+    const int top = cam_y - (alternate ? 0xD0 : 0x84);
+    const int bottom = cam_y + (alternate ? 0xD0 : 0x84);
+    const gpr records = static_cast<gpr>(ctx->r4);
+    int candidates = 0;
+    int candidate_min_x = 32767;
+    int candidate_max_x = -32768;
+    for (int i = 0; i < 4096; ++i) {
+        const uint16_t flags = MEM_HU(i * 6, records);
+        if (flags == 0) {
+            break;
+        }
+        const int x = MEM_HU(i * 6 + 2, records);
+        const int y = MEM_HU(i * 6 + 4, records);
+        if (x > left && x < right && y > top && y < bottom &&
+            (flags & 0xC000u) == 0) {
+            const int relative_x = x - cam_x;
+            ++candidates;
+            candidate_min_x = relative_x < candidate_min_x
+                ? relative_x : candidate_min_x;
+            candidate_max_x = relative_x > candidate_max_x
+                ? relative_x : candidate_max_x;
+        }
+    }
+
+    static int scanned_stage = -1;
+    const int stage = MEM_HU(0, static_cast<gpr>(
+        static_cast<int32_t>(kCurrentStage)));
+    if (stage != scanned_stage) {
+        scanned_stage = stage;
+        int world_min_x = 65535;
+        int world_max_x = 0;
+        int world_min_y = 65535;
+        int world_max_y = 0;
+        int record_count = 0;
+        for (int i = 0; i < 4096; ++i) {
+            const uint16_t flags = MEM_HU(i * 6, records);
+            if (flags == 0) {
+                break;
+            }
+            const int x = MEM_HU(i * 6 + 2, records);
+            const int y = MEM_HU(i * 6 + 4, records);
+            if (y > top && y < bottom && (flags & 0xC000u) == 0) {
+                ++record_count;
+                world_min_x = x < world_min_x ? x : world_min_x;
+                world_max_x = x > world_max_x ? x : world_max_x;
+            }
+            if ((flags & 0xC000u) == 0) {
+                world_min_y = y < world_min_y ? y : world_min_y;
+                world_max_y = y > world_max_y ? y : world_max_y;
+            }
+        }
+        int peak = 0;
+        int peak_camera = 0;
+        int saturated_first = -1;
+        int saturated_last = -1;
+        for (int test_camera = world_min_x - 0x180;
+             test_camera <= world_max_x + 0x180; ++test_camera) {
+            int count = 0;
+            for (int i = 0; i < 4096; ++i) {
+                const uint16_t flags = MEM_HU(i * 6, records);
+                if (flags == 0) {
+                    break;
+                }
+                const int x = MEM_HU(i * 6 + 2, records);
+                const int y = MEM_HU(i * 6 + 4, records);
+                if (x > test_camera - 0x180 && x < test_camera + 0x180 &&
+                    y > top && y < bottom && (flags & 0xC000u) == 0) {
+                    ++count;
+                }
+            }
+            if (count > peak) {
+                peak = count;
+                peak_camera = test_camera;
+            }
+            if (count > 64) {
+                saturated_first = saturated_first < 0
+                    ? test_camera : saturated_first;
+                saturated_last = test_camera;
+            }
+        }
+
+        // Repeat the census across every vertical slice in the record table.
+        // Sorting the eligible X coordinates lets a sliding window find the
+        // densest 0x300-wide region without an expensive X/Y brute force.
+        int slice_x[4096];
+        int peak_2d = 0;
+        int peak_2d_x = 0;
+        int peak_2d_y = 0;
+        const int y_radius = alternate ? 0xD0 : 0x84;
+        for (int test_y = world_min_y - y_radius;
+             test_y <= world_max_y + y_radius; ++test_y) {
+            int slice_count = 0;
+            for (int i = 0; i < 4096; ++i) {
+                const uint16_t flags = MEM_HU(i * 6, records);
+                if (flags == 0) {
+                    break;
+                }
+                const int y = MEM_HU(i * 6 + 4, records);
+                if (y > test_y - y_radius && y < test_y + y_radius &&
+                    (flags & 0xC000u) == 0) {
+                    slice_x[slice_count++] = MEM_HU(i * 6 + 2, records);
+                }
+            }
+            std::sort(slice_x, slice_x + slice_count);
+            int first = 0;
+            for (int last = 0; last < slice_count; ++last) {
+                while (slice_x[last] - slice_x[first] >= 0x300) {
+                    ++first;
+                }
+                const int count = last - first + 1;
+                if (count > peak_2d) {
+                    peak_2d = count;
+                    peak_2d_x = (slice_x[first] + slice_x[last]) / 2;
+                    peak_2d_y = test_y;
+                }
+            }
+        }
+        std::fprintf(stderr,
+            "[test-stream-scan] stage=%d records=%d world=%d..%d peak=%d "
+            "camera=%d saturated=%d..%d peak2d=%d camera2d=%d,%d\n",
+            stage, record_count, world_min_x, world_max_x, peak, peak_camera,
+            saturated_first, saturated_last, peak_2d, peak_2d_x, peak_2d_y);
+    }
+
+    int loaded = 0;
+    const gpr clan_blocks = static_cast<gpr>(
+        static_cast<int32_t>(kClanBlocks));
+    for (int i = 0; i < 128; ++i) {
+        loaded += MEM_HU(i * 0x90 + 0x80, clan_blocks) != 0;
+    }
+    static int previous_candidates = -1;
+    static int previous_loaded = -1;
+    if (candidates != previous_candidates || loaded != previous_loaded ||
+        (frame % 120) == 0) {
+        std::fprintf(stderr,
+            "[test-stream] frame=%d stage=%d camera=%d,%d candidates=%d "
+            "loaded=%d range=%d..%d alternate=%d\n",
+            frame, stage, cam_x, cam_y, candidates, loaded,
+            candidates == 0 ? 0 : candidate_min_x,
+            candidates == 0 ? 0 : candidate_max_x, alternate ? 1 : 0);
+        previous_candidates = candidates;
+        previous_loaded = loaded;
+    }
+    ++frame;
 }
 
 namespace {

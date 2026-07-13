@@ -6,7 +6,7 @@ set -u
 
 usage() {
     echo "usage: $0 GAME_BINARY ROM OUTPUT_DIR [STAGE_INDEX ...]" >&2
-    echo "env: MM_CAPTURE_DELAY=60 MM_CAPTURE_FRAMES=3 MM_CAPTURE_INTERVAL=0.35 MM_CAPTURE_GEOMETRY=1602x1022+39+59 MM_WINDOW=1600x900 MM_AUTO_ADVANCE=1 MM_TEST_MOVE=1|jet-right" >&2
+    echo "env: MM_CAPTURE_DELAY=60 MM_CAPTURE_FRAMES=3 MM_CAPTURE_INTERVAL=0.35 MM_CAPTURE_GEOMETRY=1602x1022+39+59 MM_WINDOW=1600x900 MM_AUTO_ADVANCE=1 MM_TEST_MOVE=1|jet-right MM_TEST_STREAM_TRACE=1 MM_TEST_STREAM_CAMERA=x[,y]" >&2
 }
 
 if (( $# < 3 )); then
@@ -26,6 +26,8 @@ auto_advance=${MM_AUTO_ADVANCE:-1}
 capture_frames=${MM_CAPTURE_FRAMES:-3}
 capture_interval=${MM_CAPTURE_INTERVAL:-0.35}
 test_move=${MM_TEST_MOVE:-1}
+stream_trace=${MM_TEST_STREAM_TRACE:-0}
+stream_camera=${MM_TEST_STREAM_CAMERA:-}
 
 if [[ ! -x "$game" ]]; then
     echo "not executable: $game" >&2
@@ -110,6 +112,8 @@ for entry in "${playable[@]}"; do
 
     setsid env MM_WARP_STAGE="$stage" MM_WARP_AT=1 MM_WARP_DELAY=1 \
         MM_TEST_AUTO_ADVANCE="$auto_advance" MM_TEST_MOVE="$test_move" \
+        MM_TEST_STREAM_TRACE="$stream_trace" \
+        MM_TEST_STREAM_CAMERA="$stream_camera" \
         MM_WIN_POS=40,40 SDL_VIDEODRIVER=x11 \
         "$game" "$rom" \
         --window "$window_size" --widescreen >"$log" 2>&1 &

@@ -141,6 +141,70 @@ instruction = [
     { func = "func_800451E4", vram = 0x8004527C, value = 0x2457FE80 }, # normal window-left     -0xA8 -> -0x180
     { func = "func_800451E4", vram = 0x80045280, value = 0x245E0180 }, # normal window-right     0xA8 ->  0x180
 
+    # The widened world window can contain more than the original 64 live
+    # clan-block/prop records (Meet Calina peaks at 97). Move the 0x90-byte
+    # record array into unused expansion RDRAM and raise every loader, draw,
+    # cleanup, and reset bound together to 128. All producers and consumers of
+    # D_801069E0 are repointed below; the old array remains untouched next to
+    # the game's map data.
+    { func = "func_800451E4", vram = 0x80045370, value = 0x28610080 }, # load cap 64 -> 128
+    { func = "func_800451E4", vram = 0x80045488, value = 0x28610080 }, # scan cap 64 -> 128
+    { func = "func_800451E4", vram = 0x8004549C, value = 0x28610080 }, # cleanup cap 64 -> 128
+    { func = "func_800451E4", vram = 0x800454B8, value = 0x28610080 }, # cleanup loop 64 -> 128
+    { func = "func_8000DD6C", vram = 0x8000E014, value = 0x29E10080 }, # simple draw loop 64 -> 128
+    { func = "func_8000DD6C", vram = 0x8000EA4C, value = 0x29C10080 }, # typed draw loop 64 -> 128
+    { func = "func_800230B8", vram = 0x8002310C, value = 0x29010080 }, # reset loop 64 -> 128
+
+    # D_801069E0 -> 0x804269E0. Keeping the low 0x69E0 bits means every site
+    # changes only its LUI. This list includes drawing, collision, positional
+    # audio, record constructors, loader cleanup, and stage reset.
+    { func = "Sound_PlaySfxAtObject", vram = 0x80003834, value = 0x3C188042 },
+    { func = "func_8000DD6C", vram = 0x8000DE30, value = 0x3C198042 },
+    { func = "func_8000DD6C", vram = 0x8000E060, value = 0x3C0F8042 },
+    { func = "func_800230B8", vram = 0x800230F0, value = 0x3C038042 },
+    { func = "func_8002FD48", vram = 0x8002FDAC, value = 0x3C0B8042 },
+    { func = "func_80044360", vram = 0x80044368, value = 0x3C188042 },
+    { func = "func_80044390", vram = 0x800443B0, value = 0x3C188042 },
+    { func = "func_80044390", vram = 0x80044420, value = 0x3C198042 },
+    { func = "func_80044468", vram = 0x80044488, value = 0x3C188042 },
+    { func = "func_80044468", vram = 0x800444F8, value = 0x3C198042 },
+    { func = "func_80044540", vram = 0x80044560, value = 0x3C188042 },
+    { func = "func_80044540", vram = 0x800445D0, value = 0x3C198042 },
+    { func = "func_80044618", vram = 0x80044638, value = 0x3C188042 },
+    { func = "func_80044618", vram = 0x800446A8, value = 0x3C198042 },
+    { func = "func_800446F0", vram = 0x800446F8, value = 0x3C0F8042 },
+    { func = "func_800447AC", vram = 0x800447CC, value = 0x3C188042 },
+    { func = "func_800447AC", vram = 0x8004483C, value = 0x3C198042 },
+    { func = "func_80044884", vram = 0x800448A4, value = 0x3C188042 },
+    { func = "func_80044884", vram = 0x80044914, value = 0x3C198042 },
+    { func = "func_8004495C", vram = 0x8004497C, value = 0x3C188042 },
+    { func = "func_800449A8", vram = 0x800449B0, value = 0x3C188042 },
+    { func = "func_80044A38", vram = 0x80044A58, value = 0x3C188042 },
+    { func = "func_80044A84", vram = 0x80044A8C, value = 0x3C188042 },
+    { func = "func_80044B00", vram = 0x80044B08, value = 0x3C188042 },
+    { func = "func_80044B7C", vram = 0x80044B9C, value = 0x3C188042 },
+    { func = "func_80044BD8", vram = 0x80044BF8, value = 0x3C188042 },
+    { func = "func_80044C34", vram = 0x80044C54, value = 0x3C188042 },
+    { func = "func_80044C90", vram = 0x80044CB0, value = 0x3C188042 },
+    { func = "func_80044CEC", vram = 0x80044D0C, value = 0x3C188042 },
+    { func = "func_80044D48", vram = 0x80044D68, value = 0x3C188042 },
+    { func = "func_80044DA4", vram = 0x80044DAC, value = 0x3C188042 },
+    { func = "func_80044DEC", vram = 0x80044DF4, value = 0x3C188042 },
+    { func = "func_80044E34", vram = 0x80044E3C, value = 0x3C188042 },
+    { func = "func_80044E7C", vram = 0x80044E84, value = 0x3C188042 },
+    { func = "func_80044EC4", vram = 0x80044ECC, value = 0x3C188042 },
+    { func = "func_80044F0C", vram = 0x80044F14, value = 0x3C188042 },
+    { func = "func_80044F54", vram = 0x80044F5C, value = 0x3C188042 },
+    { func = "func_80044F9C", vram = 0x80044FA4, value = 0x3C188042 },
+    { func = "func_80044FE4", vram = 0x80044FEC, value = 0x3C188042 },
+    { func = "func_8004502C", vram = 0x80045034, value = 0x3C188042 },
+    { func = "func_80045074", vram = 0x80045094, value = 0x3C188042 },
+    { func = "func_800450D0", vram = 0x800450F0, value = 0x3C188042 },
+    { func = "func_8004512C", vram = 0x8004514C, value = 0x3C188042 },
+    { func = "func_80045188", vram = 0x800451A8, value = 0x3C188042 },
+    { func = "func_800451E4", vram = 0x80045380, value = 0x3C128042 },
+    { func = "func_800451E4", vram = 0x80045498, value = 0x3C128042 },
+
     # Clan blocks are emitted as RDP texture rectangles. The original draw
     # path clamps every negative X coordinate to zero and advances texture S,
     # physically cutting otherwise-live blocks at the 4:3 left edge. Always
@@ -205,6 +269,7 @@ hook = [
     # Fixed-viewport color grading is implemented as a frozen top-layer actor
     # in several stages. Drop that actor only while gameplay is expanded.
     { func = "func_80009BE8", text = '{ extern void mm_ws_filter_fixed_viewport_effects(uint8_t*, recomp_context*); mm_ws_filter_fixed_viewport_effects(rdram, ctx); }' },
+    { func = "func_800451E4", text = '{ extern void mm_test_trace_streaming(uint8_t*, recomp_context*); mm_test_trace_streaming(rdram, ctx); }' },
     { func = "func_80082820", text = '{ extern void mm_ws_band_repack(uint8_t*, recomp_context*); mm_ws_band_repack(rdram, ctx); }' },
     { func = "func_80082380", text = '{ extern void mm_ws_static_repack(uint8_t*, recomp_context*); mm_ws_static_repack(rdram, ctx); }' },
 ]
