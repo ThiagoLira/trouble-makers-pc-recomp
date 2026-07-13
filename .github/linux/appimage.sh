@@ -14,6 +14,11 @@
 #    are kept there (AppRun forwards the directory via APP_FOLDER_PATH).
 #  - On bleeding-edge hosts (Arch etc.) run with NO_STRIP=1: linuxdeploy's
 #    bundled strip predates .relr.dyn sections and dies on modern system libs.
+#  - The build host MUST have the SVG gdk-pixbuf loader installed
+#    (librsvg2-common on Debian/Ubuntu, librsvg on Arch) so the GTK plugin
+#    bundles it: the nfd file dialog renders the USER's icon theme, and
+#    SVG-based themes (very common) hard-crash GTK when the bundled pixbuf
+#    stack can't load SVGs.
 set -euo pipefail
 
 BINARY="${1:-build/src/game/mm_game}"

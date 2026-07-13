@@ -475,12 +475,26 @@ int main(int argc, char** argv) {
     // Tell translated-code hooks to populate the extra tile columns and omit
     // the original 4:3 side-border strips. Explicit environment values still
     // win, which keeps each layer independently switchable for diagnostics.
+    //
+    // The hooks read std::getenv (the CRT environment). On Windows,
+    // SDL_setenv writes the Win32 process environment, which the CRT
+    // snapshot never sees — the values must go through _putenv_s instead
+    // (overwrite=0 semantics preserved via the getenv check).
+    auto set_env_default = [](const char* name, const char* value) {
+#if defined(_WIN32)
+        if (std::getenv(name) == nullptr) {
+            _putenv_s(name, value);
+        }
+#else
+        SDL_setenv(name, value, 0);
+#endif
+    };
     if (g_widescreen) {
-        SDL_setenv("MM_WIDESCREEN_ACTIVE", "1", 0);
-        SDL_setenv("MM_BAND_WINGS", "1", 0);
-        SDL_setenv("MM_STATIC_WINGS", "1", 0);
-        SDL_setenv("MM_ENV_WINGS", "1", 0);
-        SDL_setenv("MM_MID_WINGS", "1", 0);
+        set_env_default("MM_WIDESCREEN_ACTIVE", "1");
+        set_env_default("MM_BAND_WINGS", "1");
+        set_env_default("MM_STATIC_WINGS", "1");
+        set_env_default("MM_ENV_WINGS", "1");
+        set_env_default("MM_MID_WINGS", "1");
     }
 
     // Build the runtime configuration. RSP + audio + input come from the
