@@ -20,7 +20,7 @@
 
 #include "imgui.h"
 #include "imgui_impl_sdl2_custom.h"                // SDL2 platform backend compiled into rt64
-#include "backends/imgui_impl_sdlrenderer2.h"      // renderer backend compiled into mm_game
+#include "backends/imgui_impl_sdlrenderer2.h"      // renderer backend compiled into the troublemakers exe
 #include "nfd.h"
 
 #include "librecomp/game.hpp"
@@ -116,7 +116,7 @@ Outcome run(std::u8string game_id, const std::string& version_string,
     }
 
     SDL_Window* window = SDL_CreateWindow(
-        "Mischief Makers: Recompiled",
+        "Trouble Makers",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
         640, 480, SDL_WINDOW_ALLOW_HIGHDPI);
     if (window == nullptr) {
@@ -203,9 +203,9 @@ Outcome run(std::u8string game_id, const std::string& version_string,
 
         // --- Title block ---------------------------------------------------
         ImGui::SetWindowFontScale(2.0f);
-        ImGui::TextUnformatted("Mischief Makers");
+        ImGui::TextUnformatted("Trouble Makers");
         ImGui::SetWindowFontScale(1.0f);
-        ImGui::TextDisabled("Recompiled  ·  v%s", version_string.c_str());
+        ImGui::TextDisabled("N64 recompilation  ·  v%s", version_string.c_str());
         ImGui::Dummy(ImVec2(0.0f, 8.0f));
 
         // --- ROM -----------------------------------------------------------

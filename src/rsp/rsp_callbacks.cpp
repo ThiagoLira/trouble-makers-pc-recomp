@@ -1,4 +1,4 @@
-// RSP callback glue for the Mischief Makers static recomp.
+// RSP callback glue for Trouble Makers: Recompiled.
 //
 // The only RSP microcode this game ships that RSPRecomp can handle is the audio
 // ucode `aspMain` (recompiled into generated/aspMain.cpp). Graphics RSP tasks

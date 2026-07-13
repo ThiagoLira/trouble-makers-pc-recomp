@@ -1,6 +1,6 @@
 // Input backend for ultramodern's input::callbacks_t, backed by SDL2.
 //
-// Mischief Makers is a 1-player game, so only controller 0 is serviced. Two
+// The game is 1-player, so only controller 0 is serviced. Two
 // sources feed port 0: the keyboard (always available, see the map below) and,
 // if one is attached, the first SDL game controller. Rumble is forwarded to
 // the game controller when supported.

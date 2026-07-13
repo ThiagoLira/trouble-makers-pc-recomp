@@ -1,4 +1,4 @@
-// mm_audio_input — Phase 2 audio + input + save glue for the Mischief Makers
+// mm_audio_input — Phase 2 audio + input + save glue for Trouble Makers:
 // static recomp. Backs ultramodern's abstract `audio_callbacks_t` and
 // `input::callbacks_t` with SDL2, and exposes the game's EEPROM save type for
 // the GameEntry that src/game/ registers with librecomp.
@@ -37,7 +37,7 @@ size_t get_frames_remaining();
 // get_connected_device_info). Hand this to recomp::Configuration::input_callbacks.
 ultramodern::input::callbacks_t input_callbacks();
 
-// The game's save type. Mischief Makers (US 1.1) uses 4Kbit EEPROM — see
+// The game's save type. The US 1.1 ROM uses 4Kbit EEPROM — see
 // PHASE2_NOTES_w4.md for the evidence (osEepromProbe/LongRead/LongWrite calls
 // in RecompiledFuncs, max block address 0x2C < 64-block 4K limit). Set this
 // on the GameEntry::save_type field when registering the game.
