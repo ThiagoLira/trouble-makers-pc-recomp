@@ -44,7 +44,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build libsdl2-dev libgtk-3-dev libvulkan-dev clang lld file
+          sudo apt-get install -y cmake ninja-build libsdl2-dev libgtk-3-dev libvulkan-dev file
       - name: Fetch private assets (troublemakers.elf, aspMain.cpp)
         run: |
           git clone --depth 1 "${{ secrets.TM_ASSETS_REPO }}" tm-assets
@@ -69,10 +69,13 @@ jobs:
           cmake -S tools/N64Recomp -B tools/N64Recomp/build -DCMAKE_BUILD_TYPE=Release -G Ninja
           cmake --build tools/N64Recomp/build --target N64RecompCLI -j "$(nproc)"
           ./tools/N64Recomp/build/N64Recomp troublemakers.us1.toml
+      # Default g++ (not clang): Ubuntu 22.04's libstdc++ declares extern
+      # templates for u8string that its .so doesn't ship, and clang then
+      # leaves _M_construct<char8_t> undefined at link. gcc matches the
+      # locally-verified toolchain.
       - name: Build mm_game
         run: |
-          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
           cmake --build build --target mm_game -j "$(nproc)"
       - name: Build AppImage
         run: ./.github/linux/appimage.sh
