@@ -90,23 +90,29 @@ jobs:
         run: choco install ninja
       - name: Configure Developer Command Prompt
         uses: ilammy/msvc-dev-cmd@v1
+      # shell: bash (Git Bash on the runner) for glob expansion and syntax
+      # shared with the Linux job — PowerShell passes *.patch to git literally.
       - name: Fetch private assets (troublemakers.elf)
+        shell: bash
         run: |
           git clone --depth 1 "${{ secrets.TM_ASSETS_REPO }}" tm-assets
-          New-Item -ItemType Directory -Force -Path input | Out-Null
-          Copy-Item tm-assets/troublemakers.elf input/
+          mkdir -p input
+          cp tm-assets/troublemakers.elf input/
       - name: Apply N64ModernRuntime patches (tm-fixes)
+        shell: bash
         run: |
           cd lib/N64ModernRuntime
           git apply ../../patches/N64ModernRuntime/*.patch
       - name: Clone + patch RT64
+        shell: bash
         run: |
-          git clone $env:RT64_REPO lib/rt64
+          git clone "$RT64_REPO" lib/rt64
           cd lib/rt64
-          git checkout $env:RT64_COMMIT
+          git checkout "$RT64_COMMIT"
           git submodule update --init --recursive
           git apply ../../patches/rt64/*.patch
       - name: Build N64Recomp and generate RecompiledFuncs
+        shell: bash
         run: |
           cmake -S tools/N64Recomp -B tools/N64Recomp/build -DCMAKE_BUILD_TYPE=Release -G Ninja
           cmake --build tools/N64Recomp/build --target N64Recomp -j
