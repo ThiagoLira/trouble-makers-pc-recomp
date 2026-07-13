@@ -1,6 +1,6 @@
 // src/game/main.cpp — Phase 2 worker w1 (game core).
 //
-// Host entry point for the Mischief Makers static recomp. Wires the translated
+// Host entry point for Trouble Makers (Mischief Makers recompilation). Wires the translated
 // game (mm_recompiled) to the librecomp/ultramodern runtime via
 // `recomp::start(Configuration)`, modeled on
 // reference/Zelda64Recomp/src/main/main.cpp.
@@ -218,7 +218,7 @@ ultramodern::renderer::WindowHandle create_window(ultramodern::gfx_callbacks_t::
         if (std::sscanf(wp, "%d,%d", &px, &py) == 2) { pos_x = px; pos_y = py; }
     }
     SDL_Window* win = SDL_CreateWindow(
-        "Mischief Makers: Recompiled",
+        "Trouble Makers",
         pos_x, pos_y,
         g_window_w, g_window_h, SDL_WINDOW_RESIZABLE);
     if (win == nullptr) {

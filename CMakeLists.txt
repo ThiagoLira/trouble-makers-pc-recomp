@@ -114,7 +114,7 @@ if(MM_BUILD_PROBE OR MM_ANY_COMPONENT)
         # No system SDL2 on Windows: fetch the prebuilt VC devel package, as
         # the reference does, and expose it under the same names find_package
         # would (variables + imported targets; mm_graphics links SDL2::SDL2).
-        # SDL2.dll is copied next to mm_game in src/game/CMakeLists.txt.
+        # SDL2.dll is copied next to troublemakers in src/game/CMakeLists.txt.
         include(FetchContent)
         if(DEFINED ENV{SDL2_VERSION})
             set(SDL2_VERSION $ENV{SDL2_VERSION})

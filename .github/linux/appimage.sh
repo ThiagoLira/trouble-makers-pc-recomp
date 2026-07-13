@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Package build/src/game/mm_game as an AppImage. Adapted from the reference
+# Package build/src/game/troublemakers as an AppImage. Adapted from the reference
 # project's .github/linux/appimage.sh (Zelda64Recomp).
 #
 # Run from the repository root after building:
-#   ./.github/linux/appimage.sh [path/to/mm_game]
+#   ./.github/linux/appimage.sh [path/to/troublemakers]
 #
 # Notes:
 #  - linuxdeploy and its GTK plugin are downloaded on first use; the GTK
@@ -21,11 +21,11 @@
 #    stack can't load SVGs.
 set -euo pipefail
 
-BINARY="${1:-build/src/game/mm_game}"
-APP_NAME="MischiefMakersRecompiled"
+BINARY="${1:-build/src/game/troublemakers}"
+APP_NAME="TroubleMakers"
 
 if [ ! -x "$BINARY" ]; then
-  echo "error: $BINARY not found or not executable (build mm_game first)" >&2
+  echo "error: $BINARY not found or not executable (build troublemakers first)" >&2
   exit 1
 fi
 
@@ -56,7 +56,7 @@ rm -rf deploy && mv squashfs-root deploy
 ./deploy/AppRun --appdir=AppDir/ \
   -d "AppDir/$APP_NAME.desktop" \
   -i "AppDir/$APP_NAME.png" \
-  -e AppDir/usr/bin/mm_game \
+  -e AppDir/usr/bin/troublemakers \
   --plugin gtk
 
 # Replace the generated exec line with a portable-mode-aware launch:
@@ -67,10 +67,10 @@ cat >> AppDir/AppRun <<'EOF'
 if [ -f "portable.txt" ]; then
     APP_FOLDER_PATH=$PWD
     cd "$this_dir"/usr/bin/
-    APP_FOLDER_PATH=$APP_FOLDER_PATH exec ./mm_game "$@"
+    APP_FOLDER_PATH=$APP_FOLDER_PATH exec ./troublemakers "$@"
 else
     cd "$this_dir"/usr/bin/
-    exec ./mm_game "$@"
+    exec ./troublemakers "$@"
 fi
 EOF
 

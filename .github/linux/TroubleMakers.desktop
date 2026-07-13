@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=Trouble Makers
+Type=Application
+Terminal=false
+Icon=TroubleMakers
+Exec=troublemakers
+GenericName=Mischief Makers (N64) recompilation
+Categories=Game;

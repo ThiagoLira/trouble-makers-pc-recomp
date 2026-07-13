@@ -73,17 +73,17 @@ jobs:
       # templates for u8string that its .so doesn't ship, and clang then
       # leaves _M_construct<char8_t> undefined at link. gcc matches the
       # locally-verified toolchain.
-      - name: Build mm_game
+      - name: Build troublemakers
         run: |
           cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-          cmake --build build --target mm_game -j "$(nproc)"
+          cmake --build build --target troublemakers -j "$(nproc)"
       - name: Build AppImage
         run: ./.github/linux/appimage.sh
       - name: Upload AppImage
         uses: actions/upload-artifact@v4
         with:
-          name: MischiefMakersRecompiled-AppImage-X64
-          path: MischiefMakersRecompiled-*.AppImage
+          name: TroubleMakers-AppImage-X64
+          path: TroubleMakers-*.AppImage
 
   build-windows:
     runs-on: windows-latest
@@ -134,18 +134,18 @@ jobs:
           cmake -S tools/N64Recomp -B tools/N64Recomp/build -DCMAKE_BUILD_TYPE=Release -G Ninja
           cmake --build tools/N64Recomp/build --target N64RecompCLI -j
           ./tools/N64Recomp/build/N64Recomp.exe troublemakers.us1.toml
-      - name: Build mm_game (clang-cl)
+      - name: Build troublemakers (clang-cl)
         run: |
           cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release `
             -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl
-          cmake --build build --target mm_game -j
+          cmake --build build --target troublemakers -j
       - name: Package
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Copy-Item build/src/game/mm_game.exe dist/
+          Copy-Item build/src/game/troublemakers.exe dist/
           Copy-Item build/src/game/*.dll dist/
       - name: Upload Windows build
         uses: actions/upload-artifact@v4
         with:
-          name: MischiefMakersRecompiled-Windows-X64
+          name: TroubleMakers-Windows-X64
           path: dist/

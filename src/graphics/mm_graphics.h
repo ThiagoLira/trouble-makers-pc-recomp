@@ -1,7 +1,7 @@
 #ifndef MM_GRAPHICS_H
 #define MM_GRAPHICS_H
 
-// mm_graphics — RT64-backed RDP renderer glue for the Mischief Makers static
+// mm_graphics — RT64-backed RDP renderer glue for Trouble Makers: Recompiled
 // recomp. Implements ultramodern::renderer::RendererContext (the abstract
 // render-context interface the runtime calls into) on top of RT64, handing
 // F3DEX display lists to RT64's interpreter. See PHASE2_NOTES_w3.md.

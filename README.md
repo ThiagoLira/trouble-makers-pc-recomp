@@ -1,21 +1,30 @@
-# Mischief Makers: Recompiled
+# Trouble Makers
 
-**A native PC port of Mischief Makers (N64, 1997) via static recompilation —
-playable, 60 fps, high-resolution, with correct sound.**
+**Trouble Makers is a native PC port of the Nintendo 64 game *Mischief Makers*
+(Treasure, 1997), produced by static recompilation — playable, 60 fps,
+high-resolution, with correct sound.**
 
 ![The intro cutscene rendering at 1920x1440](screenshots/intro-1920x1440.png)
 
-The whole game's MIPS code is translated to C once, ahead of time, by
-[N64Recomp](https://github.com/N64Recomp/N64Recomp), compiled natively, and
-linked against [N64ModernRuntime](https://github.com/N64Recomp/N64ModernRuntime)
-(a libultra re-implementation) with [RT64](https://github.com/rt64/rt64)
-rendering the display lists on Vulkan. Same approach as
-[Zelda64Recomp](https://github.com/Zelda64Recomp/Zelda64Recomp); this project
-covers a very different, very Treasure-shaped game.
+## What this is
 
-Sibling project: [trouble-makers-ai-recomp](../trouble-makers-ai-recomp) — the
-byte-perfect decompilation whose symbol-rich ELF makes this translation
-legible (every function arrives named).
+*Mischief Makers* is the original N64 game. **Trouble Makers** is a
+recompilation of it: the game's own MIPS machine code is translated to C once,
+ahead of time, by [N64Recomp](https://github.com/N64Recomp/N64Recomp),
+compiled natively for your PC, and linked against
+[N64ModernRuntime](https://github.com/N64Recomp/N64ModernRuntime) (a libultra
+re-implementation) with [RT64](https://github.com/rt64/rt64) rendering the
+display lists on Vulkan. It is not an emulator — there is no N64 CPU being
+simulated at runtime; the game *is* the native binary. Same approach as
+[Zelda64Recomp](https://github.com/Zelda64Recomp/Zelda64Recomp), applied to a
+very different, very Treasure-shaped game.
+
+That translation is made legible by a companion **decompilation**:
+[trouble-makers-ai-recomp](../trouble-makers-ai-recomp) reverse-engineers the
+game into readable, byte-perfect C, and its symbol-rich ELF is what feeds the
+recompiler here so every function arrives named. Decompilation (understanding
+the code) and recompilation (running it natively) are two halves of the same
+project.
 
 **No game assets, ROM contents, or recompiler output are in this repository.**
 Everything runs locally from your own legally dumped ROM.
@@ -77,7 +86,7 @@ actors, geometry, and tile layers are moving throughout each shot.
   components — build with **clang-cl** (`cmake -G Ninja
   -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl`); MSVC's cl is
   not supported for the generated C. SDL2 is fetched automatically and
-  SDL2.dll + the DXC DLLs are copied next to mm_game.exe. Saves/config go to
+  SDL2.dll + the DXC DLLs are copied next to troublemakers.exe. Saves/config go to
   `%LOCALAPPDATA%\troublemakers-recomp` (or next to the exe with a
   `portable.txt`).
 
@@ -110,19 +119,19 @@ tools/N64Recomp/build/RSPRecomp aspMain.us1.rsp.toml
 
 ```sh
 cmake -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build --target mm_game -j8
+cmake --build build --target troublemakers -j8
 
-./build/src/game/mm_game                                 # no args: launcher
+./build/src/game/troublemakers                                 # no args: launcher
 #   (splash screen: pick your ROM with a native file dialog, set resolution /
 #   fullscreen / widescreen, Start Game; remembers the ROM for next time)
-./build/src/game/mm_game path/to/your.z64                # windowed 1280x960
-./build/src/game/mm_game rom.z64 --fullscreen
-./build/src/game/mm_game rom.z64 --window 1920x1440 --msaa 4
-./build/src/game/mm_game rom.z64 --widescreen    # real 16:9 scene rendering:
+./build/src/game/troublemakers path/to/your.z64                # windowed 1280x960
+./build/src/game/troublemakers rom.z64 --fullscreen
+./build/src/game/troublemakers rom.z64 --window 1920x1440 --msaa 4
+./build/src/game/troublemakers rom.z64 --widescreen    # real 16:9 scene rendering:
 #   entities, foreground, scrolling backdrops, environment and midground
 #   tile maps are drawn beyond the original 4:3 frame. Plain launches retain
 #   the original presentation.
-./build/src/game/mm_game rom.z64 --no-widescreen # force original 4:3
+./build/src/game/troublemakers rom.z64 --no-widescreen # force original 4:3
 ```
 
 Widescreen uses the game's own wrapping maps and scene formulas—there is no
@@ -149,7 +158,7 @@ automatic mode boundary.
 Run the complete playable-level screenshot/crash suite with:
 
 ```sh
-tools/test_widescreen_playable.sh ./build/src/game/mm_game path/to/rom.z64 /tmp/mm-widescreen-suite
+tools/test_widescreen_playable.sh ./build/src/game/troublemakers path/to/rom.z64 /tmp/mm-widescreen-suite
 ```
 
 The suite targets exact progression-table stage indices, advances dialogue,
@@ -170,10 +179,10 @@ present and the game with it.
 ### AppImage
 
 ```sh
-./.github/linux/appimage.sh          # after building mm_game; NO_STRIP=1 on Arch-likes
+./.github/linux/appimage.sh          # after building troublemakers; NO_STRIP=1 on Arch-likes
 ```
 
-Produces `MischiefMakersRecompiled-x86_64.AppImage` (launcher included — no
+Produces `TroubleMakers-x86_64.AppImage` (launcher included — no
 CLI needed; the ROM is picked in the splash screen). Build it on the oldest
 distro you want to support: the AppImage requires the build machine's glibc
 or newer. Put a `portable.txt` next to the AppImage to keep config/saves in
