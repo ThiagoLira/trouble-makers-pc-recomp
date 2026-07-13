@@ -29,6 +29,23 @@ project.
 **No game assets, ROM contents, or recompiler output are in this repository.**
 Everything runs locally from your own legally dumped ROM.
 
+## Download & play
+
+Grab the latest build from the
+[Releases page](https://github.com/ThiagoLira/trouble-makers-pc-recomp/releases):
+
+- **Linux** — `TroubleMakers-x86_64.AppImage`. `chmod +x` it and run; needs a
+  Vulkan-capable GPU and glibc ≥ 2.35 (Ubuntu 22.04+).
+- **Windows** — `TroubleMakers-Windows-X64.zip`. Extract and run
+  `troublemakers.exe`.
+
+Then pick your own legally dumped **Mischief Makers (US 1.1)** ROM in the
+launcher — it validates the ROM and remembers it for next time. Drop a
+`portable.txt` next to the binary to keep saves and config beside it instead
+of in your user config directory.
+
+Prefer to build it yourself? See [Building and running](#building-and-running).
+
 ## Status
 
 - ✅ Boots, plays the full intro with correct music, title screen, menus
@@ -81,14 +98,13 @@ actors, geometry, and tile layers are moving throughout each shot.
 - The sibling decomp built once (its `./trouble build` produces `troublemakers.elf`)
 - Linux: gcc/g++ (C++20), CMake ≥ 3.24, SDL2, a Vulkan-capable GPU + loader
   (no Vulkan SDK needed — RT64 bundles headers and its shader compiler)
-- Windows (experimental, untested): Visual Studio 2022 with the "Desktop
-  development with C++", "C++ Clang Compiler" and "C++ CMake tools"
-  components — build with **clang-cl** (`cmake -G Ninja
-  -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl`); MSVC's cl is
-  not supported for the generated C. SDL2 is fetched automatically and
-  SDL2.dll + the DXC DLLs are copied next to troublemakers.exe. Saves/config go to
-  `%LOCALAPPDATA%\troublemakers-recomp` (or next to the exe with a
-  `portable.txt`).
+- Windows: Visual Studio 2022 with the "Desktop development with C++", "C++
+  Clang Compiler" and "C++ CMake tools" components — build with **clang-cl**
+  (`cmake -G Ninja -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl`);
+  MSVC's cl is not supported for the generated C. SDL2 is fetched
+  automatically and SDL2.dll + the DXC DLLs are copied next to
+  `troublemakers.exe`. Saves/config go to `%LOCALAPPDATA%\troublemakers-recomp`
+  (or next to the exe with a `portable.txt`).
 
 ### One-time setup
 
@@ -186,9 +202,13 @@ Produces `TroubleMakers-x86_64.AppImage` (launcher included — no
 CLI needed; the ROM is picked in the splash screen). Build it on the oldest
 distro you want to support: the AppImage requires the build machine's glibc
 or newer. Put a `portable.txt` next to the AppImage to keep config/saves in
-that folder instead of `~/.config/troublemakers-recomp`. CI scaffolding for
-Linux/AppImage and Windows artifacts lives in `.github/workflows/build.yml`
-(untested; needs a `TM_ASSETS_REPO` secret providing `troublemakers.elf` and the pregenerated `aspMain.cpp`).
+that folder instead of `~/.config/troublemakers-recomp`.
+
+CI (`.github/workflows/build.yml`) builds both the Linux AppImage and the
+Windows package on every push and uploads them as artifacts — the binaries on
+the Releases page come from it. It needs a `TM_ASSETS_REPO` secret pointing at
+a private repo with `troublemakers.elf` and the pregenerated `aspMain.cpp`, so
+the game's code never lives in this public repository.
 
 ### Controls
 
