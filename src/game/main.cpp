@@ -188,7 +188,11 @@ namespace mm::stub::gfx {
 // SEAM (graphics worker owns the real window). For bring-up we create a real
 // SDL window so the stretch run gets as far as window creation.
 ultramodern::gfx_callbacks_t::gfx_data_t create_gfx() {
+    // Windows-only hint, added in SDL 2.24 — absent from older SDL2 headers
+    // (Ubuntu 22.04 ships 2.0.20), and hint macros are #defines, so guard it.
+#ifdef SDL_HINT_WINDOWS_DPI_AWARENESS
     SDL_SetHint(SDL_HINT_WINDOWS_DPI_AWARENESS, "permonitorv2");
+#endif
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) < 0) {
         std::fprintf(stderr, "Failed to initialize SDL2: %s\n", SDL_GetError());
     }
