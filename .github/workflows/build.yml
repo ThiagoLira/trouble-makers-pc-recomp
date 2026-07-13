@@ -86,6 +86,11 @@ jobs:
     runs-on: windows-latest
     if: ${{ vars.HAS_ASSETS != '' || github.event_name == 'workflow_dispatch' }}
     steps:
+      # The runner's global autocrlf=true rewrites checked-out files (incl.
+      # our .patch files and the submodule sources) to CRLF, and git apply
+      # then can't match the LF sources. Disable BEFORE any checkout.
+      - name: Force LF checkouts
+        run: git config --global core.autocrlf false
       - name: Checkout
         uses: actions/checkout@v4
         with:
