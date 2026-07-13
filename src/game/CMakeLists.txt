@@ -46,6 +46,21 @@ target_link_libraries(mm_game PRIVATE
 if(TARGET mm_graphics)
     target_link_libraries(mm_game PRIVATE mm_graphics)
     target_compile_definitions(mm_game PRIVATE MM_HAS_GRAPHICS)
+
+    # Launcher splash screen (launcher.cpp): Dear ImGui + nativefiledialog-
+    # extended, both vendored and compiled inside RT64 (rt64.a provides the
+    # imgui core and the SDL2 platform backend; nfd is its own target). Only
+    # the SDL_Renderer backend TU is missing from rt64, so compile it here.
+    target_sources(mm_game PRIVATE
+        launcher.cpp
+        ${CMAKE_SOURCE_DIR}/lib/rt64/src/contrib/imgui/backends/imgui_impl_sdlrenderer2.cpp
+    )
+    target_include_directories(mm_game PRIVATE
+        ${CMAKE_SOURCE_DIR}/lib/rt64/src/contrib/imgui
+        ${CMAKE_SOURCE_DIR}/lib/rt64/src/imgui                                      # imgui_impl_sdl2_custom.h
+        ${CMAKE_SOURCE_DIR}/lib/rt64/src/contrib/nativefiledialog-extended/src/include
+    )
+    target_link_libraries(mm_game PRIVATE nfd)
 endif()
 
 # Enforce no unresolved symbols (matches the probe; surfaces any new gap).
