@@ -51,6 +51,19 @@ Both GIFs were captured from this build in the first playable level at the
 same idle sequence. Cinematics automatically use the original presentation;
 the renderer reopens the wings only after stable player control is detected.
 
+### Widescreen gallery
+
+These live captures use the automated controller driver, so the camera,
+actors, geometry, and tile layers are moving throughout each shot.
+
+| Meet Marina | Snowstorm Maze |
+|:--:|:--:|
+| ![Meet Marina running through the expanded forest](screenshots/widescreen-gallery/meet-marina.gif) | ![Marina traversing Snowstorm Maze in widescreen](screenshots/widescreen-gallery/snowstorm-maze.gif) |
+| Rolling Rock | ClanCe War 2 |
+| ![The Rolling Rock corridor extending across the widescreen frame](screenshots/widescreen-gallery/rolling-rock.gif) | ![The ClanCe War 2 battle filling a widescreen city road](screenshots/widescreen-gallery/clance-war-2.gif) |
+| Trapped | More captures |
+| ![Marina running across the widescreen rooftops in Trapped](screenshots/widescreen-gallery/trapped.gif) | Five more animated scenes are preserved in the [full widescreen gallery](screenshots/widescreen-gallery/README.md). |
+
 ## Building and running
 
 ### Prerequisites
