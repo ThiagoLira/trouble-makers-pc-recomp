@@ -179,7 +179,7 @@ distro you want to support: the AppImage requires the build machine's glibc
 or newer. Put a `portable.txt` next to the AppImage to keep config/saves in
 that folder instead of `~/.config/troublemakers-recomp`. CI scaffolding for
 Linux/AppImage and Windows artifacts lives in `.github/workflows/build.yml`
-(untested; needs a `TM_ASSETS_REPO` secret providing `troublemakers.elf`).
+(untested; needs a `TM_ASSETS_REPO` secret providing `troublemakers.elf` and the pregenerated `aspMain.cpp`).
 
 ### Controls
 

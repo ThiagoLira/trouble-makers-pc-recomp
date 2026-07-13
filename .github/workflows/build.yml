@@ -8,7 +8,8 @@
 # policy as the ROM). Provide it the way the reference provides its private
 # assets: a private repo cloned with a PAT. Set these repository secrets:
 #   TM_ASSETS_REPO   - e.g. https://x-access-token:<PAT>@github.com/<you>/<private-assets>.git
-#                      containing troublemakers.elf at its root.
+#                      containing troublemakers.elf and aspMain.cpp (RSPRecomp output)
+#                      at its root — the raw ROM never goes to GitHub.
 # Jobs are skipped when the secret is missing (forks, PRs from outside).
 #
 # Two known deltas from a local dev checkout:
@@ -43,12 +44,15 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build libsdl2-dev libgtk-3-dev clang lld file
-      - name: Fetch private assets (troublemakers.elf)
+          sudo apt-get install -y cmake ninja-build libsdl2-dev libgtk-3-dev libvulkan-dev clang lld file
+      - name: Fetch private assets (troublemakers.elf, aspMain.cpp)
         run: |
           git clone --depth 1 "${{ secrets.TM_ASSETS_REPO }}" tm-assets
-          mkdir -p input
+          mkdir -p input src/rsp/generated
           cp tm-assets/troublemakers.elf input/
+          # Pregenerated RSP microcode (RSPRecomp needs the raw ROM, which
+          # stays off GitHub; regenerate locally with aspMain.us1.rsp.toml)
+          cp tm-assets/aspMain.cpp src/rsp/generated/
       - name: Apply N64ModernRuntime patches (tm-fixes)
         run: |
           cd lib/N64ModernRuntime
@@ -92,12 +96,15 @@ jobs:
         uses: ilammy/msvc-dev-cmd@v1
       # shell: bash (Git Bash on the runner) for glob expansion and syntax
       # shared with the Linux job — PowerShell passes *.patch to git literally.
-      - name: Fetch private assets (troublemakers.elf)
+      - name: Fetch private assets (troublemakers.elf, aspMain.cpp)
         shell: bash
         run: |
           git clone --depth 1 "${{ secrets.TM_ASSETS_REPO }}" tm-assets
-          mkdir -p input
+          mkdir -p input src/rsp/generated
           cp tm-assets/troublemakers.elf input/
+          # Pregenerated RSP microcode (RSPRecomp needs the raw ROM, which
+          # stays off GitHub; regenerate locally with aspMain.us1.rsp.toml)
+          cp tm-assets/aspMain.cpp src/rsp/generated/
       - name: Apply N64ModernRuntime patches (tm-fixes)
         shell: bash
         run: |
