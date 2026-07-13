@@ -72,6 +72,11 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 endif()
 
 if(WIN32)
+    # rt64's interface carries bare "SDL2"/"SDL2main" names (its vendored
+    # win32 deps); resolve them against the fetched SDL2 libs, exactly as
+    # the reference does on its app target.
+    target_link_directories(mm_game PRIVATE ${sdl2_SOURCE_DIR}/lib/x64)
+
     # Ship the runtime DLLs next to the exe: SDL2 (fetched in the top-level
     # CMakeLists) and RT64's bundled DXC shader compiler. Same set the
     # reference copies.
