@@ -32,6 +32,9 @@
 
 #define SDL_MAIN_HANDLED
 #include <SDL2/SDL.h>
+#if defined(_WIN32)
+#include <SDL2/SDL_syswm.h> // HWND extraction for WindowHandle
+#endif
 
 #include "ultramodern/ultra64.h"
 #include "ultramodern/ultramodern.hpp"
@@ -228,7 +231,16 @@ ultramodern::renderer::WindowHandle create_window(ultramodern::gfx_callbacks_t::
         SDL_SetWindowFullscreen(win, SDL_WINDOW_FULLSCREEN_DESKTOP);
     }
     g_sdl_window = win;
+    // WindowHandle is platform-specific (renderer_context.hpp): HWND+thread
+    // on Windows, SDL_Window* on Linux. Same extraction as the reference.
+#if defined(_WIN32)
+    SDL_SysWMinfo wm_info;
+    SDL_VERSION(&wm_info.version);
+    SDL_GetWindowWMInfo(win, &wm_info);
+    return ultramodern::renderer::WindowHandle{wm_info.info.win.window, GetCurrentThreadId()};
+#else
     return ultramodern::renderer::WindowHandle{win};
+#endif
 }
 
 void update_gfx(ultramodern::gfx_callbacks_t::gfx_data_t) {

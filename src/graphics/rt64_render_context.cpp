@@ -147,7 +147,14 @@ class Rt64Context final : public ultramodern::renderer::RendererContext {
 public:
     Rt64Context(uint8_t* rdram, ultramodern::renderer::WindowHandle window, bool developer_mode) {
         RT64::Application::Core core{};
-        core.window = window; // WindowHandle is SDL_Window* on Linux, matching RT64's SDL backend.
+        // RT64's RenderWindow is HWND on Windows, SDL_Window* on Linux;
+        // ultramodern's WindowHandle wraps HWND+thread_id on Windows. Same
+        // split as the reference render context.
+#if defined(_WIN32)
+        core.window = window.window;
+#else
+        core.window = window;
+#endif
         core.checkInterrupts = no_interrupts;
 
         // RT64 dereferences all of these unconditionally. RDRAM is the

@@ -12,6 +12,9 @@ if(WIN32)
     # Same workaround as the reference: opt out of the constexpr std::mutex
     # constructor so the binary doesn't require a bleeding-edge vcredist.
     add_compile_definitions(_DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR)
+    # windows.h min/max macros break std::min/std::max everywhere (the
+    # reference sets this too).
+    add_compile_definitions(NOMINMAX)
 endif()
 
 # Output beside the build dir, not into source.
