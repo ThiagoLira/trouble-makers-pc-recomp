@@ -140,6 +140,21 @@ instruction = [
     { func = "func_800451E4", vram = 0x8004523C, value = 0x245E0180 }, # alternate window-right  0x100 ->  0x180
     { func = "func_800451E4", vram = 0x8004527C, value = 0x2457FE80 }, # normal window-left     -0xA8 -> -0x180
     { func = "func_800451E4", vram = 0x80045280, value = 0x245E0180 }, # normal window-right     0xA8 ->  0x180
+
+    # Clan blocks are emitted as RDP texture rectangles. The original draw
+    # path clamps every negative X coordinate to zero and advances texture S,
+    # physically cutting otherwise-live blocks at the 4:3 left edge. Always
+    # take the unclipped coordinate/zero-S paths; vertical clipping is kept.
+    { func = "func_8000DD6C", vram = 0x8000E22C, value = 0x10000003 },
+    { func = "func_8000DD6C", vram = 0x8000E274, value = 0x10000003 },
+    { func = "func_8000DD6C", vram = 0x8000E2C4, value = 0x10000003 },
+    { func = "func_8000DD6C", vram = 0x8000E3F0, value = 0x10000003 },
+    { func = "func_8000DD6C", vram = 0x8000E430, value = 0x10000003 },
+    { func = "func_8000DD6C", vram = 0x8000E484, value = 0x10000003 },
+    { func = "func_8000DD6C", vram = 0x8000E968, value = 0x10000003 },
+    { func = "func_8000DD6C", vram = 0x8000E9A0, value = 0x10000003 },
+    { func = "func_8000DD6C", vram = 0x8000E9F0, value = 0x10000003 },
+
     # Actor_IsOutsideRegion(actor, len): shared |x| > 0x90+len test used by
     # 19 sites (positional SFX radius + a few behavior gates). 0x90 is the
     # 4:3 half-width+margin; raise to 0x180 so behavior gates remain active

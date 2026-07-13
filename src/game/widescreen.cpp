@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <cstring>
 #include <cstdio>
 #include <cstdlib>
 
@@ -18,6 +19,8 @@ constexpr uint32_t kBandScratch = 0x9FFFF000u;
 constexpr uint32_t kFilteredActorList = 0x9FFFA000u;
 constexpr uint32_t kActors = 0x800EF510u;
 constexpr uint32_t kActorsTop = 0x80171F10u;
+constexpr uint32_t kClanBlocks = 0x801069E0u;
+constexpr uint32_t kClanBlockCount = 0x801782C0u;
 
 // The three 7x10 s32 layer grids the game passes to the draw funcs.
 constexpr uint32_t kMidBuffer = 0x80180930u;
@@ -328,14 +331,16 @@ extern "C" int mm_debug_warp_prepare(
         0, static_cast<gpr>(static_cast<int32_t>(kCurrentScene))));
 }
 
-// Test-only controller driver. The hook runs after the game has copied its
-// controller state into Marina's per-frame input words, so it can exercise
-// camera scrolling and actor streaming without depending on X11 focus. Move
-// right, pause, then left; the neutral gaps also expose stale-frame trails.
+// Test-only controller driver. The hook writes both the live and copied input
+// words so it can exercise camera scrolling and actor streaming without X11
+// focus. MM_TEST_MOVE=1 performs the original short right/left taps;
+// MM_TEST_MOVE=jet-right settles, double-taps right, then holds it long enough
+// to engage Marina's jet and traverse a meaningful part of the stage.
 extern "C" void mm_test_drive_marina(uint8_t* rdram) {
     static int motion_frame = 0;
     static uint16_t previous_direction = 0;
-    if (!env_enabled("MM_TEST_MOVE") ||
+    const char* move_mode = std::getenv("MM_TEST_MOVE");
+    if (move_mode == nullptr || move_mode[0] == '\0' || move_mode[0] == '0' ||
         !mm_widescreen_gameplay_active(rdram) ||
         MEM_HU(0, static_cast<gpr>(static_cast<int32_t>(kGameState))) != 6 ||
         MEM_HU(0, static_cast<gpr>(static_cast<int32_t>(kCannotPause))) != 0) {
@@ -344,9 +349,19 @@ extern "C" void mm_test_drive_marina(uint8_t* rdram) {
         return;
     }
 
-    const int phase = motion_frame++ % 120;
+    const bool jet_right = std::strcmp(move_mode, "jet-right") == 0;
+    const int cycle = jet_right ? 300 : 120;
+    const int phase = motion_frame++ % cycle;
     uint16_t direction = 0;
-    if (phase < 15) {
+    if (jet_right) {
+        // Two distinct rising edges, then a long hold: R, neutral, R+hold.
+        if ((phase >= 30 && phase < 32) ||
+            (phase >= 34 && phase < 270)) {
+            direction = MEM_HU(0,
+                static_cast<gpr>(static_cast<int32_t>(kButtonDRight)));
+        }
+    }
+    else if (phase < 15) {
         direction = MEM_HU(0,
             static_cast<gpr>(static_cast<int32_t>(kButtonDRight)));
     }
@@ -363,14 +378,39 @@ extern "C" void mm_test_drive_marina(uint8_t* rdram) {
     MEM_H(0, static_cast<gpr>(static_cast<int32_t>(kGlobalButtonPress))) = pressed;
     MEM_H(0, static_cast<gpr>(static_cast<int32_t>(kButtonHoldHistory))) = direction;
     MEM_H(0, static_cast<gpr>(static_cast<int32_t>(kButtonPressHistory))) = pressed;
-    if ((motion_frame % 60) == 0) {
+    if ((motion_frame % (jet_right ? 15 : 60)) == 0) {
+        const gpr marina = static_cast<gpr>(static_cast<int32_t>(kActors));
+        const int clan_slots = MEM_HU(0, static_cast<gpr>(
+            static_cast<int32_t>(kClanBlockCount)));
+        int clan_count = 0;
+        int clan_min_x = 32767;
+        int clan_max_x = -32768;
+        const gpr clan_blocks = static_cast<gpr>(
+            static_cast<int32_t>(kClanBlocks));
+        for (int i = 0; i < clan_slots && i < 64; ++i) {
+            if (MEM_HU(i * 0x90 + 0x80, clan_blocks) == 0) {
+                continue;
+            }
+            const int x = static_cast<int16_t>(MEM_HU(i * 0x90 + 0x84,
+                clan_blocks));
+            ++clan_count;
+            clan_min_x = x < clan_min_x ? x : clan_min_x;
+            clan_max_x = x > clan_max_x ? x : clan_max_x;
+        }
         std::fprintf(stderr,
-            "[test-move] phase=%d direction=%04x actor-x=%d camera-x=%d\n",
-            phase, direction,
+            "[test-move] mode=%s frame=%d phase=%d hold=%04x press=%04x "
+            "actor-x=%d camera-x=%d velocity-x=%d state=%04x "
+            "clan=%d range=%d..%d\n",
+            jet_right ? "jet-right" : "patrol", motion_frame, phase,
+            direction, pressed,
             static_cast<int32_t>(MEM_W(0, static_cast<gpr>(
-                static_cast<int32_t>(kMarinaActorPosX)))),
+                static_cast<int32_t>(kMarinaActorPosX)))) >> 16,
             static_cast<int32_t>(MEM_W(0, static_cast<gpr>(
-                static_cast<int32_t>(kCamX)))));
+                static_cast<int32_t>(kCamX)))) >> 16,
+            static_cast<int32_t>(MEM_W(0xEC, marina)) >> 16,
+            MEM_HU(0xD0, marina), clan_count,
+            clan_count == 0 ? 0 : clan_min_x,
+            clan_count == 0 ? 0 : clan_max_x);
     }
 }
 
