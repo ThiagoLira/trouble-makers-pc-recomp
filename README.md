@@ -104,6 +104,9 @@ tools/N64Recomp/build/RSPRecomp aspMain.us1.rsp.toml
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --target mm_game -j8
 
+./build/src/game/mm_game                                 # no args: launcher
+#   (splash screen: pick your ROM with a native file dialog, set resolution /
+#   fullscreen / widescreen, Start Game; remembers the ROM for next time)
 ./build/src/game/mm_game path/to/your.z64                # windowed 1280x960
 ./build/src/game/mm_game rom.z64 --fullscreen
 ./build/src/game/mm_game rom.z64 --window 1920x1440 --msaa 4
