@@ -67,7 +67,7 @@ jobs:
       - name: Build N64Recomp and generate RecompiledFuncs
         run: |
           cmake -S tools/N64Recomp -B tools/N64Recomp/build -DCMAKE_BUILD_TYPE=Release -G Ninja
-          cmake --build tools/N64Recomp/build --target N64Recomp -j "$(nproc)"
+          cmake --build tools/N64Recomp/build --target N64RecompCLI -j "$(nproc)"
           ./tools/N64Recomp/build/N64Recomp troublemakers.us1.toml
       - name: Build mm_game
         run: |
@@ -129,7 +129,7 @@ jobs:
         shell: bash
         run: |
           cmake -S tools/N64Recomp -B tools/N64Recomp/build -DCMAKE_BUILD_TYPE=Release -G Ninja
-          cmake --build tools/N64Recomp/build --target N64Recomp -j
+          cmake --build tools/N64Recomp/build --target N64RecompCLI -j
           ./tools/N64Recomp/build/N64Recomp.exe troublemakers.us1.toml
       - name: Build mm_game (clang-cl)
         run: |
