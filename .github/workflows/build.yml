@@ -113,7 +113,9 @@ jobs:
       - name: Clone + patch RT64
         shell: bash
         run: |
-          git clone "$RT64_REPO" lib/rt64
+          # autocrlf=false: Windows git otherwise checks out CRLF and the
+          # LF patch no longer applies
+          git clone -c core.autocrlf=false "$RT64_REPO" lib/rt64
           cd lib/rt64
           git checkout "$RT64_COMMIT"
           git submodule update --init --recursive
