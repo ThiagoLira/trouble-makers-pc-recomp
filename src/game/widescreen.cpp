@@ -15,6 +15,9 @@ constexpr uint32_t kGenericScratch = 0x9FFFC000u;
 constexpr uint32_t kEnvScratch = 0x9FFFD000u;
 constexpr uint32_t kMidScratch = 0x9FFFE000u;
 constexpr uint32_t kBandScratch = 0x9FFFF000u;
+constexpr uint32_t kFilteredActorList = 0x9FFFA000u;
+constexpr uint32_t kActors = 0x800EF510u;
+constexpr uint32_t kActorsTop = 0x80171F10u;
 
 // The three 7x10 s32 layer grids the game passes to the draw funcs.
 constexpr uint32_t kMidBuffer = 0x80180930u;
@@ -381,6 +384,41 @@ int16_t read_s16(uint8_t* rdram, uint32_t vaddr) {
     return static_cast<int16_t>(MEM_HU(0, rdram_gpr(vaddr)));
 }
 
+struct MidFillState {
+    int scene = -32768;
+    uint16_t x0 = 0;
+    uint16_t y0 = 0;
+    bool valid = false;
+};
+
+MidFillState g_mid_fill_state;
+
+void compute_mid_fill_bases(uint8_t* rdram, uint16_t& x0, uint16_t& y0) {
+    const int mode = MEM_HU(0, rdram_gpr(kMidMode));
+    const int map_h = MEM_HU(0, rdram_gpr(kMidMapH));
+    const int cam_x = read_s16(rdram, kCamX);
+    const int cam_y = read_s16(rdram, kCamY);
+    const int shake = read_s16(rdram, kCamShake);
+
+    int x;
+    if (mode == 0) {
+        x = cam_x - 0x92;
+    }
+    else if (mode == 1) {
+        x = static_cast<int>(static_cast<double>(cam_x) / 1.55 - 2.0);
+    }
+    else {
+        x = static_cast<int>(static_cast<double>(cam_x) / 1.55);
+    }
+    const int y = (mode == 3)
+        ? static_cast<int>(static_cast<double>(map_h) -
+            (static_cast<double>(cam_y) / 1.55 +
+                static_cast<double>(shake) - 92.0))
+        : (map_h - cam_y - shake + 0x5C);
+    x0 = static_cast<uint16_t>(x);
+    y0 = static_cast<uint16_t>(y);
+}
+
 // Wing tile -> s32 texture-pointer slot, exactly like the game's own
 // s16-grid fill + draw-side conversion: value = ((tile + addend) << 10) +
 // pool base, INCLUDING tile 0 (the game draws pool slot addend<<10 for it;
@@ -532,6 +570,62 @@ uint32_t remap_arena(uint32_t base) {
 
 } // namespace
 
+// func_8001107C fills the center tile grids near the start of the game tick.
+// The camera can move again before func_80082CFC converts and draws them, so
+// recomputing the midground origin at draw time can be one whole tile ahead
+// of the data being extended. Capture the exact fill-time origin instead.
+extern "C" void mm_ws_capture_mid_fill_state(
+    uint8_t* rdram, recomp_context* ctx) {
+    (void)ctx;
+    g_mid_fill_state.scene = static_cast<int16_t>(
+        MEM_HU(0, rdram_gpr(kCurrentScene)));
+    compute_mid_fill_bases(
+        rdram, g_mid_fill_state.x0, g_mid_fill_state.y0);
+    g_mid_fill_state.valid = true;
+}
+
+// Some stages add their color grading as a frozen, top-layer actor whose
+// graphic is exactly the original viewport. In expanded mode that becomes a
+// dark 4:3 box over an otherwise-correct widescreen background. Preserve the
+// effect in original-mode cinematics, but omit only this actor signature from
+// the gameplay draw list; scene art and ordinary actors stay untouched.
+extern "C" void mm_ws_filter_fixed_viewport_effects(
+    uint8_t* rdram, recomp_context* ctx) {
+    const uint32_t list = static_cast<uint32_t>(ctx->r4);
+    if (!g_gameplay_wide_active || list != kActorsTop) {
+        return;
+    }
+
+    const gpr filtered = rdram_gpr(kFilteredActorList);
+    const gpr actors = rdram_gpr(kActors);
+    int out = 0;
+    int removed = 0;
+    for (int slot = 0; slot < 240; ++slot) {
+        const int index = static_cast<int16_t>(MEM_HU(
+            slot * 2, rdram_gpr(list)));
+        if (index < 0) {
+            break;
+        }
+
+        const gpr actor = actors + index * 0x198;
+        const uint32_t flags = MEM_W(0x80, actor);
+        const bool fixed_viewport_effect =
+            MEM_HU(0xD2, actor) == 0x2700 && (flags & (1u << 3)) != 0;
+        if (fixed_viewport_effect) {
+            ++removed;
+        }
+        else {
+            MEM_H(out * 2, filtered) = index;
+            ++out;
+        }
+    }
+
+    if (removed != 0) {
+        MEM_H(out * 2, filtered) = -1;
+        ctx->r4 = filtered;
+    }
+}
+
 // Scrolling band (func_80082820 entry; sole live caller passes D_80180D90,
 // only when D_800BE6FC != 0). Per-row parallax X from D_8011D3B0[row]; rows
 // whose scroll is the -1 sentinel are skipped by the draw loop itself.
@@ -639,42 +733,55 @@ extern "C" void mm_ws_static_repack(uint8_t* rdram, recomp_context* ctx) {
         const bool wings = wings_active(rdram, "MM_MID_WINGS");
         const gpr map = rdram_gpr(kMidMap);
         const int addend = MEM_HU(0, rdram_gpr(kMidAddend));
-        const int mode = MEM_HU(0, rdram_gpr(kMidMode));
         const int col_mask = MEM_HU(0, rdram_gpr(kMidColMask));
         const int row_mask = MEM_HU(0, rdram_gpr(kMidRowMask));
         const int shift = MEM_HU(0, rdram_gpr(kMidShift)) & 0x1F;
-        const int map_h = MEM_HU(0, rdram_gpr(kMidMapH));
-        const int cam_x = read_s16(rdram, kCamX);
-        const int cam_y = read_s16(rdram, kCamY);
-        const int shake = read_s16(rdram, kCamShake);
-
-        // X/Y bases per parallax mode, from func_8001107C's switch.
-        int x0;
-        if (mode == 0) {
-            x0 = cam_x - 0x92;
-        }
-        else if (mode == 1) {
-            x0 = static_cast<int>(static_cast<double>(cam_x) / 1.55 - 2.0);
+        const int scene = static_cast<int16_t>(
+            MEM_HU(0, rdram_gpr(kCurrentScene)));
+        uint16_t x0;
+        uint16_t y0;
+        if (g_mid_fill_state.valid && g_mid_fill_state.scene == scene) {
+            x0 = g_mid_fill_state.x0;
+            y0 = g_mid_fill_state.y0;
         }
         else {
-            x0 = static_cast<int>(static_cast<double>(cam_x) / 1.55);
+            compute_mid_fill_bases(rdram, x0, y0);
         }
-        const int y0 = (mode == 3)
-            ? static_cast<int>(static_cast<double>(map_h) -
-                (static_cast<double>(cam_y) / 1.55 + static_cast<double>(shake) - 92.0))
-            : (map_h - cam_y - shake + 0x5C);
 
-        repack_grid(wc, [&](int row, int col) -> int32_t {
+        const auto mid_slot = [&](int row, int col) -> int32_t {
             // The game's fill writes rows in DESCENDING memory order (fill
             // row rf lands at memory row 6-rf), stepping y down 32 per fill
             // row; so memory/draw row r sits at y0 - (6-r)*32.
-            const uint32_t y = static_cast<uint32_t>((y0 - (6 - row) * 32) & 0xFFFF);
+            const uint32_t y = static_cast<uint16_t>(
+                y0 - (6 - row) * 32);
             const int row_block = static_cast<int>((y << shift) &
                 static_cast<uint32_t>(row_mask));
-            const int map_col = (((x0 & 0xFFFF) + col * 32 + 0x10000) >> 5) & col_mask;
+            const int map_col = ((static_cast<uint16_t>(
+                x0 + col * 32)) >> 5) & col_mask;
             const int tile = MEM_BU(map_col + row_block, map);
             return wing_slot(rdram, tile, addend, wc.texture_pool);
-        }, wings);
+        };
+        repack_grid(wc, mid_slot, wings);
+        if (env_enabled("MM_TEST_AUTO_ADVANCE")) {
+            int mismatches = 0;
+            for (int row = 0; row < 7; ++row) {
+                for (int col = 0; col < 10; ++col) {
+                    if (MEM_W((row * 10 + col) * 4, wc.src) !=
+                        mid_slot(row, col)) {
+                        ++mismatches;
+                    }
+                }
+            }
+            static int audited_scene = -1;
+            const int scene = static_cast<int16_t>(
+                MEM_HU(0, rdram_gpr(kCurrentScene)));
+            if (scene != audited_scene) {
+                audited_scene = scene;
+                std::fprintf(stderr,
+                    "[widescreen-formula] scene=%d layer=mid mismatches=%d/70\n",
+                    scene, mismatches);
+            }
+        }
     }
     else if (buffer == kBandBuffer) {
         // Non-scrolling background variant (D_800BE6FC == 0): same 16x16
@@ -686,12 +793,33 @@ extern "C" void mm_ws_static_repack(uint8_t* rdram, recomp_context* ctx) {
         const int x0 = (read_s16(rdram, kBackdropScrollX) - 2) & 0x1FF;
         const int y0 = (-12 - read_s16(rdram, kBackdropScrollY)) & 0x1FF;
 
-        repack_grid(wc, [&](int row, int col) -> int32_t {
+        const auto static_slot = [&](int row, int col) -> int32_t {
             const int row_block = ((y0 + row * 32) >> 1) & 0xF0;
             const int map_col = ((x0 + col * 32 + 512) >> 5) & 0xF;
             const int tile = MEM_BU(map_col + row_block, map);
             return wing_slot(rdram, tile, addend, wc.texture_pool);
-        }, wings);
+        };
+        repack_grid(wc, static_slot, wings);
+        if (env_enabled("MM_TEST_AUTO_ADVANCE")) {
+            int mismatches = 0;
+            for (int row = 0; row < 7; ++row) {
+                for (int col = 0; col < 10; ++col) {
+                    if (MEM_W((row * 10 + col) * 4, wc.src) !=
+                        static_slot(row, col)) {
+                        ++mismatches;
+                    }
+                }
+            }
+            static int audited_scene = -1;
+            const int scene = static_cast<int16_t>(
+                MEM_HU(0, rdram_gpr(kCurrentScene)));
+            if (scene != audited_scene) {
+                audited_scene = scene;
+                std::fprintf(stderr,
+                    "[widescreen-formula] scene=%d layer=static mismatches=%d/70\n",
+                    scene, mismatches);
+            }
+        }
     }
     else {
         // Unknown caller: center copy only, zero wings.

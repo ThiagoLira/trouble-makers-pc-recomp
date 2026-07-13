@@ -63,16 +63,17 @@ manual_funcs = [
 # The game culls actor/sprite DRAWING against a rect it recomputes every
 # frame as camX +/- 0x90 (144px) horizontally (Camera_UpdateViewBounds at
 # 0x800462F0, plus a LEFT re-set in func_800463C0). Patching the addiu
-# immediates to +/- 0x120 (288px, enough for 21:9) makes wing content update
+# immediates to +/- 0x180 (384px) makes wing content update, and keeps large
+# actors/geometry-backed props alive until their full bounds leave the screen
 # deterministically — the previous host-thread mirror raced the game's
 # per-frame rewrite and sprites flickered in the wings. In 4:3 the extra
 # margin only draws objects RT64 clips; verified no gameplay impact.
 # Y bounds (+/- 0x70) are left untouched.
 [patches]
 instruction = [
-    { func = "Camera_UpdateViewBounds", vram = 0x80046370, value = 0x2443FEE0 }, # LEFT  = camX - 0x120
-    { func = "Camera_UpdateViewBounds", vram = 0x80046398, value = 0x24440120 }, # RIGHT = camX + 0x120
-    { func = "func_800463C0",           vram = 0x800463E0, value = 0x25CFFEE0 }, # LEFT re-set = camX - 0x120
+    { func = "Camera_UpdateViewBounds", vram = 0x80046370, value = 0x2443FE80 }, # LEFT  = camX - 0x180
+    { func = "Camera_UpdateViewBounds", vram = 0x80046398, value = 0x24440180 }, # RIGHT = camX + 0x180
+    { func = "func_800463C0",           vram = 0x800463E0, value = 0x25CFFE80 }, # LEFT re-set = camX - 0x180
 
     # REAL-CONTENT WIDESCREEN — scrolling background band (func_80082820).
     # The band is a 7-row x 10-col grid of 32px CI8 tiles (exactly 320px) read
@@ -126,21 +127,25 @@ instruction = [
     #
     # func_80016D94: per-frame despawner. Kills ACTOR_FLAG_ONSCREEN_ONLY
     # actors (projectiles, particles, drops) outside camX +/- 0xD0 — INSIDE
-    # the wings. Widen to +/-0x150, keeping 48px slack over the 0x120 cull.
+    # the wings. Widen to +/-0x1C0, keeping 64px slack over the 0x180 cull.
     # Pure despawn (slot reclamation); widening only delays cleanup.
-    { func = "func_80016D94", vram = 0x80016E20, value = 0x28C1FEB0 }, # slti kill-left  -0xD0 -> -0x150
-    { func = "func_80016D94", vram = 0x80016E28, value = 0x28C10151 }, # slti kill-right  0xD1 ->  0x151
+    { func = "func_80016D94", vram = 0x80016E20, value = 0x28C1FE40 }, # slti kill-left  -0xD0 -> -0x1C0
+    { func = "func_80016D94", vram = 0x80016E28, value = 0x28C101C1 }, # slti kill-right  0xD1 ->  0x1C1
     # func_800451E4: gem/prop sprite windowing. Rebuilt statelessly from the
     # world-item table every frame; an item only gets one of the 64 sprite
-    # slots inside camX +/- 0xA8 (168px) — pops ~46px inside the wing. The
-    # alternate wide-mode window (D_800BE710, +/-0x100) already covers 16:9.
-    { func = "func_800451E4", vram = 0x8004527C, value = 0x2457FF18 }, # addiu window-left  -0xA8 -> -0xE8
-    { func = "func_800451E4", vram = 0x80045280, value = 0x245E00E8 }, # addiu window-right  0xA8 ->  0xE8
+    # slots inside camX +/- 0xA8 (168px) — pops ~46px inside the wing. Widen
+    # both the normal and alternate paths to +/-0x180 so wide props do not
+    # lose their slot while part of their sprite is still visible.
+    { func = "func_800451E4", vram = 0x80045238, value = 0x2457FE80 }, # alternate window-left  -0x100 -> -0x180
+    { func = "func_800451E4", vram = 0x8004523C, value = 0x245E0180 }, # alternate window-right  0x100 ->  0x180
+    { func = "func_800451E4", vram = 0x8004527C, value = 0x2457FE80 }, # normal window-left     -0xA8 -> -0x180
+    { func = "func_800451E4", vram = 0x80045280, value = 0x245E0180 }, # normal window-right     0xA8 ->  0x180
     # Actor_IsOutsideRegion(actor, len): shared |x| > 0x90+len test used by
     # 19 sites (positional SFX radius + a few behavior gates). 0x90 is the
-    # 4:3 half-width+margin; raise to 0xD8 (216 ~ the 16:9 half-width).
-    { func = "Actor_IsOutsideRegion", vram = 0x80028924, value = 0x270900D8 }, # +0x90 -> +0xD8
-    { func = "Actor_IsOutsideRegion", vram = 0x80028938, value = 0x240AFF28 }, # -0x90 -> -0xD8
+    # 4:3 half-width+margin; raise to 0x180 so behavior gates remain active
+    # for large entities crossing either widescreen wing.
+    { func = "Actor_IsOutsideRegion", vram = 0x80028924, value = 0x27090180 }, # +0x90 -> +0x180
+    { func = "Actor_IsOutsideRegion", vram = 0x80028938, value = 0x240AFE80 }, # -0x90 -> -0x180
 ]
 
 # Layer-hook architecture: the two draw funcs get entry hooks that call into
@@ -179,6 +184,12 @@ hook = [
     # map-derived wing columns (exact func_8001107C formulas, all parallax
     # modes) and a per-tile texture-residency check in place of the former
     # per-scene blacklists. Logic lives in src/game/widescreen.cpp.
+    # Capture the midground origin when the center grid is filled; the camera
+    # may advance again before its later draw hook runs.
+    { func = "func_8001107C", text = '{ extern void mm_ws_capture_mid_fill_state(uint8_t*, recomp_context*); mm_ws_capture_mid_fill_state(rdram, ctx); }' },
+    # Fixed-viewport color grading is implemented as a frozen top-layer actor
+    # in several stages. Drop that actor only while gameplay is expanded.
+    { func = "func_80009BE8", text = '{ extern void mm_ws_filter_fixed_viewport_effects(uint8_t*, recomp_context*); mm_ws_filter_fixed_viewport_effects(rdram, ctx); }' },
     { func = "func_80082820", text = '{ extern void mm_ws_band_repack(uint8_t*, recomp_context*); mm_ws_band_repack(rdram, ctx); }' },
     { func = "func_80082380", text = '{ extern void mm_ws_static_repack(uint8_t*, recomp_context*); mm_ws_static_repack(rdram, ctx); }' },
 ]
