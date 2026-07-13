@@ -24,6 +24,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <string_view>
 #include <memory>
@@ -31,6 +32,9 @@
 
 #define SDL_MAIN_HANDLED
 #include <SDL2/SDL.h>
+#if defined(_WIN32)
+#include <SDL2/SDL_syswm.h> // HWND extraction for WindowHandle
+#endif
 
 #include "ultramodern/ultra64.h"
 #include "ultramodern/ultramodern.hpp"
@@ -38,6 +42,7 @@
 #include "librecomp/overlays.hpp"
 #include "recomp.h"
 
+#include "app_dirs.h"
 #include "mm_rsp.hpp"
 #include "mm_audio_input.hpp"
 #ifdef MM_HAS_GRAPHICS
@@ -138,27 +143,27 @@ static void apply_display_config() {
 
 // Persist display options across runs: a tiny key=value file next to the
 // saves. CLI flags override the file; runtime toggles write it back.
+// fstream (not fopen) because filesystem::path::c_str() is wchar_t* on
+// Windows; the stream constructors take the path directly on any platform.
 static std::filesystem::path display_cfg_path() {
-    const char* home = getenv("HOME");
-    return std::filesystem::path(home ? home : ".") / ".config" / "troublemakers-recomp" / "display.cfg";
+    return mm::get_app_folder_path() / "display.cfg";
 }
 
 static void load_display_config() {
-    std::FILE* f = std::fopen(display_cfg_path().c_str(), "r");
-    if (!f) return;
-    char line[1024];
-    while (std::fgets(line, sizeof line, f) != nullptr) {
-        char* eq = std::strchr(line, '=');
-        if (eq == nullptr) continue;
-        *eq = '\0';
-        std::string_view k = line;
-        char* v = eq + 1;
-        if (char* nl = std::strchr(v, '\n')) *nl = '\0';
+    std::ifstream f(display_cfg_path());
+    if (!f.is_open()) return;
+    std::string line;
+    while (std::getline(f, line)) {
+        size_t eq = line.find('=');
+        if (eq == std::string::npos) continue;
+        std::string_view k = std::string_view(line).substr(0, eq);
+        std::string v = line.substr(eq + 1);
+        if (!v.empty() && v.back() == '\r') v.pop_back(); // tolerate CRLF
         if (k == "rom") {
             g_rom_path = v; // UTF-8 path; may legitimately contain spaces
             continue;
         }
-        int value = std::atoi(v);
+        int value = std::atoi(v.c_str());
         if (k == "window_w" && value >= 320) g_window_w = value;
         else if (k == "window_h" && value >= 240) g_window_h = value;
         else if (k == "fullscreen") g_fullscreen = value != 0;
@@ -166,27 +171,31 @@ static void load_display_config() {
         else if (k == "ssaa" && value >= 1 && value <= 8) g_ssaa = value;
         else if (k == "msaa" && (value == 0 || value == 2 || value == 4 || value == 8)) g_msaa = value;
     }
-    std::fclose(f);
 }
 
 static void save_display_config() {
     std::error_code ec;
     std::filesystem::create_directories(display_cfg_path().parent_path(), ec);
-    std::FILE* f = std::fopen(display_cfg_path().c_str(), "w");
-    if (!f) return;
-    std::fprintf(f, "window_w=%d\nwindow_h=%d\nfullscreen=%d\nwidescreen=%d\nssaa=%d\nmsaa=%d\n",
-                 g_window_w, g_window_h, g_fullscreen ? 1 : 0, g_widescreen ? 1 : 0, g_ssaa, g_msaa);
+    std::ofstream f(display_cfg_path(), std::ios::trunc);
+    if (!f.is_open()) return;
+    f << "window_w=" << g_window_w << "\nwindow_h=" << g_window_h
+      << "\nfullscreen=" << (g_fullscreen ? 1 : 0)
+      << "\nwidescreen=" << (g_widescreen ? 1 : 0)
+      << "\nssaa=" << g_ssaa << "\nmsaa=" << g_msaa << "\n";
     if (!g_rom_path.empty()) {
-        std::fprintf(f, "rom=%s\n", g_rom_path.c_str());
+        f << "rom=" << g_rom_path << "\n";
     }
-    std::fclose(f);
 }
 
 namespace mm::stub::gfx {
 // SEAM (graphics worker owns the real window). For bring-up we create a real
 // SDL window so the stretch run gets as far as window creation.
 ultramodern::gfx_callbacks_t::gfx_data_t create_gfx() {
+    // Windows-only hint, added in SDL 2.24 — absent from older SDL2 headers
+    // (Ubuntu 22.04 ships 2.0.20), and hint macros are #defines, so guard it.
+#ifdef SDL_HINT_WINDOWS_DPI_AWARENESS
     SDL_SetHint(SDL_HINT_WINDOWS_DPI_AWARENESS, "permonitorv2");
+#endif
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) < 0) {
         std::fprintf(stderr, "Failed to initialize SDL2: %s\n", SDL_GetError());
     }
@@ -222,7 +231,16 @@ ultramodern::renderer::WindowHandle create_window(ultramodern::gfx_callbacks_t::
         SDL_SetWindowFullscreen(win, SDL_WINDOW_FULLSCREEN_DESKTOP);
     }
     g_sdl_window = win;
+    // WindowHandle is platform-specific (renderer_context.hpp): HWND+thread
+    // on Windows, SDL_Window* on Linux. Same extraction as the reference.
+#if defined(_WIN32)
+    SDL_SysWMinfo wm_info;
+    SDL_VERSION(&wm_info.version);
+    SDL_GetWindowWMInfo(win, &wm_info);
+    return ultramodern::renderer::WindowHandle{wm_info.info.win.window, GetCurrentThreadId()};
+#else
     return ultramodern::renderer::WindowHandle{win};
+#endif
 }
 
 void update_gfx(ultramodern::gfx_callbacks_t::gfx_data_t) {
@@ -388,7 +406,7 @@ int main(int argc, char** argv) {
     // Store config (mods, saves) under a per-project folder in the user's
     // config dir. Sibling workers may relocate this.
     namespace fs = std::filesystem;
-    fs::path config_dir = fs::path(getenv("HOME") ? getenv("HOME") : ".") / ".config" / "troublemakers-recomp";
+    fs::path config_dir = mm::get_app_folder_path();
     std::error_code ec;
     fs::create_directories(config_dir, ec);
     mm_audio_input::register_save_config(config_dir); // recomp::register_config_path

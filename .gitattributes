@@ -1,0 +1,4 @@
+# Patches must check out byte-exact (LF) or git apply fails against LF sources
+patches/** -text
+*.patch -text
+*.sh text eol=lf

@@ -48,6 +48,14 @@ constexpr Preset kPresets[] = {
 };
 
 // Same messages as the reference launcher's select_rom switch.
+// filesystem::path -> UTF-8 std::string (what ImGui expects). path::string()
+// narrows through the ACP codepage on Windows and can throw; u8string() is
+// UTF-8 on every platform.
+std::string path_to_utf8(const std::filesystem::path& p) {
+    std::u8string u8 = p.u8string();
+    return std::string(u8.begin(), u8.end());
+}
+
 const char* rom_error_message(recomp::RomValidationError err) {
     switch (err) {
         case recomp::RomValidationError::Good:             return nullptr;
@@ -151,7 +159,7 @@ Outcome run(std::u8string game_id, const std::string& version_string,
             rom_valid = recomp::select_rom(rom_path, game_id) == recomp::RomValidationError::Good;
         }
         if (rom_valid) {
-            rom_display = rom_path.filename().string();
+            rom_display = path_to_utf8(rom_path.filename());
         } else {
             rom_path.clear(); // stale entry; ask again, but don't show an error
         }
@@ -221,7 +229,7 @@ Outcome run(std::u8string game_id, const std::string& version_string,
                         rom_valid = true;
                         rom_error.clear();
                         rom_path = p;
-                        rom_display = p.filename().string();
+                        rom_display = path_to_utf8(p.filename());
                     } else {
                         rom_error = rom_error_message(err);
                     }

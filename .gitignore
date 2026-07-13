@@ -12,3 +12,9 @@ build_*/
 lib/rt64/
 *.log
 src/rsp/generated/
+
+# AppImage packaging outputs (.github/linux/appimage.sh)
+AppDir/
+deploy/
+linuxdeploy*
+*.AppImage
