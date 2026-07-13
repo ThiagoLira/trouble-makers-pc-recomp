@@ -1,10 +1,18 @@
-cmake_minimum_required(VERSION 3.20)
+# 3.24 for $<LINK_LIBRARY:WHOLE_ARCHIVE,...> (portable whole-archive across
+# GNU ld / lld-link / ld64; see src/game/CMakeLists.txt).
+cmake_minimum_required(VERSION 3.24)
 
 project(troublemakers_recomp LANGUAGES C CXX)
 set(CMAKE_C_STANDARD 17)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+if(WIN32)
+    # Same workaround as the reference: opt out of the constexpr std::mutex
+    # constructor so the binary doesn't require a bleeding-edge vcredist.
+    add_compile_definitions(_DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR)
+endif()
 
 # Output beside the build dir, not into source.
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
@@ -34,20 +42,38 @@ set(RUNTIME_INCLUDES
 # ----------------------------------------------------------------------------
 add_library(mm_recompiled STATIC)
 
-target_compile_options(mm_recompiled PRIVATE
-    # 30k+ flat extern-C symbols (including generic names like `send`, from
-    # translated static functions) must never enter the executable's dynamic
-    # symbol table: a linked shared lib with a matching undefined symbol (e.g.
-    # libdbus's send(2)) would resolve to translated MIPS code and crash.
-    -fvisibility=hidden
-    -fno-strict-aliasing          # MEM_* macros type-pun rdram bytes
-    -Wno-unused-variable
-    -Wno-unused-but-set-variable
-    -Wno-builtin-declaration-mismatch
-    $<$<COMPILE_LANGUAGE:C>:-Wno-implicit-function-declaration>
-    $<$<COMPILE_LANGUAGE:C>:-Wno-incompatible-pointer-types>
-    $<$<COMPILE_LANGUAGE:C>:-Wno-int-conversion>
-)
+if(NOT WIN32)
+    target_compile_options(mm_recompiled PRIVATE
+        # 30k+ flat extern-C symbols (including generic names like `send`, from
+        # translated static functions) must never enter the executable's dynamic
+        # symbol table: a linked shared lib with a matching undefined symbol (e.g.
+        # libdbus's send(2)) would resolve to translated MIPS code and crash.
+        # (Not a Windows concern: PE executables export nothing by default.)
+        -fvisibility=hidden
+        -fno-strict-aliasing          # MEM_* macros type-pun rdram bytes
+        -Wno-unused-variable
+        -Wno-unused-but-set-variable
+        -Wno-builtin-declaration-mismatch
+        $<$<COMPILE_LANGUAGE:C>:-Wno-implicit-function-declaration>
+        $<$<COMPILE_LANGUAGE:C>:-Wno-incompatible-pointer-types>
+        $<$<COMPILE_LANGUAGE:C>:-Wno-int-conversion>
+    )
+else()
+    # Windows builds require clang-cl (VS "C++ Clang Compiler" component, like
+    # the reference project) — MSVC's cl is not supported for the generated C.
+    # clang-cl accepts -W* natively; -f flags go through the /clang: prefix.
+    if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+        message(WARNING "mm_recompiled: build with clang-cl on Windows (cl.exe is unsupported for the generated code)")
+    endif()
+    target_compile_options(mm_recompiled PRIVATE
+        /clang:-fno-strict-aliasing   # MEM_* macros type-pun rdram bytes
+        -Wno-unused-variable
+        -Wno-unused-but-set-variable
+        $<$<COMPILE_LANGUAGE:C>:-Wno-implicit-function-declaration>
+        $<$<COMPILE_LANGUAGE:C>:-Wno-incompatible-pointer-types>
+        $<$<COMPILE_LANGUAGE:C>:-Wno-int-conversion>
+    )
+endif()
 
 target_include_directories(mm_recompiled PRIVATE
     ${CMAKE_SOURCE_DIR}/include            # game-specific shim (recomp_config.h, etc.)
@@ -81,7 +107,43 @@ if(MM_BUILD_PROBE OR MM_ANY_COMPONENT)
     # The runtime platform layer (ultramodern/src/audio.cpp) pulls in SDL2.
     # The runtime's own CMakeLists doesn't find_package it — the host app is
     # expected to. Provide SDL2 on the include path before adding the runtime.
-    find_package(SDL2 REQUIRED)
+    if(WIN32)
+        # No system SDL2 on Windows: fetch the prebuilt VC devel package, as
+        # the reference does, and expose it under the same names find_package
+        # would (variables + imported targets; mm_graphics links SDL2::SDL2).
+        # SDL2.dll is copied next to mm_game in src/game/CMakeLists.txt.
+        include(FetchContent)
+        if(DEFINED ENV{SDL2_VERSION})
+            set(SDL2_VERSION $ENV{SDL2_VERSION})
+        else()
+            set(SDL2_VERSION "2.30.3")
+        endif()
+        FetchContent_Declare(
+            sdl2
+            URL https://github.com/libsdl-org/SDL/releases/download/release-${SDL2_VERSION}/SDL2-devel-${SDL2_VERSION}-VC.zip
+        )
+        FetchContent_MakeAvailable(sdl2)
+        set(SDL2_INCLUDE_DIRS ${sdl2_SOURCE_DIR}/include)
+        add_library(SDL2::SDL2 SHARED IMPORTED)
+        set_target_properties(SDL2::SDL2 PROPERTIES
+            IMPORTED_LOCATION ${sdl2_SOURCE_DIR}/lib/x64/SDL2.dll
+            IMPORTED_IMPLIB   ${sdl2_SOURCE_DIR}/lib/x64/SDL2.lib
+            INTERFACE_INCLUDE_DIRECTORIES ${sdl2_SOURCE_DIR}/include
+        )
+        add_library(SDL2::SDL2main STATIC IMPORTED)
+        set_target_properties(SDL2::SDL2main PROPERTIES
+            IMPORTED_LOCATION ${sdl2_SOURCE_DIR}/lib/x64/SDL2main.lib
+        )
+        set(SDL2_LIBRARIES SDL2::SDL2 SDL2::SDL2main)
+        # Our code includes <SDL2/SDL.h>; the VC package unpacks headers flat
+        # under include/. Mirror them into an SDL2/ prefix dir.
+        file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/sdl2-compat-include/SDL2)
+        file(GLOB _sdl2_headers ${sdl2_SOURCE_DIR}/include/*.h)
+        file(COPY ${_sdl2_headers} DESTINATION ${CMAKE_BINARY_DIR}/sdl2-compat-include/SDL2)
+        list(APPEND SDL2_INCLUDE_DIRS ${CMAKE_BINARY_DIR}/sdl2-compat-include)
+    else()
+        find_package(SDL2 REQUIRED)
+    endif()
     include_directories(${SDL2_INCLUDE_DIRS})
 
     add_subdirectory(${RUNTIME_DIR} ${CMAKE_BINARY_DIR}/N64ModernRuntime)

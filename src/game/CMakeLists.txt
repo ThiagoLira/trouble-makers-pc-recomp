@@ -18,6 +18,7 @@
 
 add_executable(mm_game
     main.cpp
+    app_dirs.cpp
     register_overlays.cpp
     os_stubs.cpp
     widescreen.cpp
@@ -31,11 +32,11 @@ target_include_directories(mm_game PRIVATE
 
 # Component libraries are reached through the callback structs main() builds,
 # so normal linking suffices for them — only the game + runtime need
-# --whole-archive (data-driven function tables, see above).
+# whole-archive (data-driven function tables, see above). The LINK_LIBRARY
+# generator expression emits --whole-archive / /WHOLEARCHIVE / -force_load
+# per linker (needs CMake 3.24; set at the top-level CMakeLists).
 target_link_libraries(mm_game PRIVATE
-    "-Wl,--whole-archive"
-    mm_recompiled librecomp ultramodern
-    "-Wl,--no-whole-archive"
+    "$<LINK_LIBRARY:WHOLE_ARCHIVE,mm_recompiled,librecomp,ultramodern>"
     mm_rsp
     mm_audio_input
     ${SDL2_LIBRARIES}
@@ -65,4 +66,26 @@ if(TARGET mm_graphics)
 endif()
 
 # Enforce no unresolved symbols (matches the probe; surfaces any new gap).
-target_link_options(mm_game PRIVATE -Wl,--no-undefined)
+# GNU-ld flag; MSVC's link.exe already hard-errors on undefined symbols.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_options(mm_game PRIVATE -Wl,--no-undefined)
+endif()
+
+if(WIN32)
+    # Ship the runtime DLLs next to the exe: SDL2 (fetched in the top-level
+    # CMakeLists) and RT64's bundled DXC shader compiler. Same set the
+    # reference copies.
+    add_custom_command(TARGET mm_game POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_PROPERTY:SDL2::SDL2,IMPORTED_LOCATION>"
+            "${CMAKE_SOURCE_DIR}/lib/rt64/src/contrib/dxc/bin/x64/dxil.dll"
+            "${CMAKE_SOURCE_DIR}/lib/rt64/src/contrib/dxc/bin/x64/dxcompiler.dll"
+            $<TARGET_FILE_DIR:mm_game>)
+    # GUI subsystem for release so no console window flashes; keep the
+    # console in Debug for logs. mainCRTStartup keeps our plain main().
+    set_target_properties(mm_game PROPERTIES
+        LINK_FLAGS_DEBUG "/SUBSYSTEM:CONSOLE"
+        LINK_FLAGS_RELEASE "/SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup"
+        LINK_FLAGS_RELWITHDEBINFO "/SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup"
+        LINK_FLAGS_MINSIZEREL "/SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup")
+endif()

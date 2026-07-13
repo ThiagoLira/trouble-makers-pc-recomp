@@ -13,7 +13,13 @@
 
 #include <cstdio>
 #include <cstdlib>
+
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#else
 #include <sys/mman.h>
+#endif
 
 #include <atomic>
 #include <chrono>
@@ -103,10 +109,24 @@ void on_game_init(uint8_t* rdram, recomp_context* /*ctx*/) {
     // tracks the real DAC queue depth instead of always reading zero.
     constexpr uint32_t kAiRegsVaddr = 0xA4500000u;
     void* ai_page = rdram + (kAiRegsVaddr - 0x80000000u);
+#if defined(_WIN32)
+    // librecomp reserves the whole rdram range with VirtualAlloc
+    // (MEM_COMMIT|MEM_RESERVE, PAGE_NOACCESS) and flips the low mem_size to
+    // PAGE_READWRITE (librecomp/src/recomp.cpp) — the POSIX branch's
+    // mmap(PROT_NONE)+mprotect twin. Committing our extra page is the same
+    // one-call protection flip.
+    DWORD old_protect = 0;
+    if (VirtualProtect(ai_page, 0x1000, PAGE_READWRITE, &old_protect) == 0) {
+        std::fprintf(stderr, "[recomp] VirtualProtect(AI register page) failed: %lu\n",
+                     GetLastError());
+        return;
+    }
+#else
     if (mprotect(ai_page, 0x1000, PROT_READ | PROT_WRITE) != 0) {
         std::perror("[recomp] mprotect(AI register page)");
         return;
     }
+#endif
 
     // 0xA4500004 - 0x80000000 = 0x24500004, which is 4-byte aligned, so a plain
     // aligned word store is valid (no swizzle crossing). volatile: this is a

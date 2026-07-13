@@ -1,0 +1,128 @@
+# CI builds: Linux (+ AppImage) and Windows. Modeled on the reference
+# project's validate.yml (Zelda64Recomp).
+#
+# UNTESTED SCAFFOLD — written offline; expect to iterate on the first runs.
+#
+# The build needs `input/troublemakers.elf` (the byte-perfect decomp build:
+# it contains the game's code, so it must NOT live in this repository, same
+# policy as the ROM). Provide it the way the reference provides its private
+# assets: a private repo cloned with a PAT. Set these repository secrets:
+#   TM_ASSETS_REPO   - e.g. https://x-access-token:<PAT>@github.com/<you>/<private-assets>.git
+#                      containing troublemakers.elf at its root.
+# Jobs are skipped when the secret is missing (forks, PRs from outside).
+#
+# Two known deltas from a local dev checkout:
+#  - lib/N64ModernRuntime is pinned to upstream; the local tm-fixes branch ==
+#    pin + patches/N64ModernRuntime/*.patch, so CI applies those patches.
+#  - lib/rt64 is a nested repo, not a submodule: CI clones the pinned fork
+#    and applies patches/rt64/*.patch.
+name: build
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  RT64_REPO: https://github.com/rt64/rt64.git
+  RT64_COMMIT: 23cab603  # pinned fork commit; see src/graphics/CMakeLists.txt
+
+jobs:
+  build-linux:
+    # Oldest runner available: the AppImage only runs on glibc >= the build
+    # machine's. (The reference uses ubuntu-18.04 via custom runners; on
+    # public GitHub runners ubuntu-22.04 is the floor.)
+    runs-on: ubuntu-22.04
+    if: ${{ vars.HAS_ASSETS != '' || github.event_name == 'workflow_dispatch' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build libsdl2-dev libgtk-3-dev clang lld file
+      - name: Fetch private assets (troublemakers.elf)
+        run: |
+          git clone --depth 1 "${{ secrets.TM_ASSETS_REPO }}" tm-assets
+          mkdir -p input
+          cp tm-assets/troublemakers.elf input/
+      - name: Apply N64ModernRuntime patches (tm-fixes)
+        run: |
+          cd lib/N64ModernRuntime
+          git apply ../../patches/N64ModernRuntime/*.patch
+      - name: Clone + patch RT64
+        run: |
+          git clone "$RT64_REPO" lib/rt64
+          cd lib/rt64
+          git checkout "$RT64_COMMIT"
+          git submodule update --init --recursive
+          git apply ../../patches/rt64/*.patch
+      - name: Build N64Recomp and generate RecompiledFuncs
+        run: |
+          cmake -S tools/N64Recomp -B tools/N64Recomp/build -DCMAKE_BUILD_TYPE=Release -G Ninja
+          cmake --build tools/N64Recomp/build --target N64Recomp -j "$(nproc)"
+          ./tools/N64Recomp/build/N64Recomp troublemakers.us1.toml
+      - name: Build mm_game
+        run: |
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+          cmake --build build --target mm_game -j "$(nproc)"
+      - name: Build AppImage
+        run: ./.github/linux/appimage.sh
+      - name: Upload AppImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: MischiefMakersRecompiled-AppImage-X64
+          path: MischiefMakersRecompiled-*.AppImage
+
+  build-windows:
+    runs-on: windows-latest
+    if: ${{ vars.HAS_ASSETS != '' || github.event_name == 'workflow_dispatch' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install dependencies
+        run: choco install ninja
+      - name: Configure Developer Command Prompt
+        uses: ilammy/msvc-dev-cmd@v1
+      - name: Fetch private assets (troublemakers.elf)
+        run: |
+          git clone --depth 1 "${{ secrets.TM_ASSETS_REPO }}" tm-assets
+          New-Item -ItemType Directory -Force -Path input | Out-Null
+          Copy-Item tm-assets/troublemakers.elf input/
+      - name: Apply N64ModernRuntime patches (tm-fixes)
+        run: |
+          cd lib/N64ModernRuntime
+          git apply ../../patches/N64ModernRuntime/*.patch
+      - name: Clone + patch RT64
+        run: |
+          git clone $env:RT64_REPO lib/rt64
+          cd lib/rt64
+          git checkout $env:RT64_COMMIT
+          git submodule update --init --recursive
+          git apply ../../patches/rt64/*.patch
+      - name: Build N64Recomp and generate RecompiledFuncs
+        run: |
+          cmake -S tools/N64Recomp -B tools/N64Recomp/build -DCMAKE_BUILD_TYPE=Release -G Ninja
+          cmake --build tools/N64Recomp/build --target N64Recomp -j
+          ./tools/N64Recomp/build/N64Recomp.exe troublemakers.us1.toml
+      - name: Build mm_game (clang-cl)
+        run: |
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl
+          cmake --build build --target mm_game -j
+      - name: Package
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item build/src/game/mm_game.exe dist/
+          Copy-Item build/src/game/*.dll dist/
+      - name: Upload Windows build
+        uses: actions/upload-artifact@v4
+        with:
+          name: MischiefMakersRecompiled-Windows-X64
+          path: dist/

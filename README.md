@@ -70,8 +70,16 @@ actors, geometry, and tile layers are moving throughout each shot.
 
 - A legally dumped **Mischief Makers (US 1.1)** ROM (`.z64`, big-endian)
 - The sibling decomp built once (its `./trouble build` produces `troublemakers.elf`)
-- Linux: gcc/g++ (C++20), CMake ≥ 3.20, SDL2, a Vulkan-capable GPU + loader
+- Linux: gcc/g++ (C++20), CMake ≥ 3.24, SDL2, a Vulkan-capable GPU + loader
   (no Vulkan SDK needed — RT64 bundles headers and its shader compiler)
+- Windows (experimental, untested): Visual Studio 2022 with the "Desktop
+  development with C++", "C++ Clang Compiler" and "C++ CMake tools"
+  components — build with **clang-cl** (`cmake -G Ninja
+  -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl`); MSVC's cl is
+  not supported for the generated C. SDL2 is fetched automatically and
+  SDL2.dll + the DXC DLLs are copied next to mm_game.exe. Saves/config go to
+  `%LOCALAPPDATA%\troublemakers-recomp` (or next to the exe with a
+  `portable.txt`).
 
 ### One-time setup
 
@@ -158,6 +166,20 @@ The ROM is hash-validated (US 1.1 only), stored under
 The scene renders at window-integer-scale: a bigger window IS higher internal
 resolution. Keep the window visible — a fully occluded window pauses the
 present and the game with it.
+
+### AppImage
+
+```sh
+./.github/linux/appimage.sh          # after building mm_game; NO_STRIP=1 on Arch-likes
+```
+
+Produces `MischiefMakersRecompiled-x86_64.AppImage` (launcher included — no
+CLI needed; the ROM is picked in the splash screen). Build it on the oldest
+distro you want to support: the AppImage requires the build machine's glibc
+or newer. Put a `portable.txt` next to the AppImage to keep config/saves in
+that folder instead of `~/.config/troublemakers-recomp`. CI scaffolding for
+Linux/AppImage and Windows artifacts lives in `.github/workflows/build.yml`
+(untested; needs a `TM_ASSETS_REPO` secret providing `troublemakers.elf`).
 
 ### Controls
 
