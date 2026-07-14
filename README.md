@@ -231,7 +231,7 @@ recompiler submodule + agent-workflow scripts).
 
 The complete engineering history — twelve root-caused bugs from "parks before
 boot" to "playable", every mission brief, and the debugging recipes — lives in
-[`point_your_ai_agent_here/`](point_your_ai_agent_here/). It is written to
+[`docs/`](docs/). It is written to
 onboard an AI agent (or you) in one sitting. Headless dev harness:
 `MM_HEADLESS_GFX=1` runs the full game loop with no GPU.
 
