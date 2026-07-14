@@ -296,6 +296,18 @@ hook = [
     # wait for widescreen iteration. Optional MM_WARP_AT overrides the trigger
     # state (default 2 = title; 1 = intro to skip more).
     { func = "func_80001670", text = '{ extern void mm_widescreen_sync_mode(uint8_t*); extern void mm_test_drive_marina(uint8_t*); extern void mm_test_trace_actors(uint8_t*); mm_widescreen_sync_mode(rdram); mm_test_drive_marina(rdram); mm_test_trace_actors(rdram); static int fc = 0; static int warped = 0; fc++; { extern char* getenv(const char*); char* te = getenv("MM_TEST_AUTO_ADVANCE"); if (te && te[0] == 0x31 && (fc % 120) == 0 && MEM_HU(0, (gpr)(int32_t)0x800BE4F0) == 6) { int buttons = MEM_HU(0, (gpr)(int32_t)0x800BE52C) | MEM_HU(0, (gpr)(int32_t)0x800BE530); MEM_H(0, (gpr)(int32_t)0x800BE4FC) = MEM_HU(0, (gpr)(int32_t)0x800BE4FC) | buttons; MEM_H(0, (gpr)(int32_t)0x800BE4F8) = MEM_HU(0, (gpr)(int32_t)0x800BE4F8) | buttons; } } if (!warped) { extern char* getenv(const char*); extern int atoi(const char*); char* e = getenv("MM_WARP"); char* se = getenv("MM_WARP_STAGE"); if (e != 0 || se != 0) { char* a = getenv("MM_WARP_AT"); int at = a ? atoi(a) : 1; char* d = getenv("MM_WARP_DELAY"); int dl = d ? atoi(d) : 90; int gs = MEM_HU(0, (gpr)(int32_t)0x800BE4F0); if (gs == at && fc > dl) { int requested_scene = e ? atoi(e) : -1; int requested_stage = se ? atoi(se) : -1; extern int mm_debug_warp_prepare(uint8_t*, int, int); int warp_scene = mm_debug_warp_prepare(rdram, requested_scene, requested_stage); MEM_H(0, (gpr)(int32_t)0x800BE5D0) = (int16_t)warp_scene; MEM_H(0, (gpr)(int32_t)0x800BE4EC) = 0; MEM_H(0, (gpr)(int32_t)0x800D2908) = 1; MEM_H(0, (gpr)(int32_t)0x800BE4F0) = 5; MEM_H(0, (gpr)(int32_t)0x800BE4F4) = 0; { int i; for (i = 0; i < 0x1000; i++) { MEM_W(i*4, (gpr)(int32_t)0x8027CEE8) = 0; } for (i = 0; i < 0xC00; i++) { MEM_W(i*4, (gpr)(int32_t)0x8027EEE8) = 0; } } warped = 1; } } } }' },
+    # Widescreen can push a top-level frame display list past the original
+    # 0x6000-byte payload. Scene 68 reaches 0x62A8 after its later terrain
+    # actors stream in; buffer B then overwrites gPlayerControllerIndex at
+    # 0x801370C0 and the following Input_Update crashes. Relocate the two
+    # 0x180-byte-header frame arenas into free expansion RDRAM and give each a
+    # 0x10000-byte stride. Graphics_Begin_Frame selects/initializes an arena;
+    # Thread_MainProc later submits the same base and stride to the RSP. The
+    # two LookAt initializers also publish both arena bases for matrix writes.
+    { func = "Graphics_Begin_Frame", before_vram = 0x80000AE0, text = '{ ctx->r13 = (gpr)(int32_t)(0x80460000u + ((ctx->r14 & 1u) << 16)); }' },
+    { func = "Thread_MainProc", before_vram = 0x80000D68, text = '{ ctx->r22 = (gpr)(int32_t)0x80460000u; ctx->r23 = 0x10000u; }' },
+    { func = "func_80010A10", before_vram = 0x80010A30, text = '{ MEM_W(0, (gpr)(int32_t)0x801780F0u) = 0x80460000u; ctx->r15 = (gpr)(int32_t)0x80470000u; }' },
+    { func = "LookAt_Update", before_vram = 0x800108B8, text = '{ MEM_W(0, (gpr)(int32_t)0x801780F0u) = 0x80460000u; ctx->r15 = (gpr)(int32_t)0x80470000u; }' },
     # Layer repacks: rebuild each 7x10 layer grid at stride 20 with real
     # map-derived wing columns (exact func_8001107C formulas, all parallax
     # modes) and a per-tile texture-residency check in place of the former
