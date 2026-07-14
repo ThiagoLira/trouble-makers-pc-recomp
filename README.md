@@ -202,6 +202,11 @@ distro you want to support: the AppImage requires the build machine's glibc
 or newer. Put a `portable.txt` next to the AppImage to keep config/saves in
 that folder instead of `~/.config/troublemakers-recomp`.
 
+On Linux, NVIDIA 610-series and newer drivers automatically use RT64's
+ubershader path to avoid a driver-specific corruption of text and sprites.
+Set `MM_RT64_UBERSHADERS_ONLY=1` to force that path when diagnosing a similar
+problem, or `MM_RT64_UBERSHADERS_ONLY=0` to disable the workaround.
+
 CI (`.github/workflows/build.yml`) builds both the Linux AppImage and the
 Windows package on every push and uploads them as artifacts — the binaries on
 the Releases page come from it. It needs a `TM_ASSETS_REPO` secret pointing at

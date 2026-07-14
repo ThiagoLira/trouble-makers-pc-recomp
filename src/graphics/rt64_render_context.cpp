@@ -208,6 +208,35 @@ public:
             return;
         }
 
+        // NVIDIA's 610-series Linux Vulkan driver was observed corrupting RT64's
+        // specialized per-material SPIR-V on Blackwell: small sprites and glyphs
+        // collapse into lines or solid blocks. RT64's ubershader consumes the
+        // same draw data without the re-spirv specialization pass and renders
+        // correctly.
+        // Keep the workaround scoped to the affected driver generation; the
+        // environment override makes testing a future driver fix immediate.
+        bool ubershaders_only = false;
+#if defined(__linux__)
+        if ((chosen_api == ultramodern::renderer::GraphicsApi::Vulkan) &&
+            (app_->device != nullptr)) {
+            const auto& device = app_->device->getDescription();
+            constexpr uint64_t kNvidiaDriverMajorShift = 22;
+            const uint32_t driver_major =
+                static_cast<uint32_t>(device.driverVersion >> kNvidiaDriverMajorShift);
+            ubershaders_only =
+                (device.vendor == RT64::RenderDeviceVendor::NVIDIA) &&
+                (driver_major >= 610);
+        }
+#endif
+        if (const char* env = std::getenv("MM_RT64_UBERSHADERS_ONLY")) {
+            ubershaders_only = (std::atoi(env) != 0);
+        }
+        app_->workloadQueue->ubershadersOnly = ubershaders_only;
+        if (ubershaders_only) {
+            std::fprintf(stderr,
+                "[gfx] using RT64 ubershaders (NVIDIA specialized-SPIR-V workaround)\n");
+        }
+
         app_->setFullScreen(ultramodern::renderer::get_graphics_config().wm_option
                             == ultramodern::renderer::WindowMode::Fullscreen);
 

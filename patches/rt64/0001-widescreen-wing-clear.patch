@@ -138,15 +138,19 @@ index 6b0bb31..5c156c1 100644
                          dstRDPTile.nativeSampler = nativeSamplerFromAddressing(nativeCms, nativeCmt);;
                      }
                      else {
-@@ -1248,6 +1255,7 @@ namespace RT64 {
+@@ -1248,6 +1255,10 @@ namespace RT64 {
                          drawParams.deltaTimeMs = 0.0f;
-                         drawParams.ubershadersOnly = false;
+-                        drawParams.ubershadersOnly = false;
++                        // Keep the mid-frame submission path on the same shader
++                        // policy as the normal workload path. The host may force
++                        // ubershaders to work around driver miscompilations.
++                        drawParams.ubershadersOnly = ext.workloadQueue->ubershadersOnly;
                          drawParams.fixRectLR = false;
 +                        drawParams.clearWings = ext.enhancementConfig->rect.clearWings; // [MM] wing clear in the mid-frame path too
                          drawParams.postBlendNoise = ext.emulatorConfig->dither.postBlendNoise;
                          drawParams.postBlendNoiseNegative = ext.emulatorConfig->dither.postBlendNoiseNegative;
                          drawParams.maxGameCall = UINT_MAX;
-@@ -2736,4 +2744,4 @@ namespace RT64 {
+@@ -2736,4 +2747,4 @@ namespace RT64 {
              break;
          }
      }
@@ -356,4 +360,3 @@ index 5164e16..54fc73f 100644
 -}
 \ No newline at end of file
 +}
-

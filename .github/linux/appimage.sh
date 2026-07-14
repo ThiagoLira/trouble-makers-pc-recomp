@@ -53,20 +53,29 @@ rm -rf deploy && mv squashfs-root deploy
   -i "AppDir/$APP_NAME.png" \
   -e AppDir/usr/bin/troublemakers
 
-# Replace the generated exec line with a portable-mode-aware launch:
-# a portable.txt next to the AppImage keeps config/saves in that directory
-# (mm::get_app_folder_path honors APP_FOLDER_PATH — see src/game/app_dirs.cpp).
-sed -i 's/^exec/#exec/' AppDir/AppRun
-cat >> AppDir/AppRun <<'EOF'
-if [ -f "portable.txt" ]; then
-    APP_FOLDER_PATH=$PWD
-    cd "$this_dir"/usr/bin/
-    APP_FOLDER_PATH=$APP_FOLDER_PATH exec ./troublemakers "$@"
+# linuxdeploy may generate AppRun as a symlink to the game executable when no
+# runtime hooks are needed. Always replace it with a real portable-mode-aware
+# launcher instead of trying to edit what may be an ELF binary through a symlink.
+rm -f AppDir/AppRun
+cat > AppDir/AppRun <<'EOF'
+#!/bin/sh
+set -e
+
+this_dir="$(readlink -f "$(dirname "$0")")"
+if [ -n "${APPIMAGE:-}" ]; then
+    portable_dir="$(dirname "$(readlink -f "$APPIMAGE")")"
 else
-    cd "$this_dir"/usr/bin/
+    portable_dir="$PWD"
+fi
+
+cd "$this_dir"/usr/bin/
+if [ -f "$portable_dir/portable.txt" ]; then
+    APP_FOLDER_PATH="$portable_dir" exec ./troublemakers "$@"
+else
     exec ./troublemakers "$@"
 fi
 EOF
+chmod a+x AppDir/AppRun
 
 # Bundled wayland client libs break on newer distros (SDL dlopens the host's
 # at runtime anyway); strip them if linuxdeploy pulled any in.
