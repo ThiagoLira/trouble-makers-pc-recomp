@@ -131,15 +131,33 @@ instruction = [
     # Pure despawn (slot reclamation); widening only delays cleanup.
     { func = "func_80016D94", vram = 0x80016E20, value = 0x28C1FE40 }, # slti kill-left  -0xD0 -> -0x1C0
     { func = "func_80016D94", vram = 0x80016E28, value = 0x28C101C1 }, # slti kill-right  0xD1 ->  0x1C1
+
+    # func_8001DC60/func_8001DE30: map-authored actor prefetch. Freefall and
+    # Clan Pot Shake stream fixed actor slots through an X-only 32px ring.
+    # Preserve the original relationship to the shared actor-list cull:
+    # inner=cull-0x10 and outer=cull+0x10, now +/-0x170 and +/-0x190 around
+    # the widened +/-0x180 draw window. The separate +/-0x1C0 despawner still
+    # gives 48px of cleanup hysteresis. Vertical bounds remain unchanged.
+    { func = "func_8001DC60", vram = 0x8001DC8C, value = 0x2457FE70 }, # initial left       -0xD0 -> -0x190
+    { func = "func_8001DC60", vram = 0x8001DC90, value = 0x24540190 }, # initial right       0xD0 ->  0x190
+    { func = "func_8001DE30", vram = 0x8001DE7C, value = 0x2458FE90 }, # Y-sort inner left  -0xB0 -> -0x170
+    { func = "func_8001DE30", vram = 0x8001DE80, value = 0x24590170 }, # Y-sort inner right  0xB0 ->  0x170
+    { func = "func_8001DE30", vram = 0x8001DEA0, value = 0x2454FE70 }, # Y-sort outer left  -0xD0 -> -0x190
+    { func = "func_8001DE30", vram = 0x8001DEA4, value = 0x24560190 }, # Y-sort outer right  0xD0 ->  0x190
+    { func = "func_8001DE30", vram = 0x8001E0A0, value = 0x2458FE90 }, # X-sort inner left  -0xB0 -> -0x170
+    { func = "func_8001DE30", vram = 0x8001E0A4, value = 0x24590170 }, # X-sort inner right  0xB0 ->  0x170
+    { func = "func_8001DE30", vram = 0x8001E0C4, value = 0x24560190 }, # X-sort outer right  0xD0 ->  0x190
+    { func = "func_8001DE30", vram = 0x8001E0E0, value = 0x2454FE70 }, # X-sort outer left   -0xD0 -> -0x190
+
     # func_800451E4: gem/prop sprite windowing. Rebuilt statelessly from the
     # world-item table every frame; an item only gets one of the 64 sprite
     # slots inside camX +/- 0xA8 (168px) — pops ~46px inside the wing. Widen
-    # both the normal and alternate paths to +/-0x180 so wide props do not
+    # both the normal and alternate paths to +/-0x1C0 so wide props do not
     # lose their slot while part of their sprite is still visible.
-    { func = "func_800451E4", vram = 0x80045238, value = 0x2457FE80 }, # alternate window-left  -0x100 -> -0x180
-    { func = "func_800451E4", vram = 0x8004523C, value = 0x245E0180 }, # alternate window-right  0x100 ->  0x180
-    { func = "func_800451E4", vram = 0x8004527C, value = 0x2457FE80 }, # normal window-left     -0xA8 -> -0x180
-    { func = "func_800451E4", vram = 0x80045280, value = 0x245E0180 }, # normal window-right     0xA8 ->  0x180
+    { func = "func_800451E4", vram = 0x80045238, value = 0x2457FE40 }, # alternate window-left  -0x100 -> -0x1C0
+    { func = "func_800451E4", vram = 0x8004523C, value = 0x245E01C0 }, # alternate window-right  0x100 ->  0x1C0
+    { func = "func_800451E4", vram = 0x8004527C, value = 0x2457FE40 }, # normal window-left     -0xA8 -> -0x1C0
+    { func = "func_800451E4", vram = 0x80045280, value = 0x245E01C0 }, # normal window-right     0xA8 ->  0x1C0
 
     # The widened world window can contain more than the original 64 live
     # clan-block/prop records (Meet Calina peaks at 97). Move the 0x90-byte
@@ -221,10 +239,29 @@ instruction = [
 
     # Actor_IsOutsideRegion(actor, len): shared |x| > 0x90+len test used by
     # 19 sites (positional SFX radius + a few behavior gates). 0x90 is the
-    # 4:3 half-width+margin; raise to 0x180 so behavior gates remain active
+    # 4:3 half-width+margin; raise to 0x1C0 so behavior gates remain active
     # for large entities crossing either widescreen wing.
-    { func = "Actor_IsOutsideRegion", vram = 0x80028924, value = 0x27090180 }, # +0x90 -> +0x180
-    { func = "Actor_IsOutsideRegion", vram = 0x80028938, value = 0x240AFE80 }, # -0x90 -> -0x180
+    { func = "Actor_IsOutsideRegion", vram = 0x80028924, value = 0x270901C0 }, # +0x90 -> +0x1C0
+    { func = "Actor_IsOutsideRegion", vram = 0x80028938, value = 0x240AFE40 }, # -0x90 -> -0x1C0
+
+    # func_8000FBF4: the shared actor-list builder performs a second screen-X
+    # rejection after ACTOR_FLAG_DRAW has already been set. Rejected actors
+    # never reach the depth-sorted lists consumed by func_80009BE8, which is
+    # why traces showed the house NPCs alive/draw-enabled while their sprites
+    # vanished at the old 4:3 edge. Widen both horizontal paths (graphicFlags
+    # bit 0x800 and the regular sprite path); keep the vertical limits intact.
+    { func = "func_8000FBF4", vram = 0x80010344, value = 0x29E101C1 }, # flagged right  +0xC0 -> +0x1C0
+    { func = "func_8000FBF4", vram = 0x80010374, value = 0x2B01FE40 }, # flagged left   -0xC0 -> -0x1C0
+    { func = "func_8000FBF4", vram = 0x800103E8, value = 0x2B0101C1 }, # regular right  +0xC0 -> +0x1C0
+    { func = "func_8000FBF4", vram = 0x80010418, value = 0x29E1FE40 }, # regular left   -0xC0 -> -0x1C0
+
+    # Shared terrain/static-actor update in the common gameplay overlay.
+    # State 1 independently toggles ACTOR_FLAG_DRAW against a fixed 4:3
+    # screen-relative X window (-0xBF <= x < 0xC0), bypassing all of the
+    # widened main-engine culls above. Match the +/-0x1C0 widescreen window
+    # so terrain pieces remain live throughout both wings while scrolling.
+    { func = "func_801A78DC_7670EC", vram = 0x801A7BC0, value = 0x2861FE40 }, # draw-left  -0xBF -> -0x1C0
+    { func = "func_801A78DC_7670EC", vram = 0x801A7BC8, value = 0x286101C1 }, # draw-right  0xC0 ->  0x1C1
 ]
 
 # Layer-hook architecture: the two draw funcs get entry hooks that call into
@@ -258,7 +295,7 @@ hook = [
     # menu instead of reusing stale map/overlay assets. Skips the intro/attract
     # wait for widescreen iteration. Optional MM_WARP_AT overrides the trigger
     # state (default 2 = title; 1 = intro to skip more).
-    { func = "func_80001670", text = '{ extern void mm_widescreen_sync_mode(uint8_t*); extern void mm_test_drive_marina(uint8_t*); mm_widescreen_sync_mode(rdram); mm_test_drive_marina(rdram); static int fc = 0; static int warped = 0; fc++; { extern char* getenv(const char*); char* te = getenv("MM_TEST_AUTO_ADVANCE"); if (te && te[0] == 0x31 && (fc % 120) == 0 && MEM_HU(0, (gpr)(int32_t)0x800BE4F0) == 6) { int buttons = MEM_HU(0, (gpr)(int32_t)0x800BE52C) | MEM_HU(0, (gpr)(int32_t)0x800BE530); MEM_H(0, (gpr)(int32_t)0x800BE4FC) = MEM_HU(0, (gpr)(int32_t)0x800BE4FC) | buttons; MEM_H(0, (gpr)(int32_t)0x800BE4F8) = MEM_HU(0, (gpr)(int32_t)0x800BE4F8) | buttons; } } if (!warped) { extern char* getenv(const char*); extern int atoi(const char*); char* e = getenv("MM_WARP"); char* se = getenv("MM_WARP_STAGE"); if (e != 0 || se != 0) { char* a = getenv("MM_WARP_AT"); int at = a ? atoi(a) : 1; char* d = getenv("MM_WARP_DELAY"); int dl = d ? atoi(d) : 90; int gs = MEM_HU(0, (gpr)(int32_t)0x800BE4F0); if (gs == at && fc > dl) { int requested_scene = e ? atoi(e) : -1; int requested_stage = se ? atoi(se) : -1; extern int mm_debug_warp_prepare(uint8_t*, int, int); int warp_scene = mm_debug_warp_prepare(rdram, requested_scene, requested_stage); MEM_H(0, (gpr)(int32_t)0x800BE5D0) = (int16_t)warp_scene; MEM_H(0, (gpr)(int32_t)0x800BE4EC) = 0; MEM_H(0, (gpr)(int32_t)0x800D2908) = 1; MEM_H(0, (gpr)(int32_t)0x800BE4F0) = 5; MEM_H(0, (gpr)(int32_t)0x800BE4F4) = 0; { int i; for (i = 0; i < 0x1000; i++) { MEM_W(i*4, (gpr)(int32_t)0x8027CEE8) = 0; } for (i = 0; i < 0xC00; i++) { MEM_W(i*4, (gpr)(int32_t)0x8027EEE8) = 0; } } warped = 1; } } } }' },
+    { func = "func_80001670", text = '{ extern void mm_widescreen_sync_mode(uint8_t*); extern void mm_test_drive_marina(uint8_t*); extern void mm_test_trace_actors(uint8_t*); mm_widescreen_sync_mode(rdram); mm_test_drive_marina(rdram); mm_test_trace_actors(rdram); static int fc = 0; static int warped = 0; fc++; { extern char* getenv(const char*); char* te = getenv("MM_TEST_AUTO_ADVANCE"); if (te && te[0] == 0x31 && (fc % 120) == 0 && MEM_HU(0, (gpr)(int32_t)0x800BE4F0) == 6) { int buttons = MEM_HU(0, (gpr)(int32_t)0x800BE52C) | MEM_HU(0, (gpr)(int32_t)0x800BE530); MEM_H(0, (gpr)(int32_t)0x800BE4FC) = MEM_HU(0, (gpr)(int32_t)0x800BE4FC) | buttons; MEM_H(0, (gpr)(int32_t)0x800BE4F8) = MEM_HU(0, (gpr)(int32_t)0x800BE4F8) | buttons; } } if (!warped) { extern char* getenv(const char*); extern int atoi(const char*); char* e = getenv("MM_WARP"); char* se = getenv("MM_WARP_STAGE"); if (e != 0 || se != 0) { char* a = getenv("MM_WARP_AT"); int at = a ? atoi(a) : 1; char* d = getenv("MM_WARP_DELAY"); int dl = d ? atoi(d) : 90; int gs = MEM_HU(0, (gpr)(int32_t)0x800BE4F0); if (gs == at && fc > dl) { int requested_scene = e ? atoi(e) : -1; int requested_stage = se ? atoi(se) : -1; extern int mm_debug_warp_prepare(uint8_t*, int, int); int warp_scene = mm_debug_warp_prepare(rdram, requested_scene, requested_stage); MEM_H(0, (gpr)(int32_t)0x800BE5D0) = (int16_t)warp_scene; MEM_H(0, (gpr)(int32_t)0x800BE4EC) = 0; MEM_H(0, (gpr)(int32_t)0x800D2908) = 1; MEM_H(0, (gpr)(int32_t)0x800BE4F0) = 5; MEM_H(0, (gpr)(int32_t)0x800BE4F4) = 0; { int i; for (i = 0; i < 0x1000; i++) { MEM_W(i*4, (gpr)(int32_t)0x8027CEE8) = 0; } for (i = 0; i < 0xC00; i++) { MEM_W(i*4, (gpr)(int32_t)0x8027EEE8) = 0; } } warped = 1; } } } }' },
     # Layer repacks: rebuild each 7x10 layer grid at stride 20 with real
     # map-derived wing columns (exact func_8001107C formulas, all parallax
     # modes) and a per-tile texture-residency check in place of the former
@@ -269,6 +306,15 @@ hook = [
     # Fixed-viewport color grading is implemented as a frozen top-layer actor
     # in several stages. Drop that actor only while gameplay is expanded.
     { func = "func_80009BE8", text = '{ extern void mm_ws_filter_fixed_viewport_effects(uint8_t*, recomp_context*); mm_ws_filter_fixed_viewport_effects(rdram, ctx); }' },
+    # Portrait entries 0..63 are a fixed 8x8 death/room-transition wipe;
+    # entries 64/65 are the HUD. Skip only the wipe's render loop while wide.
+    { func = "func_8000EA88", before_vram = 0x8000EB4C, text = '{ extern int mm_ws_portrait_draw_start(uint8_t*); int start = mm_ws_portrait_draw_start(rdram); if (start != 0) { ctx->r12 = start; } }' },
+    # State-2 foreground terrain is a native 512px repeat that teleports from
+    # one side of the original viewport to the other. After the shared list
+    # builder returns, insert a render-only adjacent repeat so both copies
+    # overlap the wider viewport continuously; simulation/collision stay on
+    # the original actor.
+    { func = "func_80009BE8", before_vram = 0x80009D60, text = '{ extern void mm_ws_repeat_wrapped_terrain(uint8_t*, recomp_context*); mm_ws_repeat_wrapped_terrain(rdram, ctx); }' },
     { func = "func_800451E4", text = '{ extern void mm_test_trace_streaming(uint8_t*, recomp_context*); mm_test_trace_streaming(rdram, ctx); }' },
     { func = "func_80082820", text = '{ extern void mm_ws_band_repack(uint8_t*, recomp_context*); mm_ws_band_repack(rdram, ctx); }' },
     { func = "func_80082380", text = '{ extern void mm_ws_static_repack(uint8_t*, recomp_context*); mm_ws_static_repack(rdram, ctx); }' },

@@ -6,7 +6,7 @@ set -u
 
 usage() {
     echo "usage: $0 GAME_BINARY ROM OUTPUT_DIR [STAGE_INDEX ...]" >&2
-    echo "env: MM_CAPTURE_DELAY=60 MM_CAPTURE_FRAMES=3 MM_CAPTURE_INTERVAL=0.35 MM_CAPTURE_GEOMETRY=1602x1022+39+59 MM_WINDOW=1600x900 MM_AUTO_ADVANCE=1 MM_TEST_MOVE=1|jet-right MM_TEST_STREAM_TRACE=1 MM_TEST_STREAM_CAMERA=x[,y]" >&2
+    echo "env: MM_CAPTURE_DELAY=60 MM_CAPTURE_WARMUP=0 MM_CAPTURE_CAMERA_X= MM_CAPTURE_FRAMES=3 MM_CAPTURE_INTERVAL=0.35 MM_CAPTURE_GEOMETRY=1602x1022+39+59 MM_WINDOW=1600x900 MM_AUTO_ADVANCE=1 MM_TEST_MOVE=1|jet-right|jet-left|jet-bounce MM_TEST_ACTOR_TRACE=1 MM_TEST_STREAM_TRACE=1 MM_TEST_STREAM_CAMERA=x[,y]" >&2
 }
 
 if (( $# < 3 )); then
@@ -20,6 +20,8 @@ output_dir=$3
 shift 3
 
 capture_delay=${MM_CAPTURE_DELAY:-60}
+capture_warmup=${MM_CAPTURE_WARMUP:-0}
+capture_camera_x=${MM_CAPTURE_CAMERA_X:-}
 capture_geometry=${MM_CAPTURE_GEOMETRY:-1602x1022+39+59}
 window_size=${MM_WINDOW:-1600x900}
 auto_advance=${MM_AUTO_ADVANCE:-1}
@@ -28,6 +30,11 @@ capture_interval=${MM_CAPTURE_INTERVAL:-0.35}
 test_move=${MM_TEST_MOVE:-1}
 stream_trace=${MM_TEST_STREAM_TRACE:-0}
 stream_camera=${MM_TEST_STREAM_CAMERA:-}
+
+if [[ -n $capture_camera_x && ! $capture_camera_x =~ ^-?[0-9]+$ ]]; then
+    echo "MM_CAPTURE_CAMERA_X must be an integer: $capture_camera_x" >&2
+    exit 2
+fi
 
 if [[ ! -x "$game" ]]; then
     echo "not executable: $game" >&2
@@ -52,6 +59,36 @@ printf 'stage\tscene\tstatus\tscreenshot\n' >"$manifest"
 
 active_pid=
 fast_window=
+game_window=
+
+find_game_window() {
+    local window
+    game_window=
+    command -v xdotool >/dev/null || return 1
+    window=$(xdotool search --onlyvisible --pid "$active_pid" 2>/dev/null | tail -1)
+    if [[ -n $window ]] &&
+        xdotool getwindowgeometry "$window" >/dev/null 2>&1; then
+        game_window=$window
+        return 0
+    fi
+    return 1
+}
+
+capture_game_frame() {
+    local output=$1
+    rm -f -- "$output"
+    if [[ -n $game_window ]] &&
+        magick "x:$game_window" +repage "$output" 2>/dev/null; then
+        return 0
+    fi
+    if find_game_window &&
+        magick "x:$game_window" +repage "$output" 2>/dev/null; then
+        return 0
+    fi
+    game_window=
+    magick x:root -crop "$capture_geometry" +repage "$output"
+}
+
 cleanup_active() {
     if [[ -n $fast_window ]]; then
         xdotool keyup --window "$fast_window" Tab 2>/dev/null || true
@@ -64,6 +101,7 @@ cleanup_active() {
         { wait "$active_pid"; } 2>/dev/null || true
     fi
     active_pid=
+    game_window=
 }
 trap cleanup_active EXIT
 trap 'cleanup_active; exit 130' INT TERM
@@ -109,6 +147,8 @@ for entry in "${playable[@]}"; do
     screenshot="$output_dir/$stem-contact.png"
     log="$output_dir/logs/$stem.log"
     echo "[widescreen-suite] stage=$stage scene=$scene"
+    fast_window=
+    game_window=
 
     setsid env MM_WARP_STAGE="$stage" MM_WARP_AT=1 MM_WARP_DELAY=1 \
         MM_TEST_AUTO_ADVANCE="$auto_advance" MM_TEST_MOVE="$test_move" \
@@ -122,11 +162,10 @@ for entry in "${playable[@]}"; do
 
     if command -v xdotool >/dev/null; then
         for ((attempt = 0; attempt < 50; ++attempt)); do
-            window=$(xdotool search --onlyvisible --pid "$pid" 2>/dev/null | tail -1)
-            if [[ -n $window ]]; then
-                xdotool windowactivate --sync "$window" 2>/dev/null || true
-                xdotool keydown --window "$window" Tab 2>/dev/null || true
-                fast_window=$window
+            if find_game_window; then
+                xdotool windowactivate --sync "$game_window" 2>/dev/null || true
+                xdotool keydown --window "$game_window" Tab 2>/dev/null || true
+                fast_window=$game_window
                 break
             fi
             sleep 0.1
@@ -165,15 +204,40 @@ for entry in "${playable[@]}"; do
 
     layer_ok=1
     if (( alive && reached_gameplay )); then
+        camera_ready=1
+        if [[ -n $capture_camera_x ]]; then
+            camera_ready=0
+            for ((second = 0; second < capture_delay; ++second)); do
+                if ! kill -0 "$pid" 2>/dev/null; then
+                    alive=0
+                    break
+                fi
+                camera_x=$(grep '\[test-move\]' "$log" 2>/dev/null | tail -1 |
+                    sed -nE 's/.* camera=(-?[0-9]+),.*/\1/p')
+                if [[ -n $camera_x ]]; then
+                    if [[ $test_move == jet-left ]]; then
+                        (( camera_x <= capture_camera_x )) && camera_ready=1
+                    else
+                        (( camera_x >= capture_camera_x )) && camera_ready=1
+                    fi
+                fi
+                (( camera_ready )) && break
+                sleep 1
+            done
+        fi
+        if (( camera_ready )) && [[ $capture_warmup != 0 ]]; then
+            sleep "$capture_warmup"
+            kill -0 "$pid" 2>/dev/null || alive=0
+        fi
         if [[ -n $fast_window ]]; then
             xdotool keyup --window "$fast_window" Tab 2>/dev/null || true
             fast_window=
         fi
-        capture_ok=1
+        capture_ok=$((alive && camera_ready))
         frames=()
-        for ((frame = 0; frame < capture_frames; ++frame)); do
+        for ((frame = 0; capture_ok && frame < capture_frames; ++frame)); do
             frame_file="$output_dir/$stem-frame-$(printf '%02d' "$frame").png"
-            if magick x:root -crop "$capture_geometry" +repage "$frame_file"; then
+            if capture_game_frame "$frame_file"; then
                 frames+=("$frame_file")
             else
                 capture_ok=0
@@ -199,8 +263,7 @@ for entry in "${playable[@]}"; do
         # Preserve the blocked 4:3 frame for diagnosing a prompt or an
         # incorrectly classified progression row.
         if (( alive )); then
-            magick x:root -crop "$capture_geometry" +repage \
-                "$output_dir/$stem-blocked.png" 2>/dev/null || true
+            capture_game_frame "$output_dir/$stem-blocked.png" 2>/dev/null || true
         fi
     fi
 
@@ -217,6 +280,7 @@ for entry in "${playable[@]}"; do
     rc=$?
     active_pid=
     fast_window=
+    game_window=
     if (( capture_ok && stopped_by_suite && layer_ok )); then
         status=pass
         ((passes += 1))

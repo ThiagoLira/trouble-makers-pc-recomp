@@ -20,6 +20,10 @@ constexpr uint32_t kBandScratch = 0x9FFFF000u;
 constexpr uint32_t kFilteredActorList = 0x9FFFA000u;
 constexpr uint32_t kActors = 0x800EF510u;
 constexpr uint32_t kActorsTop = 0x80171F10u;
+// Stable synthetic indices used only by the actor renderer. The corresponding
+// 208 actor-sized records occupy 0x80440168..0x80454CE8, clear of the widened
+// tile arenas, relocated clan records, and runtime allocations.
+constexpr int kWrappedRepeatActorBase = 8521;
 constexpr uint32_t kClanBlocks = 0x804269E0u;
 constexpr uint32_t kClanBlockCount = 0x801782C0u;
 
@@ -45,6 +49,10 @@ constexpr uint32_t kBackdropScrollX = 0x800BE57Cu;
 constexpr uint32_t kBackdropScrollY = 0x800BE584u;
 constexpr uint32_t kCamX = 0x800BE558u;
 constexpr uint32_t kCamY = 0x800BE55Cu;
+constexpr uint32_t kViewLeft = 0x800BE568u;
+constexpr uint32_t kViewRight = 0x800BE56Cu;
+constexpr uint32_t kViewBottom = 0x800BE570u;
+constexpr uint32_t kViewTop = 0x800BE574u;
 constexpr uint32_t kCamShake = 0x800BE594u;
 constexpr uint32_t kMidColMask = 0x800BE64Cu;
 constexpr uint32_t kMidRowMask = 0x800BE650u;
@@ -335,31 +343,87 @@ extern "C" int mm_debug_warp_prepare(
 // Test-only controller driver. The hook writes both the live and copied input
 // words so it can exercise camera scrolling and actor streaming without X11
 // focus. MM_TEST_MOVE=1 performs the original short right/left taps;
-// MM_TEST_MOVE=jet-right settles, double-taps right, then holds it long enough
-// to engage Marina's jet and traverse a meaningful part of the stage.
+// MM_TEST_MOVE=jet-right/jet-left settles, double-taps that direction, then
+// holds it long enough to engage Marina's jet and traverse a meaningful part
+// of the stage. jet-bounce alternates long right/left jets so a render-cull
+// boundary is crossed in both directions during a single frame burst.
 extern "C" void mm_test_drive_marina(uint8_t* rdram) {
     static int motion_frame = 0;
     static uint16_t previous_input = 0;
     const char* move_mode = std::getenv("MM_TEST_MOVE");
-    if (move_mode == nullptr || move_mode[0] == '\0' || move_mode[0] == '0' ||
-        !mm_widescreen_gameplay_active(rdram) ||
-        MEM_HU(0, static_cast<gpr>(static_cast<int32_t>(kGameState))) != 6 ||
-        MEM_HU(0, static_cast<gpr>(static_cast<int32_t>(kCannotPause))) != 0) {
+    if (move_mode == nullptr || move_mode[0] == '\0' || move_mode[0] == '0') {
         motion_frame = 0;
         previous_input = 0;
         return;
     }
 
     const bool jet_right = std::strcmp(move_mode, "jet-right") == 0;
-    const int cycle = jet_right ? 300 : 120;
-    const int phase = motion_frame++ % cycle;
+    const bool jet_hop_right =
+        std::strcmp(move_mode, "jet-hop-right") == 0;
+    const bool jet_left = std::strcmp(move_mode, "jet-left") == 0;
+    const bool jet_bounce = std::strcmp(move_mode, "jet-bounce") == 0;
+    const bool jet = jet_right || jet_hop_right || jet_left || jet_bounce;
+    const uint16_t button_right = MEM_HU(0,
+        static_cast<gpr>(static_cast<int32_t>(kButtonDRight)));
+    const uint16_t button_left = MEM_HU(0,
+        static_cast<gpr>(static_cast<int32_t>(kButtonDLeft)));
+    const uint16_t jet_direction = jet_left ? button_left : button_right;
+    const bool controls_blocked =
+        !mm_widescreen_gameplay_active(rdram) ||
+        MEM_HU(0, static_cast<gpr>(static_cast<int32_t>(kGameState))) != 6 ||
+        MEM_HU(0, static_cast<gpr>(static_cast<int32_t>(kCannotPause))) != 0;
+    if (controls_blocked) {
+        // A stage-3 tutorial interrupts control as Marina crosses the first
+        // house. Restarting the jet sequence after the text closes makes the
+        // harness boost over the trigger again forever. Clear injected input
+        // while blocked, but preserve a completed jet as a continuous hold so
+        // the moving test naturally walks out of the tutorial region.
+        if (!jet || MEM_HU(0, static_cast<gpr>(
+                static_cast<int32_t>(kGameState))) != 6) {
+            motion_frame = 0;
+        }
+        // Bounce mode deliberately creates a fresh edge after an interruption
+        // so its scheduled reverse leg cannot inherit a stale held direction.
+        previous_input = jet && !jet_bounce && motion_frame >= 34
+            ? jet_direction : 0;
+        MEM_H(0, static_cast<gpr>(static_cast<int32_t>(kMarinaHold))) = 0;
+        MEM_H(0, static_cast<gpr>(static_cast<int32_t>(kMarinaPress))) = 0;
+        MEM_H(0, static_cast<gpr>(static_cast<int32_t>(kGlobalButtonHold))) = 0;
+        MEM_H(0, static_cast<gpr>(static_cast<int32_t>(kGlobalButtonPress))) = 0;
+        MEM_H(0, static_cast<gpr>(static_cast<int32_t>(kButtonHoldHistory))) = 0;
+        MEM_H(0, static_cast<gpr>(static_cast<int32_t>(kButtonPressHistory))) = 0;
+        return;
+    }
+
+    // Jet modes double-tap once and then keep holding the direction. Repeating
+    // the whole 300-frame cycle can retrigger local tutorial volumes and never
+    // exercises the rest of a stage.
+    const int phase = jet_bounce ? motion_frame++ % 600
+        : (jet ? motion_frame++ : motion_frame++ % 120);
     uint16_t input = 0;
-    if (jet_right) {
-        // Two distinct rising edges, then a long hold: R, neutral, R+hold.
+    if (jet_bounce) {
+        // R, neutral, long R; settle; L, neutral, long L. The quiet tail
+        // creates a clean rising edge when the 600-frame cycle repeats.
         if ((phase >= 30 && phase < 32) ||
             (phase >= 34 && phase < 270)) {
-            input |= MEM_HU(0,
-                static_cast<gpr>(static_cast<int32_t>(kButtonDRight)));
+            input = button_right;
+        }
+        else if ((phase >= 300 && phase < 302) ||
+                 (phase >= 304 && phase < 540)) {
+            input = button_left;
+        }
+    }
+    else if (jet) {
+        // Two distinct rising edges, then a long hold: R, neutral, R+hold.
+        if ((phase >= 30 && phase < 32) ||
+            phase >= 34) {
+            input |= jet_direction;
+        }
+        // Clear the tall clan-block structures used in the early forest
+        // stages so the long-distance streaming capture does not spend the
+        // rest of the run pushing into the first wall. N64 A is jump.
+        if (jet_hop_right && phase >= 50 && (phase % 90) < 12) {
+            input |= 0x8000u;
         }
     }
     else if (phase < 15) {
@@ -379,7 +443,7 @@ extern "C" void mm_test_drive_marina(uint8_t* rdram) {
     MEM_H(0, static_cast<gpr>(static_cast<int32_t>(kGlobalButtonPress))) = pressed;
     MEM_H(0, static_cast<gpr>(static_cast<int32_t>(kButtonHoldHistory))) = input;
     MEM_H(0, static_cast<gpr>(static_cast<int32_t>(kButtonPressHistory))) = pressed;
-    if ((motion_frame % (jet_right ? 15 : 60)) == 0) {
+    if ((motion_frame % (jet ? 15 : 60)) == 0) {
         const gpr marina = static_cast<gpr>(static_cast<int32_t>(kActors));
         const int clan_slots = MEM_HU(0, static_cast<gpr>(
             static_cast<int32_t>(kClanBlockCount)));
@@ -402,7 +466,11 @@ extern "C" void mm_test_drive_marina(uint8_t* rdram) {
             "[test-move] mode=%s frame=%d phase=%d hold=%04x press=%04x "
             "actor=%d,%d camera=%d,%d velocity=%d,%d state=%04x "
             "clan=%d range=%d..%d\n",
-            jet_right ? "jet-right" : "patrol", motion_frame, phase,
+            jet_bounce ? "jet-bounce"
+                : (jet_hop_right ? "jet-hop-right"
+                    : (jet_right ? "jet-right"
+                        : (jet_left ? "jet-left" : "patrol"))),
+            motion_frame, phase,
             input, pressed,
             static_cast<int32_t>(MEM_W(0, static_cast<gpr>(
                 static_cast<int32_t>(kMarinaActorPosX)))) >> 16,
@@ -417,6 +485,113 @@ extern "C" void mm_test_drive_marina(uint8_t* rdram) {
             clan_count == 0 ? 0 : clan_min_x,
             clan_count == 0 ? 0 : clan_max_x);
     }
+}
+
+// Test-only actor census for diagnosing the long tail of per-type 4:3 culls.
+// Log active actors near the camera and every draw-bit transition. In normal
+// builds this is a single getenv check and does not touch emulated memory.
+extern "C" void mm_test_trace_actors(uint8_t* rdram) {
+    if (!env_enabled("MM_TEST_ACTOR_TRACE") ||
+        !mm_widescreen_gameplay_active(rdram)) {
+        return;
+    }
+
+    constexpr int kActorCount = 208;
+    static uint32_t previous_flags[kActorCount]{};
+    static uint16_t previous_types[kActorCount]{};
+    static int frame = 0;
+    const int cam_x = static_cast<int32_t>(MEM_W(
+        0, static_cast<gpr>(static_cast<int32_t>(kCamX)))) >> 16;
+    const int cam_y = static_cast<int32_t>(MEM_W(
+        0, static_cast<gpr>(static_cast<int32_t>(kCamY)))) >> 16;
+    const gpr actors = static_cast<gpr>(static_cast<int32_t>(kActors));
+
+    if ((frame % 15) == 0) {
+        const int left = static_cast<int16_t>(MEM_HU(
+            0, static_cast<gpr>(static_cast<int32_t>(kViewLeft))));
+        const int right = static_cast<int16_t>(MEM_HU(
+            0, static_cast<gpr>(static_cast<int32_t>(kViewRight))));
+        const int bottom = static_cast<int16_t>(MEM_HU(
+            0, static_cast<gpr>(static_cast<int32_t>(kViewBottom))));
+        const int top = static_cast<int16_t>(MEM_HU(
+            0, static_cast<gpr>(static_cast<int32_t>(kViewTop))));
+        std::fprintf(stderr,
+            "[test-view] frame=%d cam=%d,%d bounds=%d..%d,%d..%d "
+            "margin=%d,%d\n",
+            frame, cam_x, cam_y, left, right, top, bottom,
+            cam_x - left, right - cam_x);
+    }
+
+    const auto dispatch_for_type = [rdram](uint16_t type) -> uint32_t {
+        const uint8_t bank = type >> 8;
+        const uint8_t index = type;
+        uint32_t table = 0;
+        if (type < 0x100) {
+            table = 0x800C7FE0u;
+        }
+        else if (bank == 1 || bank == 4 || bank == 5 || bank == 7 ||
+                 bank == 14 || bank == 27 ||
+                 (bank >= 39 && bank <= 42)) {
+            table = 0x801B0800u;
+        }
+        else if (bank == 2 || bank == 3 || (bank >= 9 && bank <= 13) ||
+                 (bank >= 17 && bank <= 19)) {
+            table = 0x8019B000u;
+        }
+        else if (bank == 23 || bank == 24 || bank == 26 ||
+                 (bank >= 28 && bank <= 32) || bank == 37) {
+            table = 0x801A6800u;
+        }
+        else if (bank == 6 || bank == 15 || bank == 16 ||
+                 (bank >= 20 && bank <= 22) || bank == 25 ||
+                 (bank >= 33 && bank <= 36) || bank == 38 ||
+                 bank == 43 || bank == 44) {
+            table = 0x80192000u;
+        }
+        return table == 0 ? 0 : MEM_W(index * 4,
+            static_cast<gpr>(static_cast<int32_t>(table)));
+    };
+
+    for (int slot = 0; slot < kActorCount; ++slot) {
+        const gpr actor = actors + slot * 0x198;
+        const uint32_t flags = MEM_W(0x80, actor);
+        const uint16_t type = MEM_HU(0xD2, actor);
+        const bool active = (flags & 2u) != 0;
+        const bool was_active = (previous_flags[slot] & 2u) != 0;
+        const bool draw_changed = ((flags ^ previous_flags[slot]) & 1u) != 0;
+        const bool identity_changed = type != previous_types[slot];
+        const int x = static_cast<int32_t>(MEM_W(0x88, actor)) >> 16;
+        const int y = static_cast<int32_t>(MEM_W(0x8C, actor)) >> 16;
+        // Actor positions have already been transformed into screen space by
+        // the time this end-of-frame hook runs. Adding the camera position is
+        // therefore a useful approximate world coordinate; subtracting it a
+        // second time hid exactly the actors entering a widescreen wing.
+        const int world_x = x + cam_x;
+        const int world_y = y + cam_y;
+        const bool periodic_nearby = active && (frame % 15) == 0 &&
+            x >= -512 && x <= 512 && y >= -512 && y <= 512;
+
+        if (periodic_nearby || draw_changed || active != was_active ||
+            (active && identity_changed)) {
+            std::fprintf(stderr,
+                "[test-actor] frame=%d slot=%d type=%04x flags=%08x "
+                "draw=%d active=%d screen=%d,%d world~=%d,%d cam=%d,%d "
+                "extent=%d z=%d gfx=%04x "
+                "gflags=%04x state=%04x dispatch=%08x event=%s%s%s\n",
+                frame, slot, type, flags, flags & 1u ? 1 : 0,
+                active ? 1 : 0, x, y, world_x, world_y, cam_x, cam_y,
+                static_cast<int32_t>(MEM_W(0x188, actor)),
+                static_cast<int32_t>(MEM_W(0x90, actor)) >> 16,
+                MEM_HU(0x84, actor), MEM_HU(0x94, actor),
+                MEM_HU(0xD0, actor), dispatch_for_type(type),
+                draw_changed ? "draw " : "",
+                active != was_active ? "active " : "",
+                identity_changed ? "type" : "");
+        }
+        previous_flags[slot] = flags;
+        previous_types[slot] = type;
+    }
+    ++frame;
 }
 
 // Test-only census for the world-record loader. This catches streaming limits
@@ -447,8 +622,10 @@ extern "C" void mm_test_trace_streaming(
         0, static_cast<gpr>(static_cast<int32_t>(kCamY))));
     const bool alternate = MEM_BU(
         0, static_cast<gpr>(static_cast<int32_t>(0x800BE710u))) != 0;
-    const int left = cam_x - 0x180;
-    const int right = cam_x + 0x180;
+    constexpr int kStreamRadius = 0x1C0;
+    constexpr int kStreamWidth = kStreamRadius * 2;
+    const int left = cam_x - kStreamRadius;
+    const int right = cam_x + kStreamRadius;
     const int top = cam_y - (alternate ? 0xD0 : 0x84);
     const int bottom = cam_y + (alternate ? 0xD0 : 0x84);
     const gpr records = static_cast<gpr>(ctx->r4);
@@ -504,8 +681,8 @@ extern "C" void mm_test_trace_streaming(
         int peak_camera = 0;
         int saturated_first = -1;
         int saturated_last = -1;
-        for (int test_camera = world_min_x - 0x180;
-             test_camera <= world_max_x + 0x180; ++test_camera) {
+        for (int test_camera = world_min_x - kStreamRadius;
+             test_camera <= world_max_x + kStreamRadius; ++test_camera) {
             int count = 0;
             for (int i = 0; i < 4096; ++i) {
                 const uint16_t flags = MEM_HU(i * 6, records);
@@ -514,7 +691,8 @@ extern "C" void mm_test_trace_streaming(
                 }
                 const int x = MEM_HU(i * 6 + 2, records);
                 const int y = MEM_HU(i * 6 + 4, records);
-                if (x > test_camera - 0x180 && x < test_camera + 0x180 &&
+                if (x > test_camera - kStreamRadius &&
+                    x < test_camera + kStreamRadius &&
                     y > top && y < bottom && (flags & 0xC000u) == 0) {
                     ++count;
                 }
@@ -555,7 +733,7 @@ extern "C" void mm_test_trace_streaming(
             std::sort(slice_x, slice_x + slice_count);
             int first = 0;
             for (int last = 0; last < slice_count; ++last) {
-                while (slice_x[last] - slice_x[first] >= 0x300) {
+                while (slice_x[last] - slice_x[first] >= kStreamWidth) {
                     ++first;
                 }
                 const int count = last - first + 1;
@@ -605,14 +783,29 @@ int16_t read_s16(uint8_t* rdram, uint32_t vaddr) {
     return static_cast<int16_t>(MEM_HU(0, rdram_gpr(vaddr)));
 }
 
-struct MidFillState {
+struct LayerFillState {
     int scene = -32768;
-    uint16_t x0 = 0;
-    uint16_t y0 = 0;
+    uint16_t mid_x0 = 0;
+    uint16_t mid_y0 = 0;
+    uint16_t mid_col_mask = 0;
+    uint16_t mid_row_mask = 0;
+    uint16_t mid_shift = 0;
+    uint16_t mid_addend = 0;
+    uint32_t env_map = 0;
+    uint16_t env_x0 = 0;
+    uint16_t env_y0 = 0;
+    uint16_t env_addend = 0;
+    bool env_wide = false;
+    uint32_t backdrop_map = 0;
+    uint16_t backdrop_x0 = 0;
+    uint16_t backdrop_y0 = 0;
+    uint16_t backdrop_addend = 0;
+    uint16_t band_x0[7]{};
+    bool band_per_row = false;
     bool valid = false;
 };
 
-MidFillState g_mid_fill_state;
+LayerFillState g_layer_fill_state;
 
 void compute_mid_fill_bases(uint8_t* rdram, uint16_t& x0, uint16_t& y0) {
     const int mode = MEM_HU(0, rdram_gpr(kMidMode));
@@ -791,18 +984,181 @@ uint32_t remap_arena(uint32_t base) {
 
 } // namespace
 
-// func_8001107C fills the center tile grids near the start of the game tick.
-// The camera can move again before func_80082CFC converts and draws them, so
-// recomputing the midground origin at draw time can be one whole tile ahead
-// of the data being extended. Capture the exact fill-time origin instead.
+// func_8001107C fills all three center tile grids near the start of the game
+// tick. The camera and parallax actors can update their scroll registers again
+// before func_80082CFC converts and draws those grids. Re-reading the registers
+// while adding the widescreen columns then mixes the newly filled 4:3 center
+// with wings from a different map origin, producing whole-tile pops. Snapshot
+// every input used by the fill and keep all widened layers on that snapshot.
 extern "C" void mm_ws_capture_mid_fill_state(
     uint8_t* rdram, recomp_context* ctx) {
     (void)ctx;
-    g_mid_fill_state.scene = static_cast<int16_t>(
+    LayerFillState& state = g_layer_fill_state;
+    state.scene = static_cast<int16_t>(
         MEM_HU(0, rdram_gpr(kCurrentScene)));
-    compute_mid_fill_bases(
-        rdram, g_mid_fill_state.x0, g_mid_fill_state.y0);
-    g_mid_fill_state.valid = true;
+    compute_mid_fill_bases(rdram, state.mid_x0, state.mid_y0);
+    state.mid_col_mask = MEM_HU(0, rdram_gpr(kMidColMask));
+    state.mid_row_mask = MEM_HU(0, rdram_gpr(kMidRowMask));
+    state.mid_shift = MEM_HU(0, rdram_gpr(kMidShift)) & 0x1F;
+    state.mid_addend = MEM_HU(0, rdram_gpr(kMidAddend));
+
+    state.env_map = static_cast<uint32_t>(
+        MEM_W(0, rdram_gpr(kEnvMapPtr)));
+    state.env_addend = MEM_HU(0, rdram_gpr(kEnvAddend));
+    state.env_wide = MEM_HU(0, rdram_gpr(kEnvMode)) == 1;
+    state.env_x0 = static_cast<uint16_t>(
+        (read_s16(rdram, kEnvScrollX) - 2) &
+        (state.env_wide ? 0xFFF : 0x1FF));
+    state.env_y0 = static_cast<uint16_t>(
+        (-12 - read_s16(rdram, kEnvScrollY)) &
+        (state.env_wide ? 0xFF : 0x1FF));
+
+    state.backdrop_map = static_cast<uint32_t>(
+        MEM_W(0, rdram_gpr(kBackdropMapPtr)));
+    state.backdrop_addend = MEM_HU(0, rdram_gpr(kBackdropAddend));
+    state.backdrop_x0 = static_cast<uint16_t>(
+        (read_s16(rdram, kBackdropScrollX) - 2) & 0x1FF);
+    state.backdrop_y0 = static_cast<uint16_t>(
+        (-12 - read_s16(rdram, kBackdropScrollY)) & 0x1FF);
+    for (int row = 0; row < 7; ++row) {
+        state.band_x0[row] = static_cast<uint16_t>(
+            (read_s16(rdram, kBandRowScroll + row * 4) - 2) & 0x1FF);
+    }
+    state.band_per_row = MEM_HU(0, rdram_gpr(kBandPerRow)) != 0;
+    state.valid = true;
+}
+
+// Two scenery controllers represent 512px repeating strips by teleporting
+// actors between screen X -256/+255:
+//
+// - type 0x181c state 2: foreground trees/grass decoration, including a flip;
+// - type 0x000d state 0x50: four 128px environment-landscape panels.
+//
+// That was sufficient for the original 320px viewport, but in 16:9 part of a
+// wide actor is still visible when its sole copy teleports to the opposite
+// wing. After func_8000FBF4 has built the renderer's local actor list, add a
+// render-only adjacent repeat. Controllers and collision continue to use the
+// untouched source actors.
+extern "C" void mm_ws_repeat_wrapped_terrain(
+    uint8_t* rdram, recomp_context* ctx) {
+    if (!g_gameplay_wide_active ||
+        env_enabled("MM_TEST_DISABLE_TERRAIN_REPEAT")) {
+        return;
+    }
+
+    constexpr int kActorCount = 208;
+    constexpr int kActorSize = 0x198;
+    const int count = static_cast<int32_t>(ctx->r2);
+    if (count <= 0 || count > kActorCount) {
+        return;
+    }
+
+    const gpr list = ctx->r29 + 0x430;
+    const gpr actors = rdram_gpr(kActors);
+    uint16_t output[kActorCount];
+    int out = 0;
+    int clones = 0;
+    int removed = 0;
+    int hidden_state = -1;
+    if (const char* value = std::getenv("MM_TEST_HIDE_TERRAIN_STATE")) {
+        char* end = nullptr;
+        const long parsed = std::strtol(value, &end, 10);
+        if (end != value && *end == '\0' && parsed >= 0 && parsed <= 4) {
+            hidden_state = static_cast<int>(parsed);
+        }
+    }
+
+    for (int i = 0; i < count; ++i) {
+        const uint16_t index = MEM_HU(i * 2, list);
+        const gpr source = actors + index * kActorSize;
+        const uint16_t type = MEM_HU(0xD2, source);
+        const int terrain_state = MEM_HU(0xD0, source);
+        const bool terrain = type == 0x181C;
+        if (terrain && terrain_state == hidden_state) {
+            ++removed;
+            continue;
+        }
+        const bool flipping_terrain =
+            terrain && terrain_state == 2 &&
+            (MEM_HU(0x94, source) & 0x0100u) != 0;
+        const bool landscape = type == 0x000D && terrain_state == 0x50;
+        if (landscape && env_enabled("MM_TEST_HIDE_LANDSCAPE_PANELS")) {
+            ++removed;
+            continue;
+        }
+        const bool landscape_panel = landscape &&
+            !env_enabled("MM_TEST_DISABLE_LANDSCAPE_REPEAT");
+        const bool repeating_scenery = flipping_terrain || landscape_panel;
+
+        if (repeating_scenery && out + 1 < kActorCount) {
+            const int source_slot = static_cast<int>(index);
+            if (source_slot >= 0 && source_slot < kActorCount) {
+                const uint16_t clone_index = static_cast<uint16_t>(
+                    kWrappedRepeatActorBase + source_slot);
+                const gpr clone = actors + clone_index * kActorSize;
+                // The first 0x80 bytes contain two renderer-owned 64-byte
+                // matrices, one per framebuffer. Copying the whole source
+                // record here can overwrite the matrix still referenced by
+                // the in-flight framebuffer and make the repeated panel
+                // flicker. Refresh only the controller-owned actor fields;
+                // func_80009BE8 rebuilds the current clone matrix below.
+                for (int word = 0x80; word < kActorSize; word += 4) {
+                    MEM_W(word, clone) = MEM_W(word, source);
+                }
+
+                const int screen_x = static_cast<int16_t>(
+                    MEM_HU(0x88, source));
+                const int32_t raw_x = static_cast<int32_t>(
+                    MEM_W(0x88, source));
+                MEM_W(0x88, clone) = static_cast<uint32_t>(
+                    raw_x + (screen_x <= 0 ? 0x02000000 : -0x02000000));
+                if (flipping_terrain) {
+                    MEM_W(0x80, clone) = MEM_W(0x80, clone) ^ 0x20u;
+                }
+
+                if (env_enabled("MM_TEST_TERRAIN_REPEAT_TRACE")) {
+                    static bool reported_source[kActorCount]{};
+                    if (!reported_source[source_slot]) {
+                        reported_source[source_slot] = true;
+                        std::fprintf(stderr,
+                            "[widescreen-terrain-clone] source=%d clone=%u "
+                            "type=%04x state=%04x screen=%d "
+                            "clone_screen=%d flags=%08x\n",
+                            source_slot, clone_index, type, terrain_state, screen_x,
+                            static_cast<int16_t>(MEM_HU(0x88, clone)),
+                            MEM_W(0x80, source));
+                    }
+                }
+
+                // Draw the adjacent copy first so the controller-owned actor
+                // remains authoritative in the unlikely overlap region.
+                output[out++] = clone_index;
+                ++clones;
+            }
+        }
+        output[out++] = index;
+    }
+
+    if (clones == 0 && removed == 0) {
+        return;
+    }
+    for (int i = 0; i < out; ++i) {
+        MEM_H(i * 2, list) = output[i];
+    }
+    ctx->r2 = out;
+
+    if (env_enabled("MM_TEST_ACTOR_TRACE")) {
+        static int reported_scene = -32768;
+        const int scene = static_cast<int16_t>(
+            MEM_HU(0, rdram_gpr(kCurrentScene)));
+        if (scene != reported_scene) {
+            reported_scene = scene;
+            std::fprintf(stderr,
+                "[widescreen-terrain-repeat] scene=%d source=%d "
+                "clones=%d hidden_state=%d removed=%d output=%d\n",
+                scene, count, clones, hidden_state, removed, out);
+        }
+    }
 }
 
 // Some stages add their color grading as a frozen, top-layer actor whose
@@ -847,6 +1203,20 @@ extern "C" void mm_ws_filter_fixed_viewport_effects(
     }
 }
 
+// func_8000EA88 draws 66 PortraitStruct records. Entries 0..63 form an 8x8
+// fixed-viewport death/room-transition wipe; entries 64/65 are the actual HUD
+// portraits. Let the transition controller run, but begin the render loop at
+// the HUD entries in expanded gameplay so its 320x240 checker cannot punch
+// black holes through only the center of a widescreen frame.
+extern "C" int mm_ws_portrait_draw_start(uint8_t* rdram) {
+    (void)rdram;
+    if (g_gameplay_wide_active &&
+        !env_enabled("MM_TEST_KEEP_FIXED_VIEWPORT_EFFECTS")) {
+        return 0x40;
+    }
+    return 0;
+}
+
 // Scrolling band (func_80082820 entry; sole live caller passes D_80180D90,
 // only when D_800BE6FC != 0). Per-row parallax X from D_8011D3B0[row]; rows
 // whose scroll is the -1 sentinel are skipped by the draw loop itself.
@@ -859,15 +1229,27 @@ extern "C" void mm_ws_band_repack(uint8_t* rdram, recomp_context* ctx) {
 
     WingContext wc{rdram, static_cast<gpr>(ctx->r5), rdram_gpr(kBandScratch),
         static_cast<uint32_t>(MEM_W(0, rdram_gpr(kTexturePoolPtr)))};
-    const gpr map = MEM_W(0, rdram_gpr(kBackdropMapPtr));
+    const int scene = static_cast<int16_t>(
+        MEM_HU(0, rdram_gpr(kCurrentScene)));
+    const bool captured = g_layer_fill_state.valid &&
+        g_layer_fill_state.scene == scene;
+    const gpr map = captured
+        ? rdram_gpr(g_layer_fill_state.backdrop_map)
+        : MEM_W(0, rdram_gpr(kBackdropMapPtr));
     const bool wings = wings_active(rdram, "MM_BAND_WINGS") &&
         valid_rdram_ptr(static_cast<uint32_t>(map));
-    const int addend = MEM_HU(0, rdram_gpr(kBackdropAddend));
-    const int y0 = (-12 - read_s16(rdram, kBackdropScrollY)) & 0x1FF;
+    const int addend = captured
+        ? g_layer_fill_state.backdrop_addend
+        : MEM_HU(0, rdram_gpr(kBackdropAddend));
+    const int y0 = captured
+        ? g_layer_fill_state.backdrop_y0
+        : ((-12 - read_s16(rdram, kBackdropScrollY)) & 0x1FF);
 
     const auto band_slot = [&](int row, int col) -> int32_t {
         const int row_block = ((y0 + row * 32) >> 1) & 0xF0;
-        const int x0 = (read_s16(rdram, kBandRowScroll + row * 4) - 2) & 0x1FF;
+        const int x0 = captured
+            ? g_layer_fill_state.band_x0[row]
+            : ((read_s16(rdram, kBandRowScroll + row * 4) - 2) & 0x1FF);
         const int map_col = ((x0 + col * 32 + 512) >> 5) & 0xF;
         const int tile = MEM_BU(map_col + row_block, map);
         return wing_slot(rdram, tile, addend, wc.texture_pool);
@@ -884,10 +1266,10 @@ extern "C" void mm_ws_band_repack(uint8_t* rdram, recomp_context* ctx) {
             }
         }
         static int audited_scene = -1;
-        const int scene = static_cast<int16_t>(
-            MEM_HU(0, rdram_gpr(kCurrentScene)));
-        if (scene != audited_scene) {
+        static int previous_mismatches = -1;
+        if (scene != audited_scene || mismatches != previous_mismatches) {
             audited_scene = scene;
+            previous_mismatches = mismatches;
             std::fprintf(stderr,
                 "[widescreen-formula] scene=%d layer=band mismatches=%d/70\n",
                 scene, mismatches);
@@ -909,16 +1291,32 @@ extern "C" void mm_ws_static_repack(uint8_t* rdram, recomp_context* ctx) {
     const uint32_t buffer = static_cast<uint32_t>(ctx->r7);
     WingContext wc{rdram, static_cast<gpr>(ctx->r7), rdram_gpr(kGenericScratch),
         static_cast<uint32_t>(MEM_W(0, rdram_gpr(kTexturePoolPtr)))};
+    const int scene = static_cast<int16_t>(
+        MEM_HU(0, rdram_gpr(kCurrentScene)));
+    const bool captured = g_layer_fill_state.valid &&
+        g_layer_fill_state.scene == scene;
 
     if (buffer == kEnvBuffer) {
         wc.dst = rdram_gpr(kEnvScratch);
-        const gpr map = MEM_W(0, rdram_gpr(kEnvMapPtr));
+        const gpr map = captured
+            ? rdram_gpr(g_layer_fill_state.env_map)
+            : MEM_W(0, rdram_gpr(kEnvMapPtr));
         const bool wings = wings_active(rdram, "MM_ENV_WINGS") &&
             valid_rdram_ptr(static_cast<uint32_t>(map));
-        const int addend = MEM_HU(0, rdram_gpr(kEnvAddend));
-        const bool wide = MEM_HU(0, rdram_gpr(kEnvMode)) == 1; // 128x8 map
-        const int x0 = (read_s16(rdram, kEnvScrollX) - 2) & (wide ? 0xFFF : 0x1FF);
-        const int y0 = (-12 - read_s16(rdram, kEnvScrollY)) & (wide ? 0xFF : 0x1FF);
+        const int addend = captured
+            ? g_layer_fill_state.env_addend
+            : MEM_HU(0, rdram_gpr(kEnvAddend));
+        const bool wide = captured
+            ? g_layer_fill_state.env_wide
+            : MEM_HU(0, rdram_gpr(kEnvMode)) == 1; // 128x8 map
+        const int x0 = captured
+            ? g_layer_fill_state.env_x0
+            : ((read_s16(rdram, kEnvScrollX) - 2) &
+                (wide ? 0xFFF : 0x1FF));
+        const int y0 = captured
+            ? g_layer_fill_state.env_y0
+            : ((-12 - read_s16(rdram, kEnvScrollY)) &
+                (wide ? 0xFF : 0x1FF));
 
         const auto env_slot = [&](int row, int col) -> int32_t {
             const int y = y0 + row * 32;
@@ -928,6 +1326,49 @@ extern "C" void mm_ws_static_repack(uint8_t* rdram, recomp_context* ctx) {
             return wing_slot(rdram, tile, addend, wc.texture_pool);
         };
         repack_grid(wc, env_slot, wings);
+        if (env_enabled("MM_TEST_LAYER_TRACE")) {
+            const int draw_x = static_cast<int32_t>(ctx->r5);
+            const int draw_y = static_cast<int32_t>(ctx->r6);
+            static int previous_scene = -32768;
+            static int previous_x0 = -1;
+            static int previous_y0 = -1;
+            static int previous_draw_x = 0x7FFFFFFF;
+            static int previous_draw_y = 0x7FFFFFFF;
+            if (scene != previous_scene || x0 != previous_x0 ||
+                y0 != previous_y0 || draw_x != previous_draw_x ||
+                draw_y != previous_draw_y) {
+                const int cam_x = static_cast<int32_t>(
+                    MEM_W(0, rdram_gpr(kCamX))) >> 16;
+                const int cam_y = static_cast<int32_t>(
+                    MEM_W(0, rdram_gpr(kCamY))) >> 16;
+                std::fprintf(stderr,
+                    "[widescreen-env-grid] scene=%d cam=%d,%d "
+                    "origin=%d,%d draw=%d,%d wide=%d",
+                    scene, cam_x, cam_y, x0, y0, draw_x, draw_y,
+                    wide ? 1 : 0);
+                for (int row = 0; row < 7; ++row) {
+                    std::fprintf(stderr, " r%d=", row);
+                    const int y = y0 + row * 32;
+                    const int row_block = wide
+                        ? ((y << 2) & 0x380)
+                        : ((y >> 1) & 0xF0);
+                    for (int col = 8; col <= 14; ++col) {
+                        const int map_col =
+                            ((x0 + col * 32 + 0x1000) >> 5) &
+                            (wide ? 0x7F : 0xF);
+                        std::fprintf(stderr, "%s%02x",
+                            col == 8 ? "" : ",",
+                            MEM_BU(map_col + row_block, map));
+                    }
+                }
+                std::fprintf(stderr, "\n");
+                previous_scene = scene;
+                previous_x0 = x0;
+                previous_y0 = y0;
+                previous_draw_x = draw_x;
+                previous_draw_y = draw_y;
+            }
+        }
         if (env_enabled("MM_TEST_AUTO_ADVANCE")) {
             int mismatches = 0;
             for (int row = 0; row < 7; ++row) {
@@ -939,10 +1380,10 @@ extern "C" void mm_ws_static_repack(uint8_t* rdram, recomp_context* ctx) {
                 }
             }
             static int audited_scene = -1;
-            const int scene = static_cast<int16_t>(
-                MEM_HU(0, rdram_gpr(kCurrentScene)));
-            if (scene != audited_scene) {
+            static int previous_mismatches = -1;
+            if (scene != audited_scene || mismatches != previous_mismatches) {
                 audited_scene = scene;
+                previous_mismatches = mismatches;
                 std::fprintf(stderr,
                     "[widescreen-formula] scene=%d layer=env mismatches=%d/70\n",
                     scene, mismatches);
@@ -953,17 +1394,23 @@ extern "C" void mm_ws_static_repack(uint8_t* rdram, recomp_context* ctx) {
         wc.dst = rdram_gpr(kMidScratch);
         const bool wings = wings_active(rdram, "MM_MID_WINGS");
         const gpr map = rdram_gpr(kMidMap);
-        const int addend = MEM_HU(0, rdram_gpr(kMidAddend));
-        const int col_mask = MEM_HU(0, rdram_gpr(kMidColMask));
-        const int row_mask = MEM_HU(0, rdram_gpr(kMidRowMask));
-        const int shift = MEM_HU(0, rdram_gpr(kMidShift)) & 0x1F;
-        const int scene = static_cast<int16_t>(
-            MEM_HU(0, rdram_gpr(kCurrentScene)));
+        const int addend = captured
+            ? g_layer_fill_state.mid_addend
+            : MEM_HU(0, rdram_gpr(kMidAddend));
+        const int col_mask = captured
+            ? g_layer_fill_state.mid_col_mask
+            : MEM_HU(0, rdram_gpr(kMidColMask));
+        const int row_mask = captured
+            ? g_layer_fill_state.mid_row_mask
+            : MEM_HU(0, rdram_gpr(kMidRowMask));
+        const int shift = captured
+            ? g_layer_fill_state.mid_shift
+            : (MEM_HU(0, rdram_gpr(kMidShift)) & 0x1F);
         uint16_t x0;
         uint16_t y0;
-        if (g_mid_fill_state.valid && g_mid_fill_state.scene == scene) {
-            x0 = g_mid_fill_state.x0;
-            y0 = g_mid_fill_state.y0;
+        if (captured) {
+            x0 = g_layer_fill_state.mid_x0;
+            y0 = g_layer_fill_state.mid_y0;
         }
         else {
             compute_mid_fill_bases(rdram, x0, y0);
@@ -994,10 +1441,10 @@ extern "C" void mm_ws_static_repack(uint8_t* rdram, recomp_context* ctx) {
                 }
             }
             static int audited_scene = -1;
-            const int scene = static_cast<int16_t>(
-                MEM_HU(0, rdram_gpr(kCurrentScene)));
-            if (scene != audited_scene) {
+            static int previous_mismatches = -1;
+            if (scene != audited_scene || mismatches != previous_mismatches) {
                 audited_scene = scene;
+                previous_mismatches = mismatches;
                 std::fprintf(stderr,
                     "[widescreen-formula] scene=%d layer=mid mismatches=%d/70\n",
                     scene, mismatches);
@@ -1007,12 +1454,20 @@ extern "C" void mm_ws_static_repack(uint8_t* rdram, recomp_context* ctx) {
     else if (buffer == kBandBuffer) {
         // Non-scrolling background variant (D_800BE6FC == 0): same 16x16
         // wrapping map as the band, single scroll register.
-        const gpr map = MEM_W(0, rdram_gpr(kBackdropMapPtr));
+        const gpr map = captured
+            ? rdram_gpr(g_layer_fill_state.backdrop_map)
+            : MEM_W(0, rdram_gpr(kBackdropMapPtr));
         const bool wings = wings_active(rdram, "MM_STATIC_WINGS") &&
             valid_rdram_ptr(static_cast<uint32_t>(map));
-        const int addend = MEM_HU(0, rdram_gpr(kBackdropAddend));
-        const int x0 = (read_s16(rdram, kBackdropScrollX) - 2) & 0x1FF;
-        const int y0 = (-12 - read_s16(rdram, kBackdropScrollY)) & 0x1FF;
+        const int addend = captured
+            ? g_layer_fill_state.backdrop_addend
+            : MEM_HU(0, rdram_gpr(kBackdropAddend));
+        const int x0 = captured
+            ? g_layer_fill_state.backdrop_x0
+            : ((read_s16(rdram, kBackdropScrollX) - 2) & 0x1FF);
+        const int y0 = captured
+            ? g_layer_fill_state.backdrop_y0
+            : ((-12 - read_s16(rdram, kBackdropScrollY)) & 0x1FF);
 
         const auto static_slot = [&](int row, int col) -> int32_t {
             const int row_block = ((y0 + row * 32) >> 1) & 0xF0;
@@ -1032,10 +1487,10 @@ extern "C" void mm_ws_static_repack(uint8_t* rdram, recomp_context* ctx) {
                 }
             }
             static int audited_scene = -1;
-            const int scene = static_cast<int16_t>(
-                MEM_HU(0, rdram_gpr(kCurrentScene)));
-            if (scene != audited_scene) {
+            static int previous_mismatches = -1;
+            if (scene != audited_scene || mismatches != previous_mismatches) {
                 audited_scene = scene;
+                previous_mismatches = mismatches;
                 std::fprintf(stderr,
                     "[widescreen-formula] scene=%d layer=static mismatches=%d/70\n",
                     scene, mismatches);
