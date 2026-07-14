@@ -363,6 +363,27 @@ static void print_usage(const char* argv0) {
 }
 
 int main(int argc, char** argv) {
+#if defined(__linux__)
+    // Prefer SDL's native Wayland backend in Wayland sessions. SDL2 defaults
+    // to X11, which runs through XWayland — and there the launcher's
+    // accelerated SDL_Renderer creates a GLX context, which hard-fails with a
+    // fatal X error (BadValue on X_GLXCreateContext) on some hybrid-GPU
+    // setups even though the game itself renders with Vulkan. Done via the
+    // env var rather than SDL_HINT_VIDEODRIVER because the hint only exists
+    // since SDL 2.0.22 (Ubuntu 22.04 CI links 2.0.20); overwrite=0 keeps a
+    // user-set SDL_VIDEODRIVER in charge.
+    if (std::getenv("SDL_VIDEODRIVER") == nullptr &&
+        std::getenv("WAYLAND_DISPLAY") != nullptr) {
+        SDL_version v{};
+        SDL_GetVersion(&v);
+        // Comma-separated fallback lists parse only on SDL >= 2.24; older
+        // SDL would read "wayland,x11" as one unknown driver and fail init.
+        const bool driver_list_ok =
+            SDL_VERSIONNUM(v.major, v.minor, v.patch) >= SDL_VERSIONNUM(2, 24, 0);
+        setenv("SDL_VIDEODRIVER", driver_list_ok ? "wayland,x11" : "wayland", 0);
+    }
+#endif
+
     recomp::Version project_version{};
     if (!recomp::Version::from_string("0.2.0", project_version)) {
         exit_error("Invalid version string");
