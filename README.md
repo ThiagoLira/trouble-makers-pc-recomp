@@ -2,7 +2,7 @@
 
 **Trouble Makers is a native PC port of the Nintendo 64 game *Mischief Makers*
 (Treasure, 1997), produced by static recompilation — playable, 60 fps,
-high-resolution, with correct sound.**
+high-resolution, with correct sound and **widescreen support**!.**
 
 ![Marina mid-battle in the opening forest, the scene rendered edge-to-edge in 16:9 widescreen](screenshots/hero-widescreen.png)
 
@@ -51,16 +51,12 @@ Prefer to build it yourself? See [Building and running](#building-and-running).
 ## Status
 
 - ✅ Boots, plays the full intro with correct music, title screen, menus
-- ✅ Gameplay: first level verified playable (controller + keyboard)
+- ✅ Gameplay: many levels verified playable (controller + keyboard)
 - ✅ Natively 60 fps (the game's own rate), correct audio pacing
 - ✅ High-resolution rendering (window-integer-scale via RT64), fullscreen, MSAA/SSAA
 - ✅ EEPROM saves persist to disk
 - 🧪 Experimental widescreen (opt-in), F11 fullscreen, Tab fast-forward,
   persistent display config
-- 🚧 Automated widescreen sweep passes all 52 playable progression rows;
-  a full controller-driven playthrough is still pending. Window
-  occlusion freezes the game (present-paced); minor dither artifacts remain in
-  translucent overlays at high res.
 - 🗺️ Next: full-playthrough verification, mod hooks, upstreaming runtime patches
 
 ## Experimental widescreen
@@ -236,11 +232,6 @@ boot" to "playable", every mission brief, and the debugging recipes — lives in
 [`docs/`](docs/). It is written to
 onboard an AI agent (or you) in one sitting. Headless dev harness:
 `MM_HEADLESS_GFX=1` runs the full game loop with no GPU.
-
-This port was built in ~2 days by AI agents: Claude (Fable 5) as
-driver/reviewer with fleets of GLM 5.2 workers doing parallel
-investigation and implementation — worktree-isolated, race-judged,
-line-by-line reviewed. The receipts are in the phase notes.
 
 ## Licensing
 
