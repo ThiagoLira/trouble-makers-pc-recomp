@@ -4,7 +4,9 @@
 (Treasure, 1997), produced by static recompilation — playable, 60 fps,
 high-resolution, with correct sound.**
 
-![The intro cutscene rendering at 1920x1440](screenshots/intro-1920x1440.png)
+![Marina mid-battle in the opening forest, the scene rendered edge-to-edge in 16:9 widescreen](screenshots/hero-widescreen.png)
+
+<sub>Opening forest in opt-in widescreen — the whole 16:9 field is real rendered scene, not stretched or letterboxed.</sub>
 
 ## What this is
 
