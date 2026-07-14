@@ -6,19 +6,16 @@
 #   ./.github/linux/appimage.sh [path/to/troublemakers]
 #
 # Notes:
-#  - linuxdeploy and its GTK plugin are downloaded on first use; the GTK
-#    plugin bundles the libraries the nativefiledialog file picker needs.
+#  - linuxdeploy is downloaded on first use. No GTK plugin: the file picker
+#    (nativefiledialog-extended) is built with NFD_PORTAL, so dialogs go
+#    through the host's xdg-desktop-portal over D-Bus and no GTK/gdk-pixbuf
+#    stack is bundled (bundled pixbuf used to crash on host SVG icon themes).
 #  - The resulting AppImage only runs on glibc >= the build machine's:
 #    package release builds on the oldest supported distro.
 #  - Portable mode: put a portable.txt next to the AppImage and config/saves
 #    are kept there (AppRun forwards the directory via APP_FOLDER_PATH).
 #  - On bleeding-edge hosts (Arch etc.) run with NO_STRIP=1: linuxdeploy's
 #    bundled strip predates .relr.dyn sections and dies on modern system libs.
-#  - The build host MUST have the SVG gdk-pixbuf loader installed
-#    (librsvg2-common on Debian/Ubuntu, librsvg on Arch) so the GTK plugin
-#    bundles it: the nfd file dialog renders the USER's icon theme, and
-#    SVG-based themes (very common) hard-crash GTK when the bundled pixbuf
-#    stack can't load SVGs.
 set -euo pipefail
 
 BINARY="${1:-build/src/game/troublemakers}"
@@ -38,8 +35,6 @@ esac
 
 [ -f "linuxdeploy-$LINUX_DEPLOY_ARCH.AppImage" ] || \
   curl -sSfLO "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-$LINUX_DEPLOY_ARCH.AppImage"
-[ -f linuxdeploy-plugin-gtk.sh ] || \
-  curl -sSfLO "https://github.com/linuxdeploy/linuxdeploy-plugin-gtk/raw/master/linuxdeploy-plugin-gtk.sh"
 chmod a+x linuxdeploy*
 
 rm -rf AppDir
@@ -56,8 +51,7 @@ rm -rf deploy && mv squashfs-root deploy
 ./deploy/AppRun --appdir=AppDir/ \
   -d "AppDir/$APP_NAME.desktop" \
   -i "AppDir/$APP_NAME.png" \
-  -e AppDir/usr/bin/troublemakers \
-  --plugin gtk
+  -e AppDir/usr/bin/troublemakers
 
 # Replace the generated exec line with a portable-mode-aware launch:
 # a portable.txt next to the AppImage keeps config/saves in that directory
@@ -74,10 +68,8 @@ else
 fi
 EOF
 
-# Same conflict-prone libraries the reference strips: host GIO modules and
-# wayland client libs bundled by the GTK plugin break on newer distros.
-rm -rf AppDir/usr/lib/libgmodule*
-rm -rf AppDir/usr/lib/gio/modules/*.so
+# Bundled wayland client libs break on newer distros (SDL dlopens the host's
+# at runtime anyway); strip them if linuxdeploy pulled any in.
 rm -rf AppDir/usr/lib/libwayland*
 
 OUTPUT="$APP_NAME-$ARCH.AppImage" ./deploy/usr/bin/linuxdeploy-plugin-appimage --appdir=AppDir/

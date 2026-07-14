@@ -41,10 +41,31 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
+      # No libsdl2-dev (SDL2 is built from source below — 22.04's 2.0.20 is
+      # too old) and no GTK/librsvg (file dialogs go through
+      # xdg-desktop-portal via dbus, so the AppImage bundles no GTK stack).
+      # The libx*/wayland/decor/asound/pulse/udev -dev packages are SDL2
+      # build deps: SDL dlopens them at runtime, but only compiles a backend
+      # in when its headers are present.
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build libsdl2-dev libgtk-3-dev libvulkan-dev librsvg2-common file
+          sudo apt-get install -y cmake ninja-build libvulkan-dev file libdbus-1-dev \
+            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev \
+            libxkbcommon-dev libwayland-dev wayland-protocols libdecor-0-dev \
+            libegl1-mesa-dev libgl1-mesa-dev libgles2-mesa-dev \
+            libasound2-dev libpulse-dev libpipewire-0.3-dev libudev-dev
+      # Ubuntu 22.04 ships SDL 2.0.20, whose Wayland backend predates the
+      # fractional-scaling and libdecor fixes (tiny window, mouse offset on
+      # KDE/HiDPI) and whose SDL_VIDEODRIVER doesn't parse fallback lists.
+      # Build a current SDL2 so the AppImage bundles it.
+      - name: Build SDL2 from source
+        run: |
+          curl -sSfL https://github.com/libsdl-org/SDL/releases/download/release-2.32.10/SDL2-2.32.10.tar.gz | tar xz
+          cmake -S SDL2-2.32.10 -B sdl2-build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build sdl2-build -j "$(nproc)"
+          sudo cmake --install sdl2-build
+          sudo ldconfig
       - name: Fetch private assets (troublemakers.elf, aspMain.cpp)
         run: |
           git clone --depth 1 "${{ secrets.TM_ASSETS_REPO }}" tm-assets
