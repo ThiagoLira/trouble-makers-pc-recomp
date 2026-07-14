@@ -217,10 +217,17 @@ ultramodern::renderer::WindowHandle create_window(ultramodern::gfx_callbacks_t::
         int px, py;
         if (std::sscanf(wp, "%d,%d", &px, &py) == 2) { pos_x = px; pos_y = py; }
     }
+    Uint32 window_flags = SDL_WINDOW_RESIZABLE;
+#if defined(__linux__)
+    // Native SDL2 requires this at creation time before RT64 can attach its
+    // Vulkan surface. SDL2-compat tolerated the missing flag, which hid the
+    // issue in local builds until the AppImage began loading its bundled SDL.
+    window_flags |= SDL_WINDOW_VULKAN;
+#endif
     SDL_Window* win = SDL_CreateWindow(
         "Trouble Makers",
         pos_x, pos_y,
-        g_window_w, g_window_h, SDL_WINDOW_RESIZABLE);
+        g_window_w, g_window_h, window_flags);
     if (win == nullptr) {
         std::fprintf(stderr, "Failed to create window: %s\n", SDL_GetError());
     }
