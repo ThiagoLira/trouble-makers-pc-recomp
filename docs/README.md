@@ -1,7 +1,9 @@
-# Point your AI agent here
+# Engineering notes & history
 
 Everything an agent (or a curious human) needs to work on this repo without
-re-deriving two days of hard-won context. Read in this order:
+re-deriving two days of hard-won context. For the operational quick-start
+(build, gotchas, conventions) see [`../CLAUDE.md`](../CLAUDE.md) first; this
+folder is the deep history. Read in this order:
 
 ## 1. The story so far — phase notes (chronological)
 
@@ -17,6 +19,7 @@ re-deriving two days of hard-won context. Read in this order:
 | `PHASE5_NOTES_c.md` | Release build + the AI_LEN mirror (real audio pacing; fixed pacing 17→58fps) |
 | `PHASE6_NOTES_a/b.md` | Widescreen groundwork: the view cull rect lever (D_800BE568..574); RT64 Expand + stale-wing analysis |
 | `PHASE7_NOTES_widescreen.md` | **Real widescreen** (branch `real-widescreen` @ f1b0a85): walking-pointer root cause, catch-all repack, RT64 dual-path wing clear, MM_WARP debug tool, opt-in wing fills. Read §2 and §4 BEFORE touching the tile draws — §4 lists conclusions we falsified |
+| `TERRAIN_POP_INVESTIGATION.md` | Current playable-widescreen terrain-pop investigation: proved layer ownership, falsified fixes, exact A/B commands, evidence, and the next experiment |
 
 ## 2. Mission prompts (`prompts/`)
 
@@ -28,7 +31,7 @@ nothing, RESULT blocks) and the repro recipes that worked.
 
 - **Headless harness**: `cmake -B build_headless -DMM_BUILD_GRAPHICS=OFF`,
   then `MM_HEADLESS_GFX=1 SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy
-  ./build_headless/src/game/mm_game rom.z64` — full game loop, no GPU.
+  ./build_headless/src/game/troublemakers rom.z64` — full game loop, no GPU.
 - **Event tracing**: `MM_EVENT_TRACE=1` (runtime patch) traces sp/dp
   completions and the interesting message queues on stderr.
 - **The submodule rule**: `lib/N64ModernRuntime` is pinned to UPSTREAM; the
