@@ -1,7 +1,9 @@
-# Point your AI agent here
+# Engineering notes & history
 
 Everything an agent (or a curious human) needs to work on this repo without
-re-deriving two days of hard-won context. Read in this order:
+re-deriving two days of hard-won context. For the operational quick-start
+(build, gotchas, conventions) see [`../CLAUDE.md`](../CLAUDE.md) first; this
+folder is the deep history. Read in this order:
 
 ## 1. The story so far — phase notes (chronological)
 
@@ -29,7 +31,7 @@ nothing, RESULT blocks) and the repro recipes that worked.
 
 - **Headless harness**: `cmake -B build_headless -DMM_BUILD_GRAPHICS=OFF`,
   then `MM_HEADLESS_GFX=1 SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy
-  ./build_headless/src/game/mm_game rom.z64` — full game loop, no GPU.
+  ./build_headless/src/game/troublemakers rom.z64` — full game loop, no GPU.
 - **Event tracing**: `MM_EVENT_TRACE=1` (runtime patch) traces sp/dp
   completions and the interesting message queues on stderr.
 - **The submodule rule**: `lib/N64ModernRuntime` is pinned to UPSTREAM; the

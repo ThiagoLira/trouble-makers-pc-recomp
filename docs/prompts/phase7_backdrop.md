@@ -1,4 +1,4 @@
-You are extending widescreen support for the Mischief Makers recomp. READ FIRST: point_your_ai_agent_here/README.md (rules, harness, gotchas), then PHASE6_NOTES_a.md (the cull-rect forensics — your starting map), then this.
+You are extending widescreen support for the Mischief Makers recomp. READ FIRST: docs/README.md (rules, harness, gotchas), then PHASE6_NOTES_a.md (the cull-rect forensics — your starting map), then this.
 
 STATE: --widescreen works: view-cull is widened at translation time (troublemakers.us1.toml [patches], camX±0x120), RT64 clears the wings (patches/rt64/0001), ground/sky/mountain layers and sprites render live in the wings. REMAINING GAP (your mission): the mid-screen BACKDROP BAND — the tree-line/meadow "wall" layers — still ends at the 4:3 width, leaving black bands in the wings between the extended sky and extended ground. PHASE6_NOTES_a.md flagged the suspected mechanism: background tile layers driven by a runtime tile count `D_8013769C` + tile list `D_80137614`, populated by `func_800255B4` ("riskier: content bounded").
 
