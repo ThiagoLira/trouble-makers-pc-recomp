@@ -52,6 +52,17 @@ endif()
 set(RT64_STATIC TRUE)
 set(RT64_SDL_WINDOW_VULKAN TRUE)
 
+if(UNIX AND NOT APPLE)
+    # File dialogs via xdg-desktop-portal (D-Bus) instead of GTK3: the user
+    # gets their desktop's native dialog, and the AppImage doesn't have to
+    # bundle the GTK/gdk-pixbuf stack — whose relative-path loaders.cache
+    # couldn't resolve the bundled SVG loader against host icon themes and
+    # crashed the ROM picker outright on Arch/KDE. Needs dbus-1 headers at
+    # build time and a running xdg-desktop-portal at runtime (any modern
+    # desktop). FORCE flips stale caches in existing build dirs.
+    set(NFD_PORTAL ON CACHE BOOL "Use xdg-desktop-portal instead of GTK for file dialogs" FORCE)
+endif()
+
 add_subdirectory(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_BINARY_DIR}/rt64)
 
 # RT64's own include_directories() are directory-scoped (not PUBLIC on the

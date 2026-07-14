@@ -115,10 +115,19 @@ Outcome run(std::u8string game_id, const std::string& version_string,
         return Outcome::Quit;
     }
 
+    // 640x480 is unreadably small on high-density displays: pick an integer
+    // UI scale from the desktop height (1080p -> 1x, 1440p -> 2x, 4K -> 3x)
+    // and scale window, style metrics, and font together below.
+    int ui_scale = 1;
+    SDL_DisplayMode desktop{};
+    if (SDL_GetDesktopDisplayMode(0, &desktop) == 0 && desktop.h > 0) {
+        ui_scale = std::clamp(desktop.h / 720, 1, 4);
+    }
+
     SDL_Window* window = SDL_CreateWindow(
         "Trouble Makers",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-        640, 480, SDL_WINDOW_ALLOW_HIGHDPI);
+        640 * ui_scale, 480 * ui_scale, SDL_WINDOW_ALLOW_HIGHDPI);
     if (window == nullptr) {
         std::fprintf(stderr, "[launcher] window creation failed: %s\n", SDL_GetError());
         return Outcome::Quit;
@@ -143,6 +152,14 @@ Outcome run(std::u8string game_id, const std::string& version_string,
     io.IniFilename = nullptr; // no imgui.ini litter
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     apply_style();
+    if (ui_scale > 1) {
+        ImGui::GetStyle().ScaleAllSizes(static_cast<float>(ui_scale));
+        // Rebuild the default font at the scaled size instead of
+        // FontGlobalScale, which just stretches the 13px atlas blurry.
+        ImFontConfig font_cfg{};
+        font_cfg.SizePixels = 13.0f * ui_scale;
+        io.Fonts->AddFontDefault(&font_cfg);
+    }
     ImGui_ImplSDL2_InitForSDLRenderer(window, renderer);
     ImGui_ImplSDLRenderer2_Init(renderer);
 
