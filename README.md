@@ -223,10 +223,18 @@ Set `MM_RT64_UBERSHADERS_ONLY=1` to force that path when diagnosing a similar
 problem, or `MM_RT64_UBERSHADERS_ONLY=0` to disable the workaround.
 
 CI (`.github/workflows/build.yml`) builds both the Linux AppImage and the
-Windows package on every push and uploads them as artifacts — the binaries on
-the Releases page come from it. It needs a `TM_ASSETS_REPO` secret pointing at
-a private repo with `troublemakers.elf` and the pregenerated `aspMain.cpp`, so
-the game's code never lives in this public repository.
+Windows package on every push and uploads them as artifacts. It needs a
+`TM_ASSETS_REPO` secret pointing at a private repo with `troublemakers.elf`
+and the pregenerated `aspMain.cpp`, so the game's code never lives in this
+public repository.
+
+**Cutting a release** is one command — push a version tag and CI builds both
+platforms and publishes a prerelease with the artifacts attached and
+auto-generated notes:
+
+```sh
+git tag v0.3.0 && git push origin v0.3.0
+```
 
 ### Controls
 
