@@ -55,8 +55,9 @@ Prefer to build it yourself? See [Building and running](#building-and-running).
 - ✅ Natively 60 fps (the game's own rate), correct audio pacing
 - ✅ High-resolution rendering (window-integer-scale via RT64), fullscreen, MSAA/SSAA
 - ✅ EEPROM saves persist to disk
-- 🧪 Experimental widescreen (opt-in), F11 fullscreen, Tab fast-forward,
-  persistent display config
+- 🧪 Experimental widescreen (opt-in), high-FPS frame interpolation
+  (`--fps 240` / match display, opt-in via RT64), F11 fullscreen, Tab
+  fast-forward, persistent display config
 - 🗺️ Next: full-playthrough verification, mod hooks, upstreaming runtime patches
 
 ## Experimental widescreen
@@ -141,6 +142,9 @@ cmake --build build --target troublemakers -j8
 ./build/src/game/troublemakers path/to/your.z64                # windowed 1280x960
 ./build/src/game/troublemakers rom.z64 --fullscreen
 ./build/src/game/troublemakers rom.z64 --window 1920x1440 --msaa 4
+./build/src/game/troublemakers rom.z64 --fps 240      # RT64 frame interpolation:
+#   smoother-than-60 motion synthesized between the game's native 60Hz frames
+#   (game logic still runs at 60Hz). Use --fps display to match your monitor.
 ./build/src/game/troublemakers rom.z64 --widescreen    # real 16:9 scene rendering:
 #   entities, foreground, scrolling backdrops, environment and midground
 #   tile maps are drawn beyond the original 4:3 frame. Plain launches retain
