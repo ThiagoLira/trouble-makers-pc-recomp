@@ -72,7 +72,14 @@ constexpr uint32_t kPoolBase = 0x80380600u;
 constexpr uint32_t kCurrentScene = 0x800BE5D0u;
 constexpr uint32_t kCannotPause = 0x800BE4ECu;
 constexpr uint32_t kGameState = 0x800BE4F0u;
+constexpr uint32_t kStageCinemaState = 0x800D28E8u;
 constexpr uint32_t kStageTime = 0x801781E0u;
+// The generic text system owns these independently of the per-stage cinema
+// controller. A nonzero queue entry/state/textbox actor means an actual text
+// conversation is opening, visible, or closing.
+constexpr uint32_t kDialogueState = 0x801783F0u;
+constexpr uint32_t kDialogueMessage = 0x80178418u;
+constexpr uint32_t kDialogueTextboxActor = 0x80178438u;
 constexpr uint32_t kStageScenes = 0x800C8378u;
 constexpr uint32_t kStageIds = 0x800C83F8u;
 constexpr uint32_t kCurrentStage = 0x80178162u;
@@ -169,7 +176,13 @@ void report_gameplay_ready(uint8_t* rdram, int scene) {
 int raw_gameplay_active(uint8_t* rdram) {
     static int previous_stage_time = -1;
     static int frames_since_stage_time_changed = 1000;
+    static int tracked_scene = -1;
+    static int gameplay_cinema_state = -1;
+    static int cinema_candidate = -1;
+    static int cinema_candidate_frames = 0;
     if (!env_enabled("MM_WIDESCREEN_ACTIVE")) {
+        tracked_scene = -1;
+        gameplay_cinema_state = -1;
         return 0;
     }
 
@@ -181,9 +194,28 @@ int raw_gameplay_active(uint8_t* rdram) {
         0, static_cast<gpr>(static_cast<int32_t>(kStageTime)));
     const int cannot_pause = MEM_HU(
         0, static_cast<gpr>(static_cast<int32_t>(kCannotPause)));
+    const int cinema_state = MEM_HU(
+        0, static_cast<gpr>(static_cast<int32_t>(kStageCinemaState)));
+    const int dialogue_state = MEM_HU(
+        0, static_cast<gpr>(static_cast<int32_t>(kDialogueState)));
+    const int dialogue_message = MEM_HU(
+        0, static_cast<gpr>(static_cast<int32_t>(kDialogueMessage)));
+    const int dialogue_textbox = MEM_HU(
+        0, static_cast<gpr>(static_cast<int32_t>(kDialogueTextboxActor)));
+    if (scene != tracked_scene) {
+        tracked_scene = scene;
+        previous_stage_time = -1;
+        frames_since_stage_time_changed = 1000;
+        gameplay_cinema_state = -1;
+        cinema_candidate = -1;
+        cinema_candidate_frames = 0;
+    }
     if (game_state != 6 || scene_requires_original(scene)) {
         previous_stage_time = stage_time;
         frames_since_stage_time_changed = 1000;
+        gameplay_cinema_state = -1;
+        cinema_candidate = -1;
+        cinema_candidate_frames = 0;
         return 0;
     }
 
@@ -200,8 +232,86 @@ int raw_gameplay_active(uint8_t* rdram) {
     // intros whose timer has already started. Some gameplay effects briefly
     // assert gCannotPause too; mm_widescreen_sync_mode's one-second exit
     // hysteresis absorbs those pulses without snapping back to 4:3.
-    return cannot_pause == 0 &&
-        (frames_since_stage_time_changed < 3 || stage_time >= 36000);
+    const bool timer_active =
+        frames_since_stage_time_changed < 3 || stage_time >= 36000;
+    const bool base_active = cannot_pause == 0 && timer_active;
+
+    // Record the stage-cinema state that belongs to controlled gameplay. A
+    // changed state is accepted only after a full second of an advancing,
+    // pausable stage; a real cinema freezes the timer before it can replace
+    // this baseline. Before widescreen has entered, following the state
+    // immediately lets stage intros settle on their eventual gameplay state.
+    if (base_active) {
+        if (g_gameplay_wide_active == 0 || gameplay_cinema_state < 0) {
+            gameplay_cinema_state = cinema_state;
+            cinema_candidate = -1;
+            cinema_candidate_frames = 0;
+        }
+        else if (cinema_state == gameplay_cinema_state) {
+            cinema_candidate = -1;
+            cinema_candidate_frames = 0;
+        }
+        else {
+            if (cinema_candidate != cinema_state) {
+                cinema_candidate = cinema_state;
+                cinema_candidate_frames = 1;
+            }
+            else if (cinema_candidate_frames < 60) {
+                ++cinema_candidate_frames;
+            }
+            if (cinema_candidate_frames >= 60) {
+                gameplay_cinema_state = cinema_state;
+                cinema_candidate = -1;
+                cinema_candidate_frames = 0;
+            }
+        }
+    }
+    else {
+        cinema_candidate = -1;
+        cinema_candidate_frames = 0;
+    }
+
+    const bool dialogue_active = dialogue_state != 0 ||
+        dialogue_message != 0 || dialogue_textbox != 0;
+    const bool dialogue_hold = g_gameplay_wide_active != 0 &&
+        cannot_pause == 0 && dialogue_active &&
+        gameplay_cinema_state >= 0 && cinema_state == gameplay_cinema_state;
+
+    if (env_enabled("MM_WIDESCREEN_TRACE")) {
+        static int traced_scene = -1;
+        static int traced_cinema = -1;
+        static int traced_cannot_pause = -1;
+        static int traced_dialogue_state = -1;
+        static int traced_dialogue_message = -1;
+        static int traced_dialogue_textbox = -1;
+        static int traced_base = -1;
+        static int traced_hold = -1;
+        if (scene != traced_scene || cinema_state != traced_cinema ||
+            cannot_pause != traced_cannot_pause ||
+            dialogue_state != traced_dialogue_state ||
+            dialogue_message != traced_dialogue_message ||
+            dialogue_textbox != traced_dialogue_textbox ||
+            static_cast<int>(base_active) != traced_base ||
+            static_cast<int>(dialogue_hold) != traced_hold) {
+            std::fprintf(stderr,
+                "[widescreen-state] scene=%d cinema=%d baseline=%d "
+                "pause=%d timer=%d stalled=%d dialogue=%d/%d/%d "
+                "base=%d hold=%d\n",
+                scene, cinema_state, gameplay_cinema_state, cannot_pause,
+                stage_time, frames_since_stage_time_changed, dialogue_state,
+                dialogue_message, dialogue_textbox, base_active, dialogue_hold);
+            traced_scene = scene;
+            traced_cinema = cinema_state;
+            traced_cannot_pause = cannot_pause;
+            traced_dialogue_state = dialogue_state;
+            traced_dialogue_message = dialogue_message;
+            traced_dialogue_textbox = dialogue_textbox;
+            traced_base = base_active;
+            traced_hold = dialogue_hold;
+        }
+    }
+
+    return base_active || dialogue_hold;
 }
 
 } // namespace
