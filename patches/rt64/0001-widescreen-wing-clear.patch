@@ -161,6 +161,20 @@ diff --git a/src/hle/rt64_workload_queue.cpp b/src/hle/rt64_workload_queue.cpp
 index 5b0b726..2db3f9e 100644
 --- a/src/hle/rt64_workload_queue.cpp
 +++ b/src/hle/rt64_workload_queue.cpp
+@@ -201,3 +201,12 @@ namespace RT64 {
+         }
+-
++
++        // [MM] Window-integer-scale is the automatic-resolution path used by
++        // the launcher. Render above that scale before applying RT64's box
++        // downsample so ds_option is genuine SSAA instead of only shrinking
++        // an already window-sized target.
++        if (resolutionMode == UserConfiguration::Resolution::WindowIntegerScale) {
++            resolutionMultiplier *=
++                std::max(ext.sharedResources->userConfig.downsampleMultiplier, 1);
++        }
++
+         uint32_t msaaSampleCount = ext.sharedResources->userConfig.msaaSampleCount();
 @@ -247,6 +247,7 @@ namespace RT64 {
  #   endif
          

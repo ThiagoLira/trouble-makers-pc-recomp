@@ -477,7 +477,8 @@ int main(int argc, char** argv) {
         // display options), like the other recomp projects' launchers. It
         // loads the ROM through the same recomp::select_rom path, so once it
         // returns StartGame the auto-start in vi_callback takes over.
-        mm::launcher::DisplaySettings ds{g_window_w, g_window_h, g_fullscreen, g_widescreen};
+        mm::launcher::DisplaySettings ds{
+            g_window_w, g_window_h, g_fullscreen, g_widescreen, g_msaa, g_ssaa};
         fs::path rom_path = fs::path(
             std::u8string(g_rom_path.begin(), g_rom_path.end()));
         auto outcome = mm::launcher::run(kGameId, project_version.to_string(), ds, rom_path);
@@ -485,6 +486,8 @@ int main(int argc, char** argv) {
         g_window_h = ds.window_h;
         g_fullscreen = ds.fullscreen;
         g_widescreen = ds.widescreen;
+        g_msaa = ds.msaa;
+        g_ssaa = ds.ssaa;
         g_rom_path = reinterpret_cast<const char*>(rom_path.u8string().c_str());
         save_display_config(); // keep choices even if the user exits here
         if (outcome != mm::launcher::Outcome::StartGame) {
