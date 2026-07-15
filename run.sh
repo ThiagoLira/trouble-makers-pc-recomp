@@ -59,6 +59,12 @@ cmake --build "$BUILD_DIR" --target troublemakers -j "$JOBS"
 
 game="$BUILD_DIR/src/game/troublemakers"
 
+# Default to XWayland. The native Wayland backend (via SDL/libdecor) both
+# mishandles HiDPI (tiny launcher, offset clicks) and crashes in libdecor-gtk
+# on window move/resize. XWayland sidesteps both. Overridable:
+# SDL_VIDEODRIVER=wayland ./run.sh ...
+export SDL_VIDEODRIVER="${SDL_VIDEODRIVER:-x11}"
+
 # No ROM on the command line? Fall back to $TM_ROM if set; otherwise launch with
 # no arguments and let the in-app launcher handle ROM selection.
 if [ "$#" -eq 0 ] && [ -n "${TM_ROM:-}" ]; then
