@@ -22,6 +22,7 @@ name: build
 on:
   push:
     branches: [ main ]
+    tags: [ 'v*' ]        # a version tag builds + publishes a release (see the `release` job)
   pull_request:
   workflow_dispatch:
 
@@ -170,8 +171,36 @@ jobs:
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           Copy-Item build/src/game/troublemakers.exe dist/
           Copy-Item build/src/game/*.dll dist/
+          Compress-Archive -Path dist/* -DestinationPath TroubleMakers-Windows-X64.zip -Force
       - name: Upload Windows build
         uses: actions/upload-artifact@v4
         with:
           name: TroubleMakers-Windows-X64
-          path: dist/
+          path: TroubleMakers-Windows-X64.zip
+
+  # Publish a GitHub Release with both artifacts when a version tag is pushed.
+  # Usage: `git tag v0.3.0 && git push origin v0.3.0` — build-linux/build-windows
+  # run as usual (HAS_ASSETS gate already passes on tag pushes), then this job
+  # attaches their outputs to a prerelease with auto-generated notes.
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-linux, build-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write        # GITHUB_TOKEN needs this to create the release
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Trouble Makers $GITHUB_REF_NAME" \
+            --generate-notes \
+            --prerelease \
+            artifacts/TroubleMakers-AppImage-X64/TroubleMakers-x86_64.AppImage \
+            artifacts/TroubleMakers-Windows-X64/TroubleMakers-Windows-X64.zip
