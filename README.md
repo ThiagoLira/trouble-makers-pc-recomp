@@ -94,7 +94,7 @@ actors, geometry, and tile layers are moving throughout each shot.
 
 - A legally dumped **Mischief Makers (US 1.1)** ROM (`.z64`, big-endian)
 - The sibling decomp built once (its `./trouble build` produces `troublemakers.elf`)
-- Linux: gcc/g++ (C++20), CMake ≥ 3.24, SDL2, a Vulkan-capable GPU + loader
+- Linux: GCC/G++ 12 or newer (C++20), CMake ≥ 3.24, SDL2, a Vulkan-capable GPU + loader
   (no Vulkan SDK needed — RT64 bundles headers and its shader compiler)
 - Windows: Visual Studio 2022 with the "Desktop development with C++", "C++
   Clang Compiler" and "C++ CMake tools" components — build with **clang-cl**
@@ -175,6 +175,9 @@ Run the complete playable-level screenshot/crash suite with:
 ```sh
 tools/test_widescreen_playable.sh ./build/src/game/troublemakers path/to/rom.z64 /tmp/mm-widescreen-suite
 ```
+
+On KDE Wayland, set `MM_VIDEO_DRIVER=wayland`; the suite uses Spectacle for
+native active-window captures instead of X11/XWayland window IDs.
 
 The suite targets exact progression-table stage indices, advances dialogue,
 waits for authoritative player-control state, moves Marina in short alternating

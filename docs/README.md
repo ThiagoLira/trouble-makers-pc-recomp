@@ -20,6 +20,7 @@ folder is the deep history. Read in this order:
 | `PHASE6_NOTES_a/b.md` | Widescreen groundwork: the view cull rect lever (D_800BE568..574); RT64 Expand + stale-wing analysis |
 | `PHASE7_NOTES_widescreen.md` | **Real widescreen** (branch `real-widescreen` @ f1b0a85): walking-pointer root cause, catch-all repack, RT64 dual-path wing clear, MM_WARP debug tool, opt-in wing fills. Read §2 and §4 BEFORE touching the tile draws — §4 lists conclusions we falsified |
 | `TERRAIN_POP_INVESTIGATION.md` | Current playable-widescreen terrain-pop investigation: proved layer ownership, falsified fixes, exact A/B commands, evidence, and the next experiment |
+| `DIALOGUE_TOOLCHAIN_REGRESSION.md` | July 2026 release regression: GCC 11 corrupted dialogue/display-list code; compiler boundary, package A/B proof, fix, and Wayland validation gate |
 
 ## 2. Mission prompts (`prompts/`)
 
