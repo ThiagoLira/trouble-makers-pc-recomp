@@ -199,6 +199,8 @@ public:
         app_ = std::make_unique<RT64::Application>(core, app_config);
 
         apply_config(*app_, ultramodern::renderer::get_graphics_config());
+        const uint32_t requested_msaa = app_->userConfig.msaaSampleCount();
+        const int requested_ssaa = app_->userConfig.downsampleMultiplier;
         app_->userConfig.developerMode = developer_mode;
 
         setup_result = to_setup_result(app_->setup(0));
@@ -207,6 +209,14 @@ public:
             app_.reset();
             return;
         }
+
+        const uint32_t active_msaa = app_->userConfig.msaaSampleCount();
+        std::fprintf(stderr,
+            "[gfx] antialiasing msaa=%ux%s ssaa=%dx sample-locations=%s\n",
+            active_msaa,
+            active_msaa == requested_msaa ? "" : " (hardware fallback)",
+            requested_ssaa,
+            app_->device->getCapabilities().sampleLocations ? "yes" : "no");
 
         // NVIDIA's 610-series Linux Vulkan driver was observed corrupting RT64's
         // specialized per-material SPIR-V on Blackwell: small sprites and glyphs

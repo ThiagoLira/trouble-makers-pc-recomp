@@ -15,13 +15,14 @@
 
 namespace mm::launcher {
 
-// The subset of display options the splash exposes (see the CLI flags in
-// main.cpp: --window WxH, --fullscreen, --widescreen).
+// The display options the splash exposes (see the CLI flags in main.cpp).
 struct DisplaySettings {
     int window_w;
     int window_h;
     bool fullscreen;
     bool widescreen;
+    int msaa;
+    int ssaa;
 };
 
 enum class Outcome {

@@ -292,6 +292,46 @@ Outcome run(std::u8string game_id, const std::string& version_string,
                               "Opt-in: can reveal off-stage areas in a 2D game.");
         }
 
+        const char* msaa_preview = settings.msaa == 2 ? "2x"
+                                 : settings.msaa == 4 ? "4x"
+                                 : settings.msaa == 8 ? "8x"
+                                                      : "Off";
+        ImGui::SetNextItemWidth(220.0f);
+        if (ImGui::BeginCombo("MSAA", msaa_preview)) {
+            constexpr int values[] = {0, 2, 4, 8};
+            constexpr const char* labels[] = {"Off", "2x", "4x", "8x"};
+            for (int i = 0; i < static_cast<int>(std::size(values)); ++i) {
+                if (ImGui::Selectable(labels[i], settings.msaa == values[i])) {
+                    settings.msaa = values[i];
+                }
+            }
+            ImGui::EndCombo();
+        }
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+            ImGui::SetTooltip("Smooths polygon edges. 4x is recommended.");
+        }
+
+        char ssaa_preview[16] = "Off";
+        if (settings.ssaa > 1) {
+            std::snprintf(ssaa_preview, sizeof ssaa_preview, "%dx", settings.ssaa);
+        }
+        ImGui::SetNextItemWidth(220.0f);
+        if (ImGui::BeginCombo("SSAA", ssaa_preview)) {
+            constexpr int values[] = {1, 2, 3, 4, 5, 6, 7, 8};
+            constexpr const char* labels[] = {
+                "Off", "2x", "3x", "4x", "5x", "6x", "7x", "8x"};
+            for (int i = 0; i < static_cast<int>(std::size(values)); ++i) {
+                if (ImGui::Selectable(labels[i], settings.ssaa == values[i])) {
+                    settings.ssaa = values[i];
+                }
+            }
+            ImGui::EndCombo();
+        }
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+            ImGui::SetTooltip("Renders above the selected resolution and downsamples.\n"
+                              "Use 2x first; higher values are very GPU-intensive.");
+        }
+
         // --- Start / Exit ---------------------------------------------------
         // Pinned to the bottom of the window.
         float button_h = ImGui::GetFrameHeight();

@@ -137,7 +137,7 @@ cmake --build build --target troublemakers -j8
 
 ./build/src/game/troublemakers                                 # no args: launcher
 #   (splash screen: pick your ROM with a native file dialog, set resolution /
-#   fullscreen / widescreen, Start Game; remembers the ROM for next time)
+#   fullscreen / widescreen / anti-aliasing, Start Game; remembers the ROM)
 ./build/src/game/troublemakers path/to/your.z64                # windowed 1280x960
 ./build/src/game/troublemakers rom.z64 --fullscreen
 ./build/src/game/troublemakers rom.z64 --window 1920x1440 --msaa 4
@@ -157,10 +157,11 @@ texture memory.
 Entity spawn/despawn windows are widened to match, so objects no longer pop
 in at the wing edges.
 Opening/in-stage cinematics automatically switch back to centered 4:3 and
-return to widescreen only after player control is stable. A small remaining
-fallback set currently stays 4:3 while its fixed-canvas composition is being
-validated (scenes 25, 27, 57, 71, 79, and 85). Vertigo and Seasick Climb now
-render their rotating textured walls in widescreen without framebuffer trails.
+return to widescreen only after player control is stable. NPC conversations
+during gameplay remain widescreen. A small remaining fallback set currently
+stays 4:3 while its fixed-canvas composition is being validated (scenes 25,
+27, 57, 71, 79, and 85). Vertigo and Seasick Climb now render their rotating
+textured walls in widescreen without framebuffer trails.
 See the live [scene 22 capture](screenshots/widescreen-scene-22.png), the
 [forest artifact comparison](screenshots/widescreen-forest-fix.png), and the
 labeled [coverage](screenshots/widescreen-coverage-scenes.png) and
@@ -183,6 +184,13 @@ problems, capture a sustained frame sequence with `tools/test_render_burst.sh`.
 
 Options persist to `~/.config/troublemakers-recomp/display.cfg` (CLI
 overrides). In game: **F11** toggles fullscreen, **hold Tab** fast-forwards 3x.
+
+The launcher also exposes MSAA and SSAA. MSAA 4x is the recommended first
+choice: it smooths geometry edges at much lower cost than supersampling. SSAA
+2x renders above the automatic internal resolution and downsamples the result;
+it also smooths shader and texture edges, but uses roughly four times the
+rendering pixels before widescreen expansion. Higher SSAA values are intended
+for unusually fast GPUs.
 
 The ROM is hash-validated (US 1.1 only), stored under
 `~/.config/troublemakers-recomp/` along with saves, and the game auto-starts.
