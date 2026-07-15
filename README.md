@@ -263,11 +263,19 @@ onboard an AI agent (or you) in one sitting. Headless dev harness:
 
 ## Licensing
 
-- Code in this repository: **MIT** (see `LICENSE`)
-- `N64ModernRuntime` (statically linked): **GPLv3** — distributed binaries
-  are combined works and carry GPLv3 obligations
-- `N64Recomp`, `RT64`: MIT
-- No Nintendo/Treasure code or assets are included or distributed
+Copyright (C) 2026 Thiago Lira. This project is **GPLv3** (see `LICENSE`).
+
+It statically links [`N64ModernRuntime`](https://github.com/N64Recomp/N64ModernRuntime),
+which is GPLv3, so the combined work — including the binaries on the Releases
+page — is a derivative work under GPLv3. This matches
+[Zelda64Recomp](https://github.com/Zelda64Recomp/Zelda64Recomp), which is
+GPLv3 for the same reason; the project cannot be distributed under a permissive
+license like MIT.
+
+- Some linked components carry their own permissive terms — `N64Recomp` and
+  `RT64` are MIT — but the copyleft obligation from `N64ModernRuntime` governs
+  the distributed whole.
+- No Nintendo/Treasure code or assets are included or distributed.
 
 ## Credits
 
