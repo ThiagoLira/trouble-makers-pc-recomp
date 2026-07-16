@@ -10,6 +10,7 @@
 // MI) that nothing else in the recomp models.
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -20,6 +21,9 @@
 #define HLSL_CPU
 #endif
 #include "hle/rt64_application.h"
+#include "hle/rt64_present_queue.h"
+#include "gui/rt64_inspector.h"
+#include "imgui.h"
 
 #include "ultramodern/ultramodern.hpp"
 #include "ultramodern/config.hpp"
@@ -29,6 +33,8 @@
 namespace mm::graphics {
 
 namespace {
+
+std::atomic<OverlayDrawCallback> g_overlay_draw_callback{nullptr};
 
 // N64 bus addresses carry segment bits in the top byte; RT64 wants the
 // physical offset into RDRAM.
@@ -319,6 +325,26 @@ public:
                 (unsigned long long)vi_count, vi->VI_ORIGIN_REG, vi->VI_WIDTH_REG, vi->VI_STATUS_REG);
         }
         vi_count++;
+
+        // Reuse RT64's inspector renderer as a small, host-owned post-present
+        // ImGui pass. Developer mode stays off, so State::inspect() never
+        // builds RT64's own large inspector window; only our callback submits
+        // draw data. PresentQueue composites it after the N64 image on both
+        // Vulkan and D3D12.
+        if (OverlayDrawCallback draw_overlay =
+                g_overlay_draw_callback.load(std::memory_order_acquire)) {
+            const std::scoped_lock lock(app_->presentQueue->inspectorMutex);
+            if (app_->presentQueue->inspector == nullptr) {
+                app_->presentQueue->inspector = std::make_unique<RT64::Inspector>(
+                    app_->device.get(), app_->swapChain.get(),
+                    app_->chosenGraphicsAPI, app_->appWindow->sdlWindow);
+                ImGui::GetIO().IniFilename = nullptr;
+            }
+            RT64::Inspector* inspector = app_->presentQueue->inspector.get();
+            inspector->newFrame(app_->framebufferGraphicsWorker.get());
+            draw_overlay();
+            inspector->endFrame();
+        }
         app_->updateScreen();
     }
 
@@ -363,6 +389,10 @@ private:
 };
 
 } // namespace
+
+void set_overlay_draw_callback(OverlayDrawCallback callback) {
+    g_overlay_draw_callback.store(callback, std::memory_order_release);
+}
 
 std::unique_ptr<ultramodern::renderer::RendererContext>
 create_render_context(uint8_t* rdram, ultramodern::renderer::WindowHandle window_handle, bool developer_mode) {

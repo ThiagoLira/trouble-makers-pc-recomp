@@ -332,6 +332,17 @@ Outcome run(std::u8string game_id, const std::string& version_string,
                               "Use 2x first; higher values are very GPU-intensive.");
         }
 
+        // --- Advanced ------------------------------------------------------
+        ImGui::SeparatorText("Advanced");
+        ImGui::Checkbox("Enable debug menu", &settings.debug_menu);
+        ImGui::SameLine();
+        ImGui::TextDisabled("(?)");
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+            ImGui::SetTooltip(
+                "F1 or controller L+R+Start opens the in-game overlay.\n"
+                "Using a debug warp blocks all save writes until exit.");
+        }
+
         // --- Start / Exit ---------------------------------------------------
         // Pinned to the bottom of the window.
         float button_h = ImGui::GetFrameHeight();

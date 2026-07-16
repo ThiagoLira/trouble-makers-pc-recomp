@@ -23,6 +23,7 @@ struct DisplaySettings {
     bool widescreen;
     int msaa;
     int ssaa;
+    bool debug_menu;
 };
 
 enum class Outcome {

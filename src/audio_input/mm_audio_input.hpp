@@ -37,6 +37,12 @@ size_t get_frames_remaining();
 // get_connected_device_info). Hand this to recomp::Configuration::input_callbacks.
 ultramodern::input::callbacks_t input_callbacks();
 
+// Suppress all gameplay input while a host UI owns the keyboard/controller.
+// The debug overlay uses this so its navigation keys never leak through to
+// Marina or the game's pause menu. Thread-safe: the SDL event and game-input
+// callbacks run on different runtime threads.
+void set_input_blocked(bool blocked);
+
 // The game's save type. The US 1.1 ROM uses 4Kbit EEPROM — see
 // PHASE2_NOTES_w4.md for the evidence (osEepromProbe/LongRead/LongWrite calls
 // in RecompiledFuncs, max block address 0x2C < 64-block 4K limit). Set this

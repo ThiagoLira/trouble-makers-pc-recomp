@@ -68,6 +68,7 @@ fi
 
 setsid env MM_WARP_STAGE="$stage" MM_WARP_AT=1 MM_WARP_DELAY=1 \
     MM_TEST_AUTO_ADVANCE="$auto_advance" MM_TEST_MOVE="$test_move" \
+    MM_TEST_MOVE_4X3="$((1 - widescreen))" \
     MM_TEST_STREAM_TRACE="$stream_trace" \
     MM_TEST_STREAM_CAMERA="$stream_camera" \
     MM_WIN_POS=40,40 SDL_VIDEODRIVER=x11 \

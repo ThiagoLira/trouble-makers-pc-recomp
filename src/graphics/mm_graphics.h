@@ -16,10 +16,17 @@
 #include "ultramodern/renderer_context.hpp"
 
 namespace mm::graphics {
+    using OverlayDrawCallback = void (*)();
+
     // Creates the concrete RT64-backed render context. Matches the signature
     // of ultramodern::renderer::callbacks_t::create_render_context_t.
     std::unique_ptr<ultramodern::renderer::RendererContext>
         create_render_context(uint8_t* rdram, ultramodern::renderer::WindowHandle window_handle, bool developer_mode);
+
+    // Optional post-present UI callback. RT64's existing cross-API ImGui
+    // renderer draws it after the N64 framebuffer and before presentation.
+    // Set before recomp::start(); nullptr disables the overlay pass entirely.
+    void set_overlay_draw_callback(OverlayDrawCallback callback);
 
     // Registers create_render_context (and the API-name helper) with the
     // ultramodern renderer layer. Idempotent; call once before recomp::start().
