@@ -68,6 +68,12 @@ else
     portable_dir="$PWD"
 fi
 
+# The bundled classic SDL2 mishandles HiDPI on the native Wayland backend
+# (tiny UI, mouse clicks land offset from what's drawn). Default to x11 so the
+# compositor does the scaling via XWayland â consistent and correct. Power
+# users can still force native Wayland with SDL_VIDEODRIVER=wayland.
+export SDL_VIDEODRIVER="${SDL_VIDEODRIVER:-x11}"
+
 cd "$this_dir"/usr/bin/
 if [ -f "$portable_dir/portable.txt" ]; then
     APP_FOLDER_PATH="$portable_dir" exec ./troublemakers "$@"

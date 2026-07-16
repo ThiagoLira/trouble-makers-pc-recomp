@@ -334,6 +334,31 @@ Outcome run(std::u8string game_id, const std::string& version_string,
 
         // --- Advanced ------------------------------------------------------
         ImGui::SeparatorText("Advanced");
+
+        // Frame interpolation (RT64). 0 = native 60; -1 = match display; a
+        // positive value is an interpolated target (game logic stays 60Hz).
+        char fps_preview[24];
+        if (settings.fps == 0)       std::snprintf(fps_preview, sizeof fps_preview, "Native (60)");
+        else if (settings.fps < 0)   std::snprintf(fps_preview, sizeof fps_preview, "Match display");
+        else                         std::snprintf(fps_preview, sizeof fps_preview, "%d fps", settings.fps);
+        ImGui::SetNextItemWidth(220.0f);
+        if (ImGui::BeginCombo("Frame rate", fps_preview)) {
+            constexpr int values[] = {0, 120, 144, 240, -1};
+            constexpr const char* labels[] = {
+                "Native (60)", "120 fps", "144 fps", "240 fps", "Match display"};
+            for (int i = 0; i < static_cast<int>(std::size(values)); ++i) {
+                if (ImGui::Selectable(labels[i], settings.fps == values[i])) {
+                    settings.fps = values[i];
+                }
+            }
+            ImGui::EndCombo();
+        }
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+            ImGui::SetTooltip("Interpolates smoother motion above the game's 60Hz using RT64.\n"
+                              "The game's logic still runs at 60Hz; the extra frames are\n"
+                              "synthesized. Capped to your monitor's refresh rate.");
+        }
+
         ImGui::Checkbox("Enable debug menu", &settings.debug_menu);
         ImGui::SameLine();
         ImGui::TextDisabled("(?)");

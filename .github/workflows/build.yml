@@ -22,6 +22,7 @@ name: build
 on:
   push:
     branches: [ main ]
+    tags: [ 'v*' ]        # a version tag builds + publishes a release (see the `release` job)
   pull_request:
   workflow_dispatch:
 
@@ -36,6 +37,11 @@ jobs:
     # public GitHub runners ubuntu-22.04 is the floor.)
     runs-on: ubuntu-22.04
     if: ${{ vars.HAS_ASSETS != '' || github.event_name == 'workflow_dispatch' }}
+    env:
+      # GCC 11 miscompiles translated dialogue/display-list code. Keep the
+      # Ubuntu 22.04 glibc baseline, but use Jammy's supported GCC 12 package.
+      CC: gcc-12
+      CXX: g++-12
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -50,7 +56,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build libvulkan-dev file libdbus-1-dev \
+          sudo apt-get install -y cmake ninja-build gcc-12 g++-12 libvulkan-dev file libdbus-1-dev \
             libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxfixes-dev libxi-dev libxss-dev \
             libxkbcommon-dev libwayland-dev wayland-protocols libdecor-0-dev \
             libegl1-mesa-dev libgl1-mesa-dev libgles2-mesa-dev \
@@ -90,10 +96,10 @@ jobs:
           cmake -S tools/N64Recomp -B tools/N64Recomp/build -DCMAKE_BUILD_TYPE=Release -G Ninja
           cmake --build tools/N64Recomp/build --target N64RecompCLI -j "$(nproc)"
           ./tools/N64Recomp/build/N64Recomp troublemakers.us1.toml
-      # Default g++ (not clang): Ubuntu 22.04's libstdc++ declares extern
+      # GCC (not clang): Ubuntu 22.04's libstdc++ declares extern
       # templates for u8string that its .so doesn't ship, and clang then
-      # leaves _M_construct<char8_t> undefined at link. gcc matches the
-      # locally-verified toolchain.
+      # leaves _M_construct<char8_t> undefined at link. GCC 12 also avoids the
+      # translated-code corruption reproduced with Jammy's default GCC 11.
       - name: Build troublemakers
         run: |
           cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
@@ -165,8 +171,36 @@ jobs:
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           Copy-Item build/src/game/troublemakers.exe dist/
           Copy-Item build/src/game/*.dll dist/
+          Compress-Archive -Path dist/* -DestinationPath TroubleMakers-Windows-X64.zip -Force
       - name: Upload Windows build
         uses: actions/upload-artifact@v4
         with:
           name: TroubleMakers-Windows-X64
-          path: dist/
+          path: TroubleMakers-Windows-X64.zip
+
+  # Publish a GitHub Release with both artifacts when a version tag is pushed.
+  # Usage: `git tag v0.3.0 && git push origin v0.3.0` — build-linux/build-windows
+  # run as usual (HAS_ASSETS gate already passes on tag pushes), then this job
+  # attaches their outputs to a prerelease with auto-generated notes.
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-linux, build-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write        # GITHUB_TOKEN needs this to create the release
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Trouble Makers $GITHUB_REF_NAME" \
+            --generate-notes \
+            --prerelease \
+            artifacts/TroubleMakers-AppImage-X64/TroubleMakers-x86_64.AppImage \
+            artifacts/TroubleMakers-Windows-X64/TroubleMakers-Windows-X64.zip

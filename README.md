@@ -55,8 +55,9 @@ Prefer to build it yourself? See [Building and running](#building-and-running).
 - ✅ Natively 60 fps (the game's own rate), correct audio pacing
 - ✅ High-resolution rendering (window-integer-scale via RT64), fullscreen, MSAA/SSAA
 - ✅ EEPROM saves persist to disk
-- 🧪 Experimental widescreen (opt-in), F11 fullscreen, Tab fast-forward,
-  persistent display config
+- 🧪 Experimental widescreen (opt-in), high-FPS frame interpolation
+  (`--fps 240` / match display, opt-in via RT64), F11 fullscreen, Tab
+  fast-forward, persistent display config
 - 🧰 Launcher-gated, save-safe debug menu with campaign level warps
 - 🗺️ Next: full-playthrough verification, mod hooks, upstreaming runtime patches
 
@@ -95,7 +96,7 @@ actors, geometry, and tile layers are moving throughout each shot.
 
 - A legally dumped **Mischief Makers (US 1.1)** ROM (`.z64`, big-endian)
 - The sibling decomp built once (its `./trouble build` produces `troublemakers.elf`)
-- Linux: gcc/g++ (C++20), CMake ≥ 3.24, SDL2, a Vulkan-capable GPU + loader
+- Linux: GCC/G++ 12 or newer (C++20), CMake ≥ 3.24, SDL2, a Vulkan-capable GPU + loader
   (no Vulkan SDK needed — RT64 bundles headers and its shader compiler)
 - Windows: Visual Studio 2022 with the "Desktop development with C++", "C++
   Clang Compiler" and "C++ CMake tools" components — build with **clang-cl**
@@ -142,6 +143,9 @@ cmake --build build --target troublemakers -j8
 ./build/src/game/troublemakers path/to/your.z64                # windowed 1280x960
 ./build/src/game/troublemakers rom.z64 --fullscreen
 ./build/src/game/troublemakers rom.z64 --window 1920x1440 --msaa 4
+./build/src/game/troublemakers rom.z64 --fps 240      # RT64 frame interpolation:
+#   smoother-than-60 motion synthesized between the game's native 60Hz frames
+#   (game logic still runs at 60Hz). Use --fps display to match your monitor.
 ./build/src/game/troublemakers rom.z64 --widescreen    # real 16:9 scene rendering:
 #   entities, foreground, scrolling backdrops, environment and midground
 #   tile maps are drawn beyond the original 4:3 frame. Plain launches retain
@@ -177,6 +181,9 @@ Run the complete playable-level screenshot/crash suite with:
 ```sh
 tools/test_widescreen_playable.sh ./build/src/game/troublemakers path/to/rom.z64 /tmp/mm-widescreen-suite
 ```
+
+On KDE Wayland, set `MM_VIDEO_DRIVER=wayland`; the suite uses Spectacle for
+native active-window captures instead of X11/XWayland window IDs.
 
 The suite targets exact progression-table stage indices, advances dialogue,
 waits for authoritative player-control state, moves Marina in short alternating
@@ -226,10 +233,18 @@ Set `MM_RT64_UBERSHADERS_ONLY=1` to force that path when diagnosing a similar
 problem, or `MM_RT64_UBERSHADERS_ONLY=0` to disable the workaround.
 
 CI (`.github/workflows/build.yml`) builds both the Linux AppImage and the
-Windows package on every push and uploads them as artifacts — the binaries on
-the Releases page come from it. It needs a `TM_ASSETS_REPO` secret pointing at
-a private repo with `troublemakers.elf` and the pregenerated `aspMain.cpp`, so
-the game's code never lives in this public repository.
+Windows package on every push and uploads them as artifacts. It needs a
+`TM_ASSETS_REPO` secret pointing at a private repo with `troublemakers.elf`
+and the pregenerated `aspMain.cpp`, so the game's code never lives in this
+public repository.
+
+**Cutting a release** is one command — push a version tag and CI builds both
+platforms and publishes a prerelease with the artifacts attached and
+auto-generated notes:
+
+```sh
+git tag v0.3.0 && git push origin v0.3.0
+```
 
 ### Controls
 
@@ -260,11 +275,19 @@ onboard an AI agent (or you) in one sitting. Headless dev harness:
 
 ## Licensing
 
-- Code in this repository: **MIT** (see `LICENSE`)
-- `N64ModernRuntime` (statically linked): **GPLv3** — distributed binaries
-  are combined works and carry GPLv3 obligations
-- `N64Recomp`, `RT64`: MIT
-- No Nintendo/Treasure code or assets are included or distributed
+Copyright (C) 2026 Thiago Lira. This project is **GPLv3** (see `LICENSE`).
+
+It statically links [`N64ModernRuntime`](https://github.com/N64Recomp/N64ModernRuntime),
+which is GPLv3, so the combined work — including the binaries on the Releases
+page — is a derivative work under GPLv3. This matches
+[Zelda64Recomp](https://github.com/Zelda64Recomp/Zelda64Recomp), which is
+GPLv3 for the same reason; the project cannot be distributed under a permissive
+license like MIT.
+
+- Some linked components carry their own permissive terms — `N64Recomp` and
+  `RT64` are MIT — but the copyleft obligation from `N64ModernRuntime` governs
+  the distributed whole.
+- No Nintendo/Treasure code or assets are included or distributed.
 
 ## Credits
 

@@ -115,6 +115,12 @@ static bool g_widescreen = false;
 static int g_ssaa = 1;
 static int g_msaa = 0;
 static bool g_debug_menu = false;
+// RT64 frame-interpolation target. 0 = native 60Hz (Original, no
+// interpolation); -1 = match the display refresh; a positive value is an
+// interpolated FPS target. The game's logic always runs at its native 60Hz —
+// RT64 synthesizes the extra display frames by matching and interpolating
+// draw calls between consecutive game frames.
+static int g_fps = 0;
 // Remembered ROM path (UTF-8), so the launcher can offer "Start Game"
 // immediately on the next run. Empty until a ROM validates.
 static std::string g_rom_path;
@@ -137,7 +143,18 @@ static void apply_display_config() {
                     : g_msaa == 4 ? ultramodern::renderer::Antialiasing::MSAA4X
                     : g_msaa == 8 ? ultramodern::renderer::Antialiasing::MSAA8X
                                   : ultramodern::renderer::Antialiasing::None;
-    cfg.rr_option = ultramodern::renderer::RefreshRate::Original; // natively 60Hz
+    // Frame interpolation: Original renders only the game's native 60 frames.
+    // Display interpolates up to the monitor's refresh; a positive g_fps
+    // interpolates to that target (RT64 clamps it to the swap-chain rate).
+    // See rr_manual_value below; game logic is unaffected (still 60Hz).
+    if (g_fps < 0) {
+        cfg.rr_option = ultramodern::renderer::RefreshRate::Display;
+    } else if (g_fps > 60) {
+        cfg.rr_option = ultramodern::renderer::RefreshRate::Manual;
+        cfg.rr_manual_value = g_fps;
+    } else {
+        cfg.rr_option = ultramodern::renderer::RefreshRate::Original; // natively 60Hz
+    }
     cfg.hpfb_option = ultramodern::renderer::HighPrecisionFramebuffer::Auto;
     cfg.ds_option = g_ssaa;
     ultramodern::renderer::set_graphics_config(cfg);
@@ -173,6 +190,7 @@ static void load_display_config() {
         else if (k == "ssaa" && value >= 1 && value <= 8) g_ssaa = value;
         else if (k == "msaa" && (value == 0 || value == 2 || value == 4 || value == 8)) g_msaa = value;
         else if (k == "debug_menu") g_debug_menu = value != 0;
+        else if (k == "fps" && value >= -1 && value <= 1000) g_fps = value;
     }
 }
 
@@ -185,6 +203,7 @@ static void save_display_config() {
       << "\nfullscreen=" << (g_fullscreen ? 1 : 0)
       << "\nwidescreen=" << (g_widescreen ? 1 : 0)
       << "\nssaa=" << g_ssaa << "\nmsaa=" << g_msaa
+      << "\nfps=" << g_fps
       << "\ndebug_menu=" << (g_debug_menu ? 1 : 0) << "\n";
     if (!g_rom_path.empty()) {
         f << "rom=" << g_rom_path << "\n";
@@ -369,6 +388,9 @@ static void print_usage(const char* argv0) {
         "                      at window-integer-scale, so bigger = sharper\n"
         "  --ssaa N            supersample N x on top of the window scale (1-8)\n"
         "  --msaa N            multisample antialiasing (2, 4, or 8)\n"
+        "  --fps native|display|N  RT64 frame interpolation: native 60Hz,\n"
+        "                      match the display, or an interpolated target\n"
+        "                      like 240 (game logic still runs at 60Hz)\n"
         "  --widescreen        expand the rendered field to the window aspect\n"
         "                      (opt-in: can reveal off-stage areas in a 2D game)\n"
         "  --no-widescreen     force the original 4:3 presentation\n"
@@ -435,6 +457,17 @@ int main(int argc, char** argv) {
         } else if (arg == "--msaa" && i + 1 < argc) {
             g_msaa = std::atoi(argv[++i]);
             if (g_msaa != 2 && g_msaa != 4 && g_msaa != 8) { print_usage(argv[0]); exit_error("--msaa expects 2, 4 or 8"); }
+        } else if (arg == "--fps" && i + 1 < argc) {
+            std::string_view v = argv[++i];
+            if (v == "native" || v == "60") g_fps = 0;
+            else if (v == "display" || v == "match") g_fps = -1;
+            else {
+                g_fps = std::atoi(argv[i]);
+                if (g_fps < 61 || g_fps > 1000) {
+                    print_usage(argv[0]);
+                    exit_error("--fps expects native, display, or a value 61-1000");
+                }
+            }
         } else if (arg == "--help" || arg == "-h") {
             print_usage(argv[0]);
             return EXIT_SUCCESS;
@@ -494,7 +527,7 @@ int main(int argc, char** argv) {
         // returns StartGame the auto-start in vi_callback takes over.
         mm::launcher::DisplaySettings ds{
             g_window_w, g_window_h, g_fullscreen, g_widescreen,
-            g_msaa, g_ssaa, g_debug_menu};
+            g_msaa, g_ssaa, g_fps, g_debug_menu};
         fs::path rom_path = fs::path(
             std::u8string(g_rom_path.begin(), g_rom_path.end()));
         auto outcome = mm::launcher::run(kGameId, project_version.to_string(), ds, rom_path);
@@ -504,6 +537,7 @@ int main(int argc, char** argv) {
         g_widescreen = ds.widescreen;
         g_msaa = ds.msaa;
         g_ssaa = ds.ssaa;
+        g_fps = ds.fps;
         g_debug_menu = ds.debug_menu;
         g_rom_path = reinterpret_cast<const char*>(rom_path.u8string().c_str());
         save_display_config(); // keep choices even if the user exits here

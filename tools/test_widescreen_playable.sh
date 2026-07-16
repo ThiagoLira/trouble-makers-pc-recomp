@@ -6,7 +6,7 @@ set -u
 
 usage() {
     echo "usage: $0 GAME_BINARY ROM OUTPUT_DIR [STAGE_INDEX ...]" >&2
-    echo "env: MM_CAPTURE_DELAY=60 MM_CAPTURE_WARMUP=0 MM_CAPTURE_CAMERA_X= MM_CAPTURE_FRAMES=3 MM_CAPTURE_INTERVAL=0.35 MM_CAPTURE_GEOMETRY=1602x1022+39+59 MM_WINDOW=1600x900 MM_AUTO_ADVANCE=1 MM_TEST_MOVE=1|jet-right|jet-left|jet-bounce MM_TEST_ACTOR_TRACE=1 MM_TEST_STREAM_TRACE=1 MM_TEST_STREAM_CAMERA=x[,y]" >&2
+    echo "env: MM_VIDEO_DRIVER=x11|wayland MM_CAPTURE_DELAY=60 MM_CAPTURE_WARMUP=0 MM_CAPTURE_CAMERA_X= MM_CAPTURE_FRAMES=3 MM_CAPTURE_INTERVAL=0.35 MM_CAPTURE_GEOMETRY=1602x1022+39+59 MM_WINDOW=1600x900 MM_AUTO_ADVANCE=1 MM_TEST_MOVE=1|jet-right|jet-left|jet-bounce MM_TEST_ACTOR_TRACE=1 MM_TEST_STREAM_TRACE=1 MM_TEST_STREAM_CAMERA=x[,y]" >&2
 }
 
 if (( $# < 3 )); then
@@ -24,6 +24,7 @@ capture_warmup=${MM_CAPTURE_WARMUP:-0}
 capture_camera_x=${MM_CAPTURE_CAMERA_X:-}
 capture_geometry=${MM_CAPTURE_GEOMETRY:-1602x1022+39+59}
 window_size=${MM_WINDOW:-1600x900}
+video_driver=${MM_VIDEO_DRIVER:-x11}
 auto_advance=${MM_AUTO_ADVANCE:-1}
 capture_frames=${MM_CAPTURE_FRAMES:-3}
 capture_interval=${MM_CAPTURE_INTERVAL:-0.35}
@@ -48,10 +49,28 @@ if ! command -v magick >/dev/null; then
     echo "ImageMagick 'magick' is required" >&2
     exit 2
 fi
-if [[ -z ${DISPLAY:-} ]]; then
-    echo "DISPLAY is not set; the live screenshot suite requires X11/XWayland" >&2
-    exit 2
-fi
+case $video_driver in
+    x11)
+        if [[ -z ${DISPLAY:-} ]]; then
+            echo "DISPLAY is not set; the X11 screenshot suite cannot start" >&2
+            exit 2
+        fi
+        ;;
+    wayland)
+        if [[ -z ${WAYLAND_DISPLAY:-} ]]; then
+            echo "WAYLAND_DISPLAY is not set; the native Wayland screenshot suite cannot start" >&2
+            exit 2
+        fi
+        if ! command -v spectacle >/dev/null; then
+            echo "KDE Spectacle is required for native Wayland screenshots" >&2
+            exit 2
+        fi
+        ;;
+    *)
+        echo "MM_VIDEO_DRIVER must be x11 or wayland: $video_driver" >&2
+        exit 2
+        ;;
+esac
 
 mkdir -p "$output_dir/logs"
 manifest="$output_dir/results.tsv"
@@ -77,6 +96,11 @@ find_game_window() {
 capture_game_frame() {
     local output=$1
     rm -f -- "$output"
+    if [[ $video_driver == wayland ]]; then
+        spectacle -b -n -a -o "$output" >/dev/null 2>&1 &&
+            [[ -s $output ]]
+        return
+    fi
     if [[ -n $game_window ]] &&
         magick "x:$game_window" +repage "$output" 2>/dev/null; then
         return 0
@@ -154,13 +178,13 @@ for entry in "${playable[@]}"; do
         MM_TEST_AUTO_ADVANCE="$auto_advance" MM_TEST_MOVE="$test_move" \
         MM_TEST_STREAM_TRACE="$stream_trace" \
         MM_TEST_STREAM_CAMERA="$stream_camera" \
-        MM_WIN_POS=40,40 SDL_VIDEODRIVER=x11 \
+        MM_WIN_POS=40,40 SDL_VIDEODRIVER="$video_driver" \
         "$game" "$rom" \
         --window "$window_size" --widescreen >"$log" 2>&1 &
     pid=$!
     active_pid=$pid
 
-    if command -v xdotool >/dev/null; then
+    if [[ $video_driver == x11 ]] && command -v xdotool >/dev/null; then
         for ((attempt = 0; attempt < 50; ++attempt)); do
             if find_game_window; then
                 xdotool windowactivate --sync "$game_window" 2>/dev/null || true
