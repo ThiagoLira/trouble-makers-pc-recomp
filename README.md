@@ -206,8 +206,10 @@ The launcher also exposes MSAA and SSAA. MSAA 4x is the recommended first
 choice: it smooths geometry edges at much lower cost than supersampling. SSAA
 2x renders above the automatic internal resolution and downsamples the result;
 it also smooths shader and texture edges, but uses roughly four times the
-rendering pixels before widescreen expansion. Higher SSAA values are intended
-for unusually fast GPUs.
+rendering pixels before widescreen expansion. To prevent oversized render
+targets and GPU-memory crashes, MSAA and SSAA are mutually exclusive, SSAA is
+capped at 2x, and MSAA is capped at 4x. Frame interpolation can be combined
+with either antialiasing method.
 
 The ROM is hash-validated (US 1.1 only), stored under
 `~/.config/troublemakers-recomp/` along with saves, and the game auto-starts.

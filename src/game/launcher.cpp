@@ -298,21 +298,23 @@ Outcome run(std::u8string game_id, const std::string& version_string,
 
         const char* msaa_preview = settings.msaa == 2 ? "2x"
                                  : settings.msaa == 4 ? "4x"
-                                 : settings.msaa == 8 ? "8x"
                                                       : "Off";
         ImGui::SetNextItemWidth(220.0f);
         if (ImGui::BeginCombo("MSAA", msaa_preview)) {
-            constexpr int values[] = {0, 2, 4, 8};
-            constexpr const char* labels[] = {"Off", "2x", "4x", "8x"};
+            constexpr int values[] = {0, 2, 4};
+            constexpr const char* labels[] = {"Off", "2x", "4x"};
             for (int i = 0; i < static_cast<int>(std::size(values)); ++i) {
                 if (ImGui::Selectable(labels[i], settings.msaa == values[i])) {
                     settings.msaa = values[i];
+                    if (settings.msaa > 0) {
+                        settings.ssaa = 1;
+                    }
                 }
             }
             ImGui::EndCombo();
         }
-        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-            ImGui::SetTooltip("Smooths polygon edges. 4x is recommended.");
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Smooths polygon edges. Selecting MSAA disables SSAA.");
         }
 
         char ssaa_preview[16] = "Off";
@@ -321,19 +323,21 @@ Outcome run(std::u8string game_id, const std::string& version_string,
         }
         ImGui::SetNextItemWidth(220.0f);
         if (ImGui::BeginCombo("SSAA", ssaa_preview)) {
-            constexpr int values[] = {1, 2, 3, 4, 5, 6, 7, 8};
-            constexpr const char* labels[] = {
-                "Off", "2x", "3x", "4x", "5x", "6x", "7x", "8x"};
+            constexpr int values[] = {1, 2};
+            constexpr const char* labels[] = {"Off", "2x"};
             for (int i = 0; i < static_cast<int>(std::size(values)); ++i) {
                 if (ImGui::Selectable(labels[i], settings.ssaa == values[i])) {
                     settings.ssaa = values[i];
+                    if (settings.ssaa > 1) {
+                        settings.msaa = 0;
+                    }
                 }
             }
             ImGui::EndCombo();
         }
-        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-            ImGui::SetTooltip("Renders above the selected resolution and downsamples.\n"
-                              "Use 2x first; higher values are very GPU-intensive.");
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Renders at 2x each dimension (4x as many pixels) and downsamples.\n"
+                              "Selecting SSAA disables MSAA.");
         }
 
         // --- Advanced ------------------------------------------------------
