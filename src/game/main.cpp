@@ -425,7 +425,7 @@ int main(int argc, char** argv) {
 #endif
 
     recomp::Version project_version{};
-    if (!recomp::Version::from_string("0.2.6", project_version)) {
+    if (!recomp::Version::from_string("0.3.1", project_version)) {
         exit_error("Invalid version string");
     }
 

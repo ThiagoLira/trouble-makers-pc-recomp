@@ -115,19 +115,23 @@ Outcome run(std::u8string game_id, const std::string& version_string,
         return Outcome::Quit;
     }
 
-    // 640x480 is unreadably small on high-density displays: pick an integer
-    // UI scale from the desktop height (1080p -> 1x, 1440p -> 2x, 4K -> 3x)
-    // and scale window, style metrics, and font together below.
+    // Scale the launcher on platforms where SDL reports physical desktop
+    // pixels without the window system scaling the window for us. Windows
+    // already applies the user's display scale to an SDL window; deriving a
+    // second scale from the physical desktop height makes a 1440p/150% setup
+    // effectively 3x, which overflows the launcher and breaks hit testing.
     int ui_scale = 1;
+#if !defined(_WIN32)
     SDL_DisplayMode desktop{};
     if (SDL_GetDesktopDisplayMode(0, &desktop) == 0 && desktop.h > 0) {
         ui_scale = std::clamp(desktop.h / 720, 1, 4);
     }
+#endif
 
     SDL_Window* window = SDL_CreateWindow(
         "Trouble Makers",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-        640 * ui_scale, 480 * ui_scale, SDL_WINDOW_ALLOW_HIGHDPI);
+        640 * ui_scale, 560 * ui_scale, SDL_WINDOW_ALLOW_HIGHDPI);
     if (window == nullptr) {
         std::fprintf(stderr, "[launcher] window creation failed: %s\n", SDL_GetError());
         return Outcome::Quit;
@@ -372,7 +376,14 @@ Outcome run(std::u8string game_id, const std::string& version_string,
         // Pinned to the bottom of the window.
         float button_h = ImGui::GetFrameHeight();
         float pad_b = ImGui::GetStyle().WindowPadding.y;
-        ImGui::SetCursorPosY(ImGui::GetWindowHeight() - button_h - pad_b);
+        const float footer_y = ImGui::GetWindowHeight() - button_h - pad_b;
+        // Never move the cursor backwards over the Advanced controls. Apart
+        // from drawing the rows on top of each other, overlapping ImGui items
+        // leave the earlier checkbox's hit rectangle in charge, so clicking
+        // Start toggles the hidden checkbox instead. If an unusually small
+        // window still cannot fit everything, keeping the natural cursor
+        // position lets ImGui expose the footer through normal scrolling.
+        ImGui::SetCursorPosY(std::max(ImGui::GetCursorPosY(), footer_y));
         ImGui::BeginDisabled(!rom_valid);
         if (ImGui::Button("Start Game", ImVec2(160.0f, 0.0f))) {
             outcome = Outcome::StartGame;
