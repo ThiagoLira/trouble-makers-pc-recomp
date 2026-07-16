@@ -126,6 +126,26 @@ static int g_fps = 0;
 static std::string g_rom_path;
 static SDL_Window* g_sdl_window = nullptr;
 
+// Keep renderer allocations inside combinations RT64 can recover from on
+// ordinary GPUs. SSAA is a per-dimension multiplier (2x means 4x as many
+// pixels), and MSAA multiplies those targets again. Stacking both can exceed
+// both the 16384 texture-dimension limit and available VRAM before the first
+// frame, especially when interpolation keeps additional targets alive.
+static void sanitize_display_config() {
+    if (g_ssaa > 2) {
+        std::fprintf(stderr, "[gfx] SSAA above 2x is unsafe; clamping to 2x.\n");
+        g_ssaa = 2;
+    }
+    if (g_msaa > 4) {
+        std::fprintf(stderr, "[gfx] MSAA above 4x is unsafe; clamping to 4x.\n");
+        g_msaa = 4;
+    }
+    if (g_ssaa > 1 && g_msaa > 0) {
+        std::fprintf(stderr, "[gfx] SSAA and MSAA cannot be stacked safely; disabling MSAA.\n");
+        g_msaa = 0;
+    }
+}
+
 // Build the renderer config from the globals. Safe to call at runtime too:
 // trigger_config_action() makes the gfx thread hand old/new configs to
 // RendererContext::update_config.
@@ -141,7 +161,6 @@ static void apply_display_config() {
                                  : ultramodern::renderer::AspectRatio::Original;
     cfg.msaa_option = g_msaa == 2 ? ultramodern::renderer::Antialiasing::MSAA2X
                     : g_msaa == 4 ? ultramodern::renderer::Antialiasing::MSAA4X
-                    : g_msaa == 8 ? ultramodern::renderer::Antialiasing::MSAA8X
                                   : ultramodern::renderer::Antialiasing::None;
     // Frame interpolation: Original renders only the game's native 60 frames.
     // Display interpolates up to the monitor's refresh; a positive g_fps
@@ -254,11 +273,14 @@ ultramodern::renderer::WindowHandle create_window(ultramodern::gfx_callbacks_t::
     if (win == nullptr) {
         std::fprintf(stderr, "Failed to create window: %s\n", SDL_GetError());
     }
-    // RT64 also honors WindowMode::Fullscreen from the graphics config at
-    // context creation; setting the SDL flag here just avoids a visible
-    // windowed->fullscreen flip at startup.
+    // RT64 owns HWND fullscreen transitions on Windows. Calling SDL first and
+    // RT64 second mutates the same window twice and can leave its swap chain
+    // and saved placement inconsistent. RT64's SDL window wrapper does not
+    // implement fullscreen on Linux, so SDL remains the owner there.
     if (g_fullscreen) {
+#if !defined(_WIN32)
         SDL_SetWindowFullscreen(win, SDL_WINDOW_FULLSCREEN_DESKTOP);
+#endif
     }
     g_sdl_window = win;
     // WindowHandle is platform-specific (renderer_context.hpp): HWND+thread
@@ -289,10 +311,11 @@ void update_gfx(ultramodern::gfx_callbacks_t::gfx_data_t) {
         } else if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0) {
             if (ev.key.keysym.scancode == SDL_SCANCODE_F11 && g_sdl_window != nullptr) {
                 g_fullscreen = !g_fullscreen;
+#if !defined(_WIN32)
                 SDL_SetWindowFullscreen(g_sdl_window,
                     g_fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
+#endif
                 apply_display_config();
-                ultramodern::trigger_config_action();
                 save_display_config();
             } else if (ev.key.keysym.scancode == SDL_SCANCODE_TAB) {
                 ultramodern::set_speed_multiplier(3);
@@ -386,8 +409,8 @@ static void print_usage(const char* argv0) {
         "  --fullscreen        borderless fullscreen (also toggles via RT64)\n"
         "  --window WxH        window size (default 1280x960); the scene renders\n"
         "                      at window-integer-scale, so bigger = sharper\n"
-        "  --ssaa N            supersample N x on top of the window scale (1-8)\n"
-        "  --msaa N            multisample antialiasing (2, 4, or 8)\n"
+        "  --ssaa N            supersample N x on top of the window scale (1-2)\n"
+        "  --msaa N            multisample antialiasing (2 or 4)\n"
         "  --fps native|display|N  RT64 frame interpolation: native 60Hz,\n"
         "                      match the display, or an interpolated target\n"
         "                      like 240 (game logic still runs at 60Hz)\n"
@@ -425,7 +448,7 @@ int main(int argc, char** argv) {
 #endif
 
     recomp::Version project_version{};
-    if (!recomp::Version::from_string("0.3.1", project_version)) {
+    if (!recomp::Version::from_string("0.3.2", project_version)) {
         exit_error("Invalid version string");
     }
 
@@ -453,10 +476,12 @@ int main(int argc, char** argv) {
             }
         } else if (arg == "--ssaa" && i + 1 < argc) {
             g_ssaa = std::atoi(argv[++i]);
-            if (g_ssaa < 1 || g_ssaa > 8) { print_usage(argv[0]); exit_error("--ssaa expects 1-8"); }
+            if (g_ssaa < 1 || g_ssaa > 2) { print_usage(argv[0]); exit_error("--ssaa expects 1-2"); }
+            if (g_ssaa > 1) g_msaa = 0;
         } else if (arg == "--msaa" && i + 1 < argc) {
             g_msaa = std::atoi(argv[++i]);
-            if (g_msaa != 2 && g_msaa != 4 && g_msaa != 8) { print_usage(argv[0]); exit_error("--msaa expects 2, 4 or 8"); }
+            if (g_msaa != 2 && g_msaa != 4) { print_usage(argv[0]); exit_error("--msaa expects 2 or 4"); }
+            g_ssaa = 1;
         } else if (arg == "--fps" && i + 1 < argc) {
             std::string_view v = argv[++i];
             if (v == "native" || v == "60") g_fps = 0;
@@ -478,6 +503,7 @@ int main(int argc, char** argv) {
             exit_error("unknown option");
         }
     }
+    sanitize_display_config();
 
     // Store config (mods, saves) under a per-project folder in the user's
     // config dir. Sibling workers may relocate this.
@@ -539,6 +565,7 @@ int main(int argc, char** argv) {
         g_ssaa = ds.ssaa;
         g_fps = ds.fps;
         g_debug_menu = ds.debug_menu;
+        sanitize_display_config();
         g_rom_path = reinterpret_cast<const char*>(rom_path.u8string().c_str());
         save_display_config(); // keep choices even if the user exits here
         if (outcome != mm::launcher::Outcome::StartGame) {
