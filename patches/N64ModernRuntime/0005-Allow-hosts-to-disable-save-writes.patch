@@ -1,0 +1,101 @@
+From 8f593f06e4e16c151d216a6f6d6dbf8c765d4c1d Mon Sep 17 00:00:00 2001
+From: Thiago Lira <thlira15@gmail.com>
+Date: Thu, 16 Jul 2026 14:00:00 -0300
+Subject: [PATCH] Allow hosts to disable save writes
+
+Debug warps can alter progression state in RDRAM. Let the host turn all save
+mutations into no-ops for the remainder of that process while keeping reads
+available from the save buffer that was loaded at startup.
+---
+ librecomp/include/librecomp/game.hpp |  4 ++++
+ librecomp/src/pi.cpp                 |  9 +++++++++
+ librecomp/src/recomp.cpp             | 10 ++++++++++
+ 3 files changed, 23 insertions(+)
+
+diff --git a/librecomp/include/librecomp/game.hpp b/librecomp/include/librecomp/game.hpp
+index 6df55ee..f384da8 100644
+--- a/librecomp/include/librecomp/game.hpp
++++ b/librecomp/include/librecomp/game.hpp
+@@ -110,6 +110,10 @@ namespace recomp {
+     void start(const Configuration& cfg);
+ 
+     SaveType get_save_type();
++    // Allows a host debug session to make save writes successful no-ops while
++    // preserving reads from the original save buffer.
++    void set_save_writes_enabled(bool enabled);
++    bool save_writes_enabled();
+     bool eeprom_allowed();
+     bool sram_allowed();
+     bool flashram_allowed();
+diff --git a/librecomp/src/pi.cpp b/librecomp/src/pi.cpp
+index 7e9a76c..6830277 100644
+--- a/librecomp/src/pi.cpp
++++ b/librecomp/src/pi.cpp
+@@ -176,6 +176,9 @@ void saving_thread_func(RDRAM_ARG1) {
+ }
+ 
+ void save_write_ptr(const void* in, uint32_t offset, uint32_t count) {
++    if (!recomp::save_writes_enabled()) {
++        return;
++    }
+     assert(offset + count <= save_context.save_buffer.size());
+ 
+     {
+@@ -187,6 +190,9 @@ void save_write_ptr(const void* in, uint32_t offset, uint32_t count) {
+ }
+ 
+ void save_write(RDRAM_ARG PTR(void) rdram_address, uint32_t offset, uint32_t count) {
++    if (!recomp::save_writes_enabled()) {
++        return;
++    }
+     assert(offset + count <= save_context.save_buffer.size());
+ 
+     {
+@@ -209,6 +215,9 @@ void save_read(RDRAM_ARG PTR(void) rdram_address, uint32_t offset, uint32_t coun
+ }
+ 
+ void save_clear(uint32_t start, uint32_t size, char value) {
++    if (!recomp::save_writes_enabled()) {
++        return;
++    }
+     assert(start + size < save_context.save_buffer.size());
+ 
+     {
+diff --git a/librecomp/src/recomp.cpp b/librecomp/src/recomp.cpp
+index ea17675..a6c290b 100644
+--- a/librecomp/src/recomp.cpp
++++ b/librecomp/src/recomp.cpp
+@@ -14,6 +14,7 @@
+ #include <cinttypes>
+ #include <cuchar>
+ #include <charconv>
++#include <atomic>
+ 
+ #include "recomp.h"
+ #include "librecomp/overlays.hpp"
+@@ -59,6 +60,7 @@ std::unique_ptr<recomp::mods::ModContext> mod_context = std::make_unique<recomp:
+ recomp::Version project_version;
+ // The current game's save type.
+ recomp::SaveType save_type = recomp::SaveType::None;
++std::atomic_bool save_writes_are_enabled{true};
+ 
+ std::u8string recomp::GameEntry::stored_filename() const {
+     return game_id + u8".z64";
+@@ -710,6 +712,14 @@ recomp::SaveType recomp::get_save_type() {
+     return save_type;
+ }
+ 
++void recomp::set_save_writes_enabled(bool enabled) {
++    save_writes_are_enabled.store(enabled, std::memory_order_relaxed);
++}
++
++bool recomp::save_writes_enabled() {
++    return save_writes_are_enabled.load(std::memory_order_relaxed);
++}
++
+ bool recomp::eeprom_allowed() {
+     return
+         save_type == SaveType::Eep4k || 
+-- 
+2.54.0
+

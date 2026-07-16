@@ -43,6 +43,7 @@
 #include "recomp.h"
 
 #include "app_dirs.h"
+#include "debug_menu.h"
 #include "mm_rsp.hpp"
 #include "mm_audio_input.hpp"
 #ifdef MM_HAS_GRAPHICS
@@ -113,6 +114,7 @@ static bool g_fullscreen = false;
 static bool g_widescreen = false;
 static int g_ssaa = 1;
 static int g_msaa = 0;
+static bool g_debug_menu = false;
 // RT64 frame-interpolation target. 0 = native 60Hz (Original, no
 // interpolation); -1 = match the display refresh; a positive value is an
 // interpolated FPS target. The game's logic always runs at its native 60Hz —
@@ -187,6 +189,7 @@ static void load_display_config() {
         else if (k == "widescreen") g_widescreen = value != 0;
         else if (k == "ssaa" && value >= 1 && value <= 8) g_ssaa = value;
         else if (k == "msaa" && (value == 0 || value == 2 || value == 4 || value == 8)) g_msaa = value;
+        else if (k == "debug_menu") g_debug_menu = value != 0;
         else if (k == "fps" && value >= -1 && value <= 1000) g_fps = value;
     }
 }
@@ -199,7 +202,9 @@ static void save_display_config() {
     f << "window_w=" << g_window_w << "\nwindow_h=" << g_window_h
       << "\nfullscreen=" << (g_fullscreen ? 1 : 0)
       << "\nwidescreen=" << (g_widescreen ? 1 : 0)
-      << "\nssaa=" << g_ssaa << "\nmsaa=" << g_msaa << "\nfps=" << g_fps << "\n";
+      << "\nssaa=" << g_ssaa << "\nmsaa=" << g_msaa
+      << "\nfps=" << g_fps
+      << "\ndebug_menu=" << (g_debug_menu ? 1 : 0) << "\n";
     if (!g_rom_path.empty()) {
         f << "rom=" << g_rom_path << "\n";
     }
@@ -275,7 +280,11 @@ void update_gfx(ultramodern::gfx_callbacks_t::gfx_data_t) {
     //   Tab (hold) fast-forward 3x (game speed via the VI/timer multiplier)
     SDL_Event ev;
     while (SDL_PollEvent(&ev)) {
-        if (ev.type == SDL_QUIT) {
+        if (mm::debug_menu::handle_event(ev)) {
+            // Opening or navigating the overlay cancels a held fast-forward
+            // so the menu remains readable at the normal cadence.
+            ultramodern::set_speed_multiplier(1);
+        } else if (ev.type == SDL_QUIT) {
             ultramodern::quit();
         } else if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0) {
             if (ev.key.keysym.scancode == SDL_SCANCODE_F11 && g_sdl_window != nullptr) {
@@ -385,8 +394,11 @@ static void print_usage(const char* argv0) {
         "  --widescreen        expand the rendered field to the window aspect\n"
         "                      (opt-in: can reveal off-stage areas in a 2D game)\n"
         "  --no-widescreen     force the original 4:3 presentation\n"
+        "  --debug-menu        enable the in-game debug overlay\n"
+        "  --no-debug-menu     disable the in-game debug overlay\n"
         "options persist to ~/.config/troublemakers-recomp/display.cfg\n"
-        "in game: F11 = fullscreen toggle, hold Tab = 3x fast-forward\n",
+        "in game: F11 = fullscreen, hold Tab = 3x fast-forward\n"
+        "debug: F1 or controller L+R+Start = overlay\n",
         argv0);
 }
 
@@ -429,6 +441,10 @@ int main(int argc, char** argv) {
             g_widescreen = true;
         } else if (arg == "--no-widescreen") {
             g_widescreen = false;
+        } else if (arg == "--debug-menu") {
+            g_debug_menu = true;
+        } else if (arg == "--no-debug-menu") {
+            g_debug_menu = false;
         } else if (arg == "--window" && i + 1 < argc) {
             if (std::sscanf(argv[++i], "%dx%d", &g_window_w, &g_window_h) != 2 ||
                 g_window_w < 320 || g_window_h < 240) {
@@ -510,7 +526,8 @@ int main(int argc, char** argv) {
         // loads the ROM through the same recomp::select_rom path, so once it
         // returns StartGame the auto-start in vi_callback takes over.
         mm::launcher::DisplaySettings ds{
-            g_window_w, g_window_h, g_fullscreen, g_widescreen, g_msaa, g_ssaa, g_fps};
+            g_window_w, g_window_h, g_fullscreen, g_widescreen,
+            g_msaa, g_ssaa, g_fps, g_debug_menu};
         fs::path rom_path = fs::path(
             std::u8string(g_rom_path.begin(), g_rom_path.end()));
         auto outcome = mm::launcher::run(kGameId, project_version.to_string(), ds, rom_path);
@@ -521,6 +538,7 @@ int main(int argc, char** argv) {
         g_msaa = ds.msaa;
         g_ssaa = ds.ssaa;
         g_fps = ds.fps;
+        g_debug_menu = ds.debug_menu;
         g_rom_path = reinterpret_cast<const char*>(rom_path.u8string().c_str());
         save_display_config(); // keep choices even if the user exits here
         if (outcome != mm::launcher::Outcome::StartGame) {
@@ -535,6 +553,12 @@ int main(int argc, char** argv) {
     // persist the resolved options so they stick for the next run.
     apply_display_config();
     save_display_config();
+
+    mm::debug_menu::configure(g_debug_menu);
+#ifdef MM_HAS_GRAPHICS
+    mm::graphics::set_overlay_draw_callback(
+        g_debug_menu ? mm::debug_menu::draw_overlay : nullptr);
+#endif
 
     // Tell translated-code hooks to populate the extra tile columns and omit
     // the original 4:3 side-border strips. Explicit environment values still

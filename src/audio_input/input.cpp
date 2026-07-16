@@ -19,6 +19,7 @@
 #include <SDL2/SDL.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 
 #include "mm_audio_input.hpp"
@@ -45,6 +46,7 @@ constexpr uint16_t BTN_CR     = 0x0001; // CONT_F
 const Uint8* g_keys = nullptr;
 int g_numkeys = 0;
 SDL_GameController* g_controller = nullptr;
+std::atomic_bool g_input_blocked{false};
 
 inline bool key(SDL_Scancode s) {
     return g_keys != nullptr && static_cast<int>(s) < g_numkeys && g_keys[s] != 0;
@@ -77,6 +79,13 @@ void poll_input() {
 bool get_input(int controller_num, uint16_t* buttons, float* x, float* y) {
     if (controller_num != 0 || buttons == nullptr || x == nullptr || y == nullptr) {
         return false;
+    }
+
+    if (g_input_blocked.load(std::memory_order_relaxed)) {
+        *buttons = 0;
+        *x = 0.0f;
+        *y = 0.0f;
+        return true;
     }
 
     uint16_t b = 0;
@@ -161,6 +170,10 @@ ultramodern::input::connected_device_info_t get_connected_device_info(int contro
 }
 
 } // namespace
+
+void set_input_blocked(bool blocked) {
+    g_input_blocked.store(blocked, std::memory_order_relaxed);
+}
 
 // Bring up the game-controller subsystem from init() (audio init lives in
 // audio.cpp; this just makes sure input can open pads).

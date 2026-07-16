@@ -332,6 +332,9 @@ Outcome run(std::u8string game_id, const std::string& version_string,
                               "Use 2x first; higher values are very GPU-intensive.");
         }
 
+        // --- Advanced ------------------------------------------------------
+        ImGui::SeparatorText("Advanced");
+
         // Frame interpolation (RT64). 0 = native 60; -1 = match display; a
         // positive value is an interpolated target (game logic stays 60Hz).
         char fps_preview[24];
@@ -354,6 +357,15 @@ Outcome run(std::u8string game_id, const std::string& version_string,
             ImGui::SetTooltip("Interpolates smoother motion above the game's 60Hz using RT64.\n"
                               "The game's logic still runs at 60Hz; the extra frames are\n"
                               "synthesized. Capped to your monitor's refresh rate.");
+        }
+
+        ImGui::Checkbox("Enable debug menu", &settings.debug_menu);
+        ImGui::SameLine();
+        ImGui::TextDisabled("(?)");
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+            ImGui::SetTooltip(
+                "F1 or controller L+R+Start opens the in-game overlay.\n"
+                "Using a debug warp blocks all save writes until exit.");
         }
 
         // --- Start / Exit ---------------------------------------------------

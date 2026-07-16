@@ -58,6 +58,7 @@ Prefer to build it yourself? See [Building and running](#building-and-running).
 - 🧪 Experimental widescreen (opt-in), high-FPS frame interpolation
   (`--fps 240` / match display, opt-in via RT64), F11 fullscreen, Tab
   fast-forward, persistent display config
+- 🧰 Launcher-gated, save-safe debug menu with campaign level warps
 - 🗺️ Next: full-playthrough verification, mod hooks, upstreaming runtime patches
 
 ## Experimental widescreen
@@ -116,11 +117,11 @@ cd trouble-makers-pc-recomp
 git -C lib/N64ModernRuntime am "$(pwd)"/patches/N64ModernRuntime/*.patch
 
 # RT64 (renderer), pinned to the fork/commit Zelda64Recomp uses, plus the
-# widescreen wing-clear patch:
+# local rendering fixes:
 git clone https://github.com/rt64/rt64 lib/rt64
 git -C lib/rt64 checkout 23cab603
 git -C lib/rt64 submodule update --init --recursive
-git -C lib/rt64 apply "$(pwd)"/patches/rt64/0001-widescreen-wing-clear.patch
+git -C lib/rt64 apply "$(pwd)"/patches/rt64/*.patch
 
 # Translate the game + audio microcode:
 cp ../trouble-makers-ai-recomp/build/troublemakers.elf input/
@@ -150,6 +151,7 @@ cmake --build build --target troublemakers -j8
 #   tile maps are drawn beyond the original 4:3 frame. Plain launches retain
 #   the original presentation.
 ./build/src/game/troublemakers rom.z64 --no-widescreen # force original 4:3
+./build/src/game/troublemakers rom.z64 --debug-menu     # enable debug overlay
 ```
 
 Widescreen uses the game's own wrapping maps and scene formulas—there is no
@@ -191,6 +193,14 @@ problems, capture a sustained frame sequence with `tools/test_render_burst.sh`.
 
 Options persist to `~/.config/troublemakers-recomp/display.cfg` (CLI
 overrides). In game: **F11** toggles fullscreen, **hold Tab** fast-forwards 3x.
+
+The launcher's **Enable debug menu** option enables an in-game overlay. Press
+**F1** or controller **L+R+Start** to open it; use Up/Down and Enter (or
+the D-pad and A) to select one of the 52 campaign stages. Left/Right switches
+pages and Esc/B closes it. Gameplay input is held while the overlay is open.
+The first debug warp disables all save-buffer mutations
+until the process exits, while reads continue to use the save loaded at
+startup, so debug progression cannot overwrite the player's save file.
 
 The launcher also exposes MSAA and SSAA. MSAA 4x is the recommended first
 choice: it smooths geometry edges at much lower cost than supersampling. SSAA
@@ -246,6 +256,8 @@ git tag v0.3.0 && git push origin v0.3.0
 | L / R      | Q / E      | Start    | Enter       |
 
 The first SDL game controller is picked up automatically (rumble included).
+When enabled in the launcher, the debug overlay uses **F1** or controller
+**L+R+Start**.
 
 ## How it works / hacking on it
 
