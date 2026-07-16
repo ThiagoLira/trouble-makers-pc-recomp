@@ -315,7 +315,17 @@ void update_gfx(ultramodern::gfx_callbacks_t::gfx_data_t) {
                 SDL_SetWindowFullscreen(g_sdl_window,
                     g_fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
 #endif
-                apply_display_config();
+                // Widescreen presentation is transient: stage select and
+                // cinematics force Original even when the saved preference is
+                // Expand. Rebuilding the complete display config here would
+                // restore that saved preference and leave those screens in an
+                // invalid expanded state until gameplay began. Change only the
+                // window mode and preserve the renderer's current aspect gate.
+                auto cfg = ultramodern::renderer::get_graphics_config();
+                cfg.wm_option = g_fullscreen
+                    ? ultramodern::renderer::WindowMode::Fullscreen
+                    : ultramodern::renderer::WindowMode::Windowed;
+                ultramodern::renderer::set_graphics_config(cfg);
                 save_display_config();
             } else if (ev.key.keysym.scancode == SDL_SCANCODE_TAB) {
                 ultramodern::set_speed_multiplier(3);

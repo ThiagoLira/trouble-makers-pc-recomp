@@ -404,6 +404,7 @@ extern "C" void mm_widescreen_sync_mode(uint8_t* rdram) {
     static int previous_active = -1;
     static int candidate_active = -1;
     static int candidate_frames = 0;
+    bool mode_changed = false;
     const int scene = static_cast<int16_t>(MEM_HU(
         0, static_cast<gpr>(static_cast<int32_t>(kCurrentScene))));
     report_gameplay_ready(rdram, scene);
@@ -436,11 +437,12 @@ extern "C" void mm_widescreen_sync_mode(uint8_t* rdram) {
     if (previous_active < 0) {
         previous_active = raw_active;
         candidate_active = raw_active;
+        candidate_frames = 0;
+        mode_changed = true;
     }
     else if (raw_active == previous_active) {
         candidate_active = raw_active;
         candidate_frames = 0;
-        return;
     }
     else {
         if (raw_active != candidate_active) {
@@ -460,14 +462,17 @@ extern "C" void mm_widescreen_sync_mode(uint8_t* rdram) {
         // an in-stage cinema gets one second of hysteresis before the wings
         // close, which is preferable to destructive gameplay flicker.
         const int required_frames = raw_active ? 30 : 60;
-        if (candidate_frames < required_frames) {
-            return;
+        if (candidate_frames >= required_frames) {
+            previous_active = raw_active;
+            candidate_frames = 0;
+            mode_changed = true;
         }
-        previous_active = raw_active;
-        candidate_frames = 0;
     }
     g_gameplay_wide_active = previous_active;
 
+    // Reassert the presentation on stable frames too. Runtime display changes
+    // such as F11 must never be able to desynchronize RT64's aspect ratio from
+    // the gameplay/cinematic state machine.
     auto config = ultramodern::renderer::get_graphics_config();
     const auto desired = previous_active
         ? ultramodern::renderer::AspectRatio::Expand
@@ -476,8 +481,10 @@ extern "C" void mm_widescreen_sync_mode(uint8_t* rdram) {
         config.ar_option = desired;
         ultramodern::renderer::set_graphics_config(config);
     }
-    std::fprintf(stderr, "[widescreen] mode=%s\n",
-        previous_active ? "gameplay-expand" : "cinematic-4:3");
+    if (mode_changed) {
+        std::fprintf(stderr, "[widescreen] mode=%s\n",
+            previous_active ? "gameplay-expand" : "cinematic-4:3");
+    }
 }
 
 // The debug warp must select a complete stage-table row, not merely change
