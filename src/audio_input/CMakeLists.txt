@@ -32,6 +32,7 @@ target_link_libraries(mm_audio_input PUBLIC
 
 if(BUILD_TESTING)
     add_executable(mm_controls_tests tests/controls_test.cpp)
+    target_compile_definitions(mm_controls_tests PRIVATE SDL_MAIN_HANDLED)
     target_link_libraries(mm_controls_tests PRIVATE mm_audio_input)
     add_test(NAME mm_controls COMMAND mm_controls_tests)
 endif()
