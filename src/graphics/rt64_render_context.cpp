@@ -68,6 +68,16 @@ ultramodern::renderer::GraphicsApi from_rt64_api(RT64::UserConfiguration::Graphi
     }
 }
 
+const char* graphics_api_name(ultramodern::renderer::GraphicsApi api) {
+    using Api = ultramodern::renderer::GraphicsApi;
+    switch (api) {
+        case Api::D3D12: return "D3D12";
+        case Api::Vulkan: return "Vulkan";
+        case Api::Metal: return "Metal";
+        default: return "Automatic/unknown";
+    }
+}
+
 ultramodern::renderer::SetupResult to_setup_result(RT64::Application::SetupResult result) {
     using From = RT64::Application::SetupResult;
     using To = ultramodern::renderer::SetupResult;
@@ -217,6 +227,13 @@ public:
         }
 
         const uint32_t active_msaa = app_->userConfig.msaaSampleCount();
+        const auto& device = app_->device->getDescription();
+        std::fprintf(stderr,
+            "[gfx] api=%s device=%s vendor=0x%04X driver=0x%llX vram=%llu MiB\n",
+            graphics_api_name(chosen_api), device.name.c_str(),
+            static_cast<unsigned int>(device.vendor),
+            static_cast<unsigned long long>(device.driverVersion),
+            static_cast<unsigned long long>(device.dedicatedVideoMemory / (1024 * 1024)));
         std::fprintf(stderr,
             "[gfx] antialiasing msaa=%ux%s ssaa=%dx sample-locations=%s\n",
             active_msaa,

@@ -1,0 +1,62 @@
+name: Bug report
+description: Report a crash, rendering issue, input problem, or gameplay regression
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve Trouble Makers. Please reproduce the issue once, relaunch the game, open **Support**, and click **Copy previous session** before filling this out.
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Linux AppImage
+        - Linux local build
+        - Windows release
+        - Windows local build
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      placeholder: "For example: 0.2.6 or a Git commit SHA"
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Include what you expected and what happened instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Start level ...
+        2. Do ...
+        3. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: diagnostic_report
+    attributes:
+      label: Previous-session diagnostic report
+      description: Paste the text produced by Support → Copy previous session. It contains no ROM contents; skim it in case an OS error quoted a local path.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Screenshots, video, or additional context
+      description: Drag files here if they help demonstrate the problem. Never upload a ROM or save containing private data.

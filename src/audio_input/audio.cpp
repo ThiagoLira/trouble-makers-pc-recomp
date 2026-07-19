@@ -108,6 +108,9 @@ size_t get_frames_remaining() {
 }
 
 void init() {
+    // Input must remain available even when a machine has no usable audio
+    // device (the launcher owns controller remapping independently of audio).
+    init_input_subsystem();
     if (g_audio_device != 0) return;
 
     if (SDL_InitSubSystem(SDL_INIT_AUDIO) < 0) {
@@ -128,10 +131,13 @@ void init() {
         fprintf(stderr, "mm_audio: SDL_OpenAudioDevice: %s\n", SDL_GetError());
         return;
     }
+    std::fprintf(stderr, "[audio] SDL driver: %s; device format: %d Hz, %u channel(s)\n",
+                 SDL_GetCurrentAudioDriver() != nullptr
+                    ? SDL_GetCurrentAudioDriver() : "unknown",
+                 obtained.freq, static_cast<unsigned int>(obtained.channels));
     SDL_PauseAudioDevice(g_audio_device, 0); // begin playback
 
     rebuild_converter();
-    init_input_subsystem();
 }
 
 ultramodern::audio_callbacks_t audio_callbacks() {

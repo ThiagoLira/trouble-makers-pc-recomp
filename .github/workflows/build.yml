@@ -100,7 +100,8 @@ jobs:
       - name: Build troublemakers
         run: |
           cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-          cmake --build build --target troublemakers -j "$(nproc)"
+          cmake --build build --target troublemakers mm_controls_tests mm_session_log_tests -j "$(nproc)"
+          ctest --test-dir build --output-on-failure -R 'mm_(controls|session_log)'
       - name: Build AppImage
         run: ./.github/linux/appimage.sh
       - name: Upload AppImage
@@ -161,7 +162,8 @@ jobs:
         run: |
           cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release `
             -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl
-          cmake --build build --target troublemakers -j
+          cmake --build build --target troublemakers mm_controls_tests mm_session_log_tests -j
+          ctest --test-dir build --output-on-failure -R "mm_(controls|session_log)"
       - name: Package
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
