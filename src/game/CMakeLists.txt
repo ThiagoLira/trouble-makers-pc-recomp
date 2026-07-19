@@ -19,10 +19,27 @@
 add_executable(troublemakers
     main.cpp
     app_dirs.cpp
+    session_log.cpp
     register_overlays.cpp
     os_stubs.cpp
     widescreen.cpp
 )
+
+find_package(Git QUIET)
+if(GIT_FOUND)
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} rev-parse --short=12 HEAD
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        OUTPUT_VARIABLE MM_GIT_COMMIT
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET)
+endif()
+if(NOT MM_GIT_COMMIT)
+    set(MM_GIT_COMMIT "unknown")
+endif()
+target_compile_definitions(troublemakers PRIVATE
+    MM_GIT_COMMIT="${MM_GIT_COMMIT}"
+    MM_BUILD_TYPE="$<CONFIG>")
 
 target_include_directories(troublemakers PRIVATE
     ${RUNTIME_INCLUDES}                 # recomp.h, librecomp/*.hpp, ultramodern/*.hpp
@@ -93,4 +110,15 @@ if(WIN32)
         LINK_FLAGS_RELEASE "/SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup"
         LINK_FLAGS_RELWITHDEBINFO "/SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup"
         LINK_FLAGS_MINSIZEREL "/SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup")
+endif()
+
+if(BUILD_TESTING)
+    find_package(Threads REQUIRED)
+    add_executable(mm_session_log_tests
+        tests/session_log_test.cpp
+        session_log.cpp
+    )
+    target_include_directories(mm_session_log_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(mm_session_log_tests PRIVATE ${SDL2_LIBRARIES} Threads::Threads)
+    add_test(NAME mm_session_log COMMAND mm_session_log_tests)
 endif()

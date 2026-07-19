@@ -9,13 +9,91 @@
 // `recomp::start()`. See PHASE2_NOTES_w4.md for the exact call sequence.
 #pragma once
 
+#include <array>
+#include <cstddef>
+#include <cstdint>
 #include <filesystem>
+#include <string>
+
+#include <SDL2/SDL_events.h>
 
 #include "ultramodern/ultramodern.hpp"   // ultramodern::audio_callbacks_t
 #include "ultramodern/input.hpp"         // ultramodern::input::callbacks_t
 #include "librecomp/game.hpp"            // recomp::SaveType
 
 namespace mm_audio_input {
+
+// The same typed, two-slot binding model used by the modern N64 recomp
+// frontends, kept game-local so the launcher can stay on Dear ImGui.
+enum class ControlDevice : uint8_t {
+    Keyboard,
+    Controller,
+};
+
+enum class N64Input : uint8_t {
+    AnalogUp,
+    AnalogDown,
+    AnalogLeft,
+    AnalogRight,
+    DpadUp,
+    DpadDown,
+    DpadLeft,
+    DpadRight,
+    A,
+    B,
+    Z,
+    Start,
+    L,
+    R,
+    CUp,
+    CDown,
+    CLeft,
+    CRight,
+    Count,
+};
+
+enum class BindingType : uint8_t {
+    None,
+    Keyboard,
+    ControllerButton,
+    ControllerAxis,
+};
+
+struct InputBinding {
+    BindingType type = BindingType::None;
+    // Keyboard: SDL_Scancode. Controller button: SDL_GameControllerButton.
+    // Controller axis: signed (SDL_GameControllerAxis + 1), where the sign is
+    // the direction. Zero is reserved for an unbound input.
+    int id = 0;
+
+    bool operator==(const InputBinding&) const = default;
+};
+
+constexpr size_t kBindingsPerInput = 2;
+constexpr size_t kN64InputCount = static_cast<size_t>(N64Input::Count);
+
+const char* input_name(N64Input input);
+InputBinding get_binding(ControlDevice device, N64Input input, size_t slot);
+bool set_binding(ControlDevice device, N64Input input, size_t slot, InputBinding binding);
+void clear_bindings(ControlDevice device, N64Input input);
+void reset_bindings(ControlDevice device, N64Input input);
+void reset_all_bindings(ControlDevice device);
+std::string binding_name(InputBinding binding);
+
+// Load/save <config_path>/controls.json. Loading starts from defaults and only
+// overlays valid entries, so old, partial, or hand-edited files remain safe.
+bool load_control_config(const std::filesystem::path& config_path);
+bool save_control_config();
+std::filesystem::path control_config_path();
+
+// Translate one SDL event while the launcher is in binding-capture mode.
+// Axis motion must already have crossed the caller's neutral/activation gate.
+bool binding_from_event(ControlDevice device, const SDL_Event& event,
+                        InputBinding& binding);
+
+// Keep the single active SDL controller in sync with hotplug events. The
+// launcher calls this before the runtime begins polling gameplay input.
+void refresh_controllers();
 
 // One-time setup. Idempotent. Brings up the SDL2 audio + game-controller
 // subsystems, opens the audio device, and opens the first attached

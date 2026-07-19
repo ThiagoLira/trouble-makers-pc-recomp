@@ -55,6 +55,8 @@ Prefer to build it yourself? See [Building and running](#building-and-running).
 - ✅ Natively 60 fps (the game's own rate), correct audio pacing
 - ✅ High-resolution rendering (window-integer-scale via RT64), fullscreen, MSAA/SSAA
 - ✅ EEPROM saves persist to disk
+- ✅ Remappable keyboard/controller inputs with two bindings per N64 control
+- ✅ Persistent current/previous session logs and copyable support reports
 - 🧪 Experimental widescreen (opt-in), F11 fullscreen, Tab fast-forward,
   persistent display config
 - 🗺️ Next: full-playthrough verification, mod hooks, upstreaming runtime patches
@@ -136,8 +138,8 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --target troublemakers -j8
 
 ./build/src/game/troublemakers                                 # no args: launcher
-#   (splash screen: pick your ROM with a native file dialog, set resolution /
-#   fullscreen / widescreen / anti-aliasing, Start Game; remembers the ROM)
+#   (launcher: pick your ROM, configure display and controls, copy support logs,
+#   then Start Game; settings and the validated ROM are remembered)
 ./build/src/game/troublemakers path/to/your.z64                # windowed 1280x960
 ./build/src/game/troublemakers rom.z64 --fullscreen
 ./build/src/game/troublemakers rom.z64 --window 1920x1440 --msaa 4
@@ -182,8 +184,9 @@ bursts, audits expanded tile layers for wing coverage, and writes a TSV manifest
 plus a multi-frame contact sheet and log for every level. For transient 3D
 problems, capture a sustained frame sequence with `tools/test_render_burst.sh`.
 
-Options persist to `~/.config/troublemakers-recomp/display.cfg` (CLI
-overrides). In game: **F11** toggles fullscreen, **hold Tab** fast-forwards 3x.
+Display options persist to `display.cfg` and input mappings to `controls.json`
+in the app config folder (CLI display options override the file). In game:
+**F11** toggles fullscreen, **hold Tab** fast-forwards 3x.
 
 The launcher also exposes MSAA and SSAA. MSAA 4x is the recommended first
 choice: it smooths geometry edges at much lower cost than supersampling. SSAA
@@ -223,14 +226,45 @@ the game's code never lives in this public repository.
 
 ### Controls
 
-| N64        | Key        | N64      | Key         |
-|------------|------------|----------|-------------|
-| Stick      | W A S D    | A        | X           |
-| D-pad      | Arrows     | B        | C           |
-| C-buttons  | I J K L    | Z        | Left Shift  |
-| L / R      | Q / E      | Start    | Enter       |
+Open the launcher's **Controls** tab to remap either keyboard or controller
+inputs. Every logical N64 input has two simultaneous binding slots. Controller
+buttons, triggers, and either direction of an analog axis can be assigned;
+each row can be cleared or reset, and **Reset all** restores the recomp
+defaults. Changes are saved immediately to the versioned, human-readable
+`controls.json` file.
 
-The first SDL game controller is picked up automatically (rumble included).
+| N64        | Default keyboard | Default controller |
+|------------|------------------|--------------------|
+| Stick      | W A S D          | Left stick         |
+| D-pad      | Arrow keys       | D-pad              |
+| A / B      | X / C            | South / West face  |
+| Z / L / R  | Left Shift / Q / E | LT / LB / RT    |
+| C-buttons  | I J K L          | Right stick        |
+| Start      | Enter            | Start              |
+
+The first SDL game controller is picked up automatically and hotplugged
+(rumble included). C-buttons also have convenient secondary face/shoulder
+bindings by default.
+
+### Logs and bug reports
+
+All stdout/stderr diagnostics from the recomp, SDL, runtime, and renderer are
+captured under the app config folder:
+
+- Linux: `~/.config/troublemakers-recomp/`
+- Windows: `%LOCALAPPDATA%\troublemakers-recomp\`
+- Portable mode: beside the executable/AppImage
+
+`logs/latest.log` is the active run and `logs/previous.log` is the run before
+it. Logs are bounded to 512 KiB and retain a diagnostic header plus the newest
+output.
+
+For a crash or gameplay bug, reproduce it once, relaunch the game, open
+**Support**, and choose **Copy previous session**. Paste that report into the
+GitHub bug form; attach the full `previous.log` only when requested. The
+copyable report is capped for GitHub, and its diagnostic header omits ROM and
+home-directory paths. Skim it before posting because an operating-system or
+third-party error may still quote a local path.
 
 ## How it works / hacking on it
 

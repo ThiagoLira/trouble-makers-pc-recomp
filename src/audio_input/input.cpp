@@ -1,25 +1,13 @@
-// Input backend for ultramodern's input::callbacks_t, backed by SDL2.
-//
-// The game is 1-player, so only controller 0 is serviced. Two
-// sources feed port 0: the keyboard (always available, see the map below) and,
-// if one is attached, the first SDL game controller. Rumble is forwarded to
-// the game controller when supported.
-//
-// Default keyboard map (documented in PHASE2_NOTES_w4.md):
-//   Analog stick .... W A S D
-//   D-pad ........... Arrow Up/Down/Left/Right
-//   A ............... X
-//   B ............... C
-//   Z (trigger) ..... Left Shift
-//   L ............... Q
-//   R ............... E
-//   C-up ............ I      C-down .. K
-//   C-left .......... J      C-right . L
-//   Start ........... Return
+// Input backend for ultramodern's input::callbacks_t, backed by SDL2 and the
+// persistent two-slot mappings in controls.cpp. The game is single-player, so
+// keyboard and the first SDL game controller are combined into N64 port 0.
 #include <SDL2/SDL.h>
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <cstdint>
+#include <cstdio>
 
 #include "mm_audio_input.hpp"
 
@@ -46,6 +34,8 @@ const Uint8* g_keys = nullptr;
 int g_numkeys = 0;
 SDL_GameController* g_controller = nullptr;
 
+constexpr float kDigitalAxisThreshold = 0.5f;
+
 inline bool key(SDL_Scancode s) {
     return g_keys != nullptr && static_cast<int>(s) < g_numkeys && g_keys[s] != 0;
 }
@@ -60,9 +50,69 @@ void open_first_controller() {
     for (int i = 0; i < SDL_NumJoysticks(); ++i) {
         if (SDL_IsGameController(i)) {
             g_controller = SDL_GameControllerOpen(i);
-            if (g_controller != nullptr) return;
+            if (g_controller != nullptr) {
+                SDL_Joystick* joystick = SDL_GameControllerGetJoystick(g_controller);
+                char guid[33] = {};
+                if (joystick != nullptr) {
+                    SDL_JoystickGetGUIDString(SDL_JoystickGetGUID(joystick), guid,
+                                              static_cast<int>(sizeof(guid)));
+                }
+                char* mapping = SDL_GameControllerMapping(g_controller);
+                const char* name = SDL_GameControllerName(g_controller);
+                std::fprintf(stderr,
+                    "[input] Controller connected: %s (GUID %s, SDL mapping: %s)\n",
+                    name != nullptr ? name : "Unknown controller",
+                    guid[0] != '\0' ? guid : "unknown",
+                    mapping != nullptr ? "yes" : "no");
+                SDL_free(mapping);
+                return;
+            }
         }
     }
+}
+
+void refresh_controller_internal() {
+    if (g_controller != nullptr && !SDL_GameControllerGetAttached(g_controller)) {
+        std::fprintf(stderr, "[input] Controller disconnected.\n");
+        SDL_GameControllerClose(g_controller);
+        g_controller = nullptr;
+    }
+    open_first_controller();
+}
+
+float binding_strength(InputBinding binding) {
+    switch (binding.type) {
+        case BindingType::None:
+            return 0.0f;
+        case BindingType::Keyboard:
+            return key(static_cast<SDL_Scancode>(binding.id)) ? 1.0f : 0.0f;
+        case BindingType::ControllerButton:
+            if (g_controller == nullptr) return 0.0f;
+            return SDL_GameControllerGetButton(
+                       g_controller, static_cast<SDL_GameControllerButton>(binding.id))
+                ? 1.0f : 0.0f;
+        case BindingType::ControllerAxis: {
+            if (g_controller == nullptr || binding.id == 0) return 0.0f;
+            const int encoded_axis = std::abs(binding.id);
+            const auto axis = static_cast<SDL_GameControllerAxis>(encoded_axis - 1);
+            const float direction = binding.id < 0 ? -1.0f : 1.0f;
+            return std::max(0.0f,
+                axis_norm(SDL_GameControllerGetAxis(g_controller, axis)) * direction);
+        }
+    }
+    return 0.0f;
+}
+
+float input_strength(N64Input input) {
+    float result = 0.0f;
+    constexpr std::array devices{
+        ControlDevice::Keyboard, ControlDevice::Controller};
+    for (ControlDevice device : devices) {
+        for (size_t slot = 0; slot < kBindingsPerInput; ++slot) {
+            result = std::max(result, binding_strength(get_binding(device, input, slot)));
+        }
+    }
+    return result;
 }
 
 void poll_input() {
@@ -71,7 +121,7 @@ void poll_input() {
     // loop hasn't pumped yet this frame.
     SDL_PumpEvents();
     g_keys = SDL_GetKeyboardState(&g_numkeys);
-    open_first_controller();
+    refresh_controller_internal();
 }
 
 bool get_input(int controller_num, uint16_t* buttons, float* x, float* y) {
@@ -79,59 +129,36 @@ bool get_input(int controller_num, uint16_t* buttons, float* x, float* y) {
         return false;
     }
 
+    struct DigitalInput {
+        N64Input input;
+        uint16_t mask;
+    };
+    constexpr std::array digital_inputs{
+        DigitalInput{N64Input::A, BTN_A},
+        DigitalInput{N64Input::B, BTN_B},
+        DigitalInput{N64Input::Z, BTN_Z},
+        DigitalInput{N64Input::Start, BTN_START},
+        DigitalInput{N64Input::DpadUp, BTN_UP},
+        DigitalInput{N64Input::DpadDown, BTN_DOWN},
+        DigitalInput{N64Input::DpadLeft, BTN_LEFT},
+        DigitalInput{N64Input::DpadRight, BTN_RIGHT},
+        DigitalInput{N64Input::L, BTN_L},
+        DigitalInput{N64Input::R, BTN_R},
+        DigitalInput{N64Input::CUp, BTN_CU},
+        DigitalInput{N64Input::CDown, BTN_CD},
+        DigitalInput{N64Input::CLeft, BTN_CL},
+        DigitalInput{N64Input::CRight, BTN_CR},
+    };
+
     uint16_t b = 0;
-    float sx = 0.0f;
-    float sy = 0.0f;
-
-    // ---- Keyboard ----
-    if (key(SDL_SCANCODE_X))            b |= BTN_A;
-    if (key(SDL_SCANCODE_C))            b |= BTN_B;
-    if (key(SDL_SCANCODE_LSHIFT))       b |= BTN_Z;
-    if (key(SDL_SCANCODE_RETURN))       b |= BTN_START;
-    if (key(SDL_SCANCODE_Q))            b |= BTN_L;
-    if (key(SDL_SCANCODE_E))            b |= BTN_R;
-    if (key(SDL_SCANCODE_I))            b |= BTN_CU;
-    if (key(SDL_SCANCODE_K))            b |= BTN_CD;
-    if (key(SDL_SCANCODE_J))            b |= BTN_CL;
-    if (key(SDL_SCANCODE_L))            b |= BTN_CR;
-
-    if (key(SDL_SCANCODE_UP))           b |= BTN_UP;
-    if (key(SDL_SCANCODE_DOWN))         b |= BTN_DOWN;
-    if (key(SDL_SCANCODE_LEFT))         b |= BTN_LEFT;
-    if (key(SDL_SCANCODE_RIGHT))        b |= BTN_RIGHT;
-
-    // Analog stick via WASD (up = +y, matching N64 osContData convention).
-    if (key(SDL_SCANCODE_W)) sy += 1.0f;
-    if (key(SDL_SCANCODE_S)) sy -= 1.0f;
-    if (key(SDL_SCANCODE_A)) sx -= 1.0f;
-    if (key(SDL_SCANCODE_D)) sx += 1.0f;
-
-    // ---- Game controller (if attached) ----
-    if (g_controller != nullptr) {
-        if (SDL_GameControllerGetButton(g_controller, SDL_CONTROLLER_BUTTON_A))            b |= BTN_A;
-        if (SDL_GameControllerGetButton(g_controller, SDL_CONTROLLER_BUTTON_B))            b |= BTN_B;
-        if (SDL_GameControllerGetButton(g_controller, SDL_CONTROLLER_BUTTON_LEFTSHOULDER)) b |= BTN_L;
-        if (SDL_GameControllerGetButton(g_controller, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER))b |= BTN_R;
-        if (SDL_GameControllerGetButton(g_controller, SDL_CONTROLLER_BUTTON_START))        b |= BTN_START;
-        if (SDL_GameControllerGetButton(g_controller, SDL_CONTROLLER_BUTTON_DPAD_UP))     b |= BTN_UP;
-        if (SDL_GameControllerGetButton(g_controller, SDL_CONTROLLER_BUTTON_DPAD_DOWN))   b |= BTN_DOWN;
-        if (SDL_GameControllerGetButton(g_controller, SDL_CONTROLLER_BUTTON_DPAD_LEFT))   b |= BTN_LEFT;
-        if (SDL_GameControllerGetButton(g_controller, SDL_CONTROLLER_BUTTON_DPAD_RIGHT))  b |= BTN_RIGHT;
-        // Map face X/Y to the C-buttons (north=C-up, west=C-left, east=C-right
-        // already taken by B; south taken by A) so the C-group is reachable.
-        if (SDL_GameControllerGetButton(g_controller, SDL_CONTROLLER_BUTTON_Y))           b |= BTN_CU;
-        if (SDL_GameControllerGetButton(g_controller, SDL_CONTROLLER_BUTTON_X))           b |= BTN_CL;
-        // Left trigger stands in for Z (the N64's main trigger).
-        if (SDL_GameControllerGetAxis(g_controller, SDL_CONTROLLER_AXIS_TRIGGERLEFT) > 8191) b |= BTN_Z;
-
-        // Analog stick overrides keyboard so a real stick wins when used.
-        Sint16 ax = SDL_GameControllerGetAxis(g_controller, SDL_CONTROLLER_AXIS_LEFTX);
-        Sint16 ay = SDL_GameControllerGetAxis(g_controller, SDL_CONTROLLER_AXIS_LEFTY);
-        if (ax != 0 || ay != 0) {
-            sx = axis_norm(ax);
-            sy = -axis_norm(ay); // SDL Y is down-positive; N64 Y is up-positive.
-        }
+    for (const DigitalInput& input : digital_inputs) {
+        if (input_strength(input.input) >= kDigitalAxisThreshold) b |= input.mask;
     }
+
+    const float sx = input_strength(N64Input::AnalogRight) -
+                     input_strength(N64Input::AnalogLeft);
+    const float sy = input_strength(N64Input::AnalogUp) -
+                     input_strength(N64Input::AnalogDown);
 
     *buttons = b;
     *x = std::clamp(sx, -1.0f, 1.0f);
@@ -162,6 +189,10 @@ ultramodern::input::connected_device_info_t get_connected_device_info(int contro
 
 } // namespace
 
+void refresh_controllers() {
+    refresh_controller_internal();
+}
+
 // Bring up the game-controller subsystem from init() (audio init lives in
 // audio.cpp; this just makes sure input can open pads).
 void init_input_subsystem() {
@@ -170,7 +201,7 @@ void init_input_subsystem() {
             fprintf(stderr, "mm_audio_input: SDL_InitSubSystem(GAMECONTROLLER): %s\n", SDL_GetError());
         }
     }
-    open_first_controller();
+    refresh_controller_internal();
 }
 
 ultramodern::input::callbacks_t input_callbacks() {

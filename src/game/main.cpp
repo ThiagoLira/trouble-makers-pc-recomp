@@ -43,6 +43,7 @@
 #include "recomp.h"
 
 #include "app_dirs.h"
+#include "session_log.h"
 #include "mm_rsp.hpp"
 #include "mm_audio_input.hpp"
 #ifdef MM_HAS_GRAPHICS
@@ -292,6 +293,7 @@ create_render_context(uint8_t* /*rdram*/, ultramodern::renderer::WindowHandle /*
 // UI, which this project doesn't have yet).
 static bool g_rom_selected = false;
 static const std::u8string kGameId = u8"troublemakers.n64.us.1";
+static constexpr const char* kProjectVersion = "0.2.6";
 
 namespace mm::stub::events {
 // Auto-start trigger. The reference starts the game from its launcher UI,
@@ -364,12 +366,19 @@ static void print_usage(const char* argv0) {
         "  --widescreen        expand the rendered field to the window aspect\n"
         "                      (opt-in: can reveal off-stage areas in a 2D game)\n"
         "  --no-widescreen     force the original 4:3 presentation\n"
-        "options persist to ~/.config/troublemakers-recomp/display.cfg\n"
+        "settings persist in the app config folder (display.cfg, controls.json)\n"
+        "diagnostic logs are written under its logs/ directory\n"
         "in game: F11 = fullscreen toggle, hold Tab = 3x fast-forward\n",
         argv0);
 }
 
 int main(int argc, char** argv) {
+    namespace fs = std::filesystem;
+    const fs::path config_dir = mm::get_app_folder_path();
+    std::error_code config_ec;
+    fs::create_directories(config_dir, config_ec);
+    mm::session_log::start(config_dir, kProjectVersion);
+
 #if defined(__linux__)
     // Prefer SDL's native Wayland backend in Wayland sessions. SDL2 defaults
     // to X11, which runs through XWayland — and there the launcher's
@@ -392,9 +401,11 @@ int main(int argc, char** argv) {
 #endif
 
     recomp::Version project_version{};
-    if (!recomp::Version::from_string("0.2.6", project_version)) {
+    if (!recomp::Version::from_string(kProjectVersion, project_version)) {
         exit_error("Invalid version string");
     }
+
+    mm_audio_input::load_control_config(config_dir);
 
     // Display options: config file first, CLI overrides, then persist the
     // resolved values so flags "stick" for the next flagless run.
@@ -431,12 +442,13 @@ int main(int argc, char** argv) {
         }
     }
 
+    std::fprintf(stderr,
+        "[config] window=%dx%d fullscreen=%s widescreen=%s msaa=%d ssaa=%d\n",
+        g_window_w, g_window_h, g_fullscreen ? "yes" : "no",
+        g_widescreen ? "yes" : "no", g_msaa, g_ssaa);
+
     // Store config (mods, saves) under a per-project folder in the user's
     // config dir. Sibling workers may relocate this.
-    namespace fs = std::filesystem;
-    fs::path config_dir = mm::get_app_folder_path();
-    std::error_code ec;
-    fs::create_directories(config_dir, ec);
     mm_audio_input::register_save_config(config_dir); // recomp::register_config_path
     mm_audio_input::init(); // SDL audio device + game-controller subsystem
 
@@ -592,5 +604,6 @@ int main(int argc, char** argv) {
     // ultramodern::quit() from elsewhere).
     recomp::start(cfg);
 
+    mm::session_log::stop();
     return EXIT_SUCCESS;
 }

@@ -11,6 +11,8 @@
 // software fallback, so the splash runs anywhere the game itself can.
 
 #include <algorithm>
+#include <array>
+#include <cfloat>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -26,6 +28,8 @@
 #include "librecomp/game.hpp"
 
 #include "launcher.h"
+#include "mm_audio_input.hpp"
+#include "session_log.h"
 
 namespace {
 
@@ -104,6 +108,139 @@ void apply_style() {
     c[ImGuiCol_Separator] = ImVec4(0.30f, 0.28f, 0.32f, 1.00f);
 }
 
+void save_controls_with_status(std::string& status) {
+    if (mm_audio_input::save_control_config()) {
+        status = "Bindings saved to controls.json.";
+    } else {
+        status = "Could not save controls.json; see the log for details.";
+    }
+}
+
+void draw_controls_tab(mm_audio_input::ControlDevice& selected_device,
+                       bool& capture_active,
+                       mm_audio_input::ControlDevice& capture_device,
+                       mm_audio_input::N64Input& capture_input,
+                       size_t& capture_slot,
+                       std::array<bool, SDL_CONTROLLER_AXIS_MAX>& axis_neutral,
+                       std::string& status) {
+    using namespace mm_audio_input;
+
+    if (ImGui::RadioButton("Controller",
+            selected_device == ControlDevice::Controller)) {
+        selected_device = ControlDevice::Controller;
+    }
+    ImGui::SameLine();
+    if (ImGui::RadioButton("Keyboard",
+            selected_device == ControlDevice::Keyboard)) {
+        selected_device = ControlDevice::Keyboard;
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("Click a binding, then press an input");
+
+    const ImGuiTableFlags flags = ImGuiTableFlags_BordersInner |
+        ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY |
+        ImGuiTableFlags_SizingStretchProp;
+    const float footer_height = ImGui::GetFrameHeightWithSpacing() * 3.2f;
+    if (ImGui::BeginTable("##control_bindings", 5, flags,
+                          ImVec2(0.0f, -footer_height))) {
+        const float font_size = ImGui::GetFontSize();
+        ImGui::TableSetupColumn("N64 input", ImGuiTableColumnFlags_WidthFixed,
+                                font_size * 7.5f);
+        ImGui::TableSetupColumn("Binding 1", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+        ImGui::TableSetupColumn("Binding 2", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+        ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, font_size * 4.2f);
+        ImGui::TableSetupColumn("##reset", ImGuiTableColumnFlags_WidthFixed,
+                                font_size * 4.2f);
+        ImGui::TableHeadersRow();
+
+        for (size_t index = 0; index < kN64InputCount; ++index) {
+            const auto input = static_cast<N64Input>(index);
+            ImGui::PushID(static_cast<int>(index));
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted(input_name(input));
+
+            for (size_t slot = 0; slot < kBindingsPerInput; ++slot) {
+                ImGui::TableSetColumnIndex(static_cast<int>(slot + 1));
+                ImGui::PushID(static_cast<int>(slot));
+                const std::string label = binding_name(
+                    get_binding(selected_device, input, slot));
+                if (ImGui::Button(label.c_str(), ImVec2(-FLT_MIN, 0.0f))) {
+                    capture_active = true;
+                    capture_device = selected_device;
+                    capture_input = input;
+                    capture_slot = slot;
+                    axis_neutral.fill(false);
+                    status.clear();
+                }
+                ImGui::PopID();
+            }
+
+            ImGui::TableSetColumnIndex(3);
+            if (ImGui::SmallButton("Clear")) {
+                clear_bindings(selected_device, input);
+                save_controls_with_status(status);
+            }
+            ImGui::TableSetColumnIndex(4);
+            if (ImGui::SmallButton("Reset")) {
+                reset_bindings(selected_device, input);
+                save_controls_with_status(status);
+            }
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
+
+    if (ImGui::Button("Reset all")) {
+        reset_all_bindings(selected_device);
+        save_controls_with_status(status);
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("Two bindings can be active at the same time.");
+    if (!status.empty()) ImGui::TextWrapped("%s", status.c_str());
+}
+
+void draw_support_tab(std::string& status) {
+    using mm::session_log::Session;
+    ImGui::TextWrapped(
+        "When reporting a problem, reproduce it once, relaunch, then copy the "
+        "previous session report. The pasted report is capped for GitHub; the "
+        "full logs remain on disk.");
+    ImGui::Dummy(ImVec2(0.0f, 6.0f));
+    ImGui::TextUnformatted("Log folder:");
+    ImGui::TextWrapped("%s",
+        path_to_utf8(mm::session_log::log_directory()).c_str());
+
+    const bool has_previous = mm::session_log::has_report(Session::Previous);
+    ImGui::BeginDisabled(!has_previous);
+    if (ImGui::Button("Copy previous session")) {
+        const std::string report = mm::session_log::read_report(Session::Previous);
+        if (!report.empty() && SDL_SetClipboardText(report.c_str()) == 0) {
+            status = "Previous session report copied to the clipboard.";
+        } else {
+            status = std::string("Could not copy the report: ") + SDL_GetError();
+        }
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (ImGui::Button("Copy current session")) {
+        const std::string report = mm::session_log::read_report(Session::Current);
+        if (!report.empty() && SDL_SetClipboardText(report.c_str()) == 0) {
+            status = "Current session report copied to the clipboard.";
+        } else {
+            status = std::string("Could not copy the report: ") + SDL_GetError();
+        }
+    }
+    if (!has_previous) {
+        ImGui::TextDisabled("No previous session log exists yet.");
+    }
+    if (!status.empty()) {
+        ImGui::Dummy(ImVec2(0.0f, 8.0f));
+        ImGui::TextWrapped("%s", status.c_str());
+    }
+}
+
 } // namespace
 
 namespace mm::launcher {
@@ -114,6 +251,9 @@ Outcome run(std::u8string game_id, const std::string& version_string,
         std::fprintf(stderr, "[launcher] SDL video init failed: %s\n", SDL_GetError());
         return Outcome::Quit;
     }
+    std::fprintf(stderr, "[launcher] SDL video driver: %s\n",
+                 SDL_GetCurrentVideoDriver() != nullptr
+                    ? SDL_GetCurrentVideoDriver() : "unknown");
 
     // 640x480 is unreadably small on high-density displays: pick an integer
     // UI scale from the desktop height (1080p -> 1x, 1440p -> 2x, 4K -> 3x)
@@ -144,6 +284,11 @@ Outcome run(std::u8string game_id, const std::string& version_string,
         std::fprintf(stderr, "[launcher] renderer creation failed: %s\n", SDL_GetError());
         SDL_DestroyWindow(window);
         return Outcome::Quit;
+    }
+    SDL_RendererInfo renderer_info{};
+    if (SDL_GetRendererInfo(renderer, &renderer_info) == 0) {
+        std::fprintf(stderr, "[launcher] SDL renderer: %s\n",
+                     renderer_info.name != nullptr ? renderer_info.name : "unknown");
     }
 
     IMGUI_CHECKVERSION();
@@ -197,6 +342,16 @@ Outcome run(std::u8string game_id, const std::string& version_string,
                       settings.window_w, settings.window_h);
     }
 
+    mm_audio_input::ControlDevice controls_device =
+        mm_audio_input::ControlDevice::Controller;
+    mm_audio_input::ControlDevice capture_device = controls_device;
+    mm_audio_input::N64Input capture_input = mm_audio_input::N64Input::A;
+    size_t capture_slot = 0;
+    bool capture_active = false;
+    std::array<bool, SDL_CONTROLLER_AXIS_MAX> axis_neutral{};
+    std::string controls_status;
+    std::string support_status;
+
     Outcome outcome = Outcome::Quit;
     bool running = true;
     while (running) {
@@ -205,6 +360,44 @@ Outcome run(std::u8string game_id, const std::string& version_string,
             ImGui_ImplSDL2_ProcessEvent(&ev);
             if (ev.type == SDL_QUIT) {
                 running = false;
+            }
+            if (ev.type == SDL_CONTROLLERDEVICEADDED ||
+                ev.type == SDL_CONTROLLERDEVICEREMOVED) {
+                mm_audio_input::refresh_controllers();
+            }
+
+            if (capture_active) {
+                bool accepted = false;
+                mm_audio_input::InputBinding binding{};
+                if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0 &&
+                    ev.key.keysym.scancode == SDL_SCANCODE_ESCAPE) {
+                    capture_active = false;
+                    controls_status = "Binding cancelled.";
+                } else if (capture_device == mm_audio_input::ControlDevice::Controller &&
+                           ev.type == SDL_CONTROLLERAXISMOTION &&
+                           ev.caxis.axis < SDL_CONTROLLER_AXIS_MAX) {
+                    const int value = static_cast<int>(ev.caxis.value);
+                    const int magnitude = value < 0 ? -value : value;
+                    if (magnitude < 8192) {
+                        axis_neutral[ev.caxis.axis] = true;
+                    } else if (magnitude >= 16384 && axis_neutral[ev.caxis.axis]) {
+                        accepted = mm_audio_input::binding_from_event(
+                            capture_device, ev, binding);
+                    }
+                } else {
+                    accepted = mm_audio_input::binding_from_event(
+                        capture_device, ev, binding);
+                }
+
+                if (accepted) {
+                    if (mm_audio_input::set_binding(
+                            capture_device, capture_input, capture_slot, binding)) {
+                        save_controls_with_status(controls_status);
+                    } else {
+                        controls_status = "That input cannot be used for this binding.";
+                    }
+                    capture_active = false;
+                }
             }
         }
 
@@ -225,6 +418,9 @@ Outcome run(std::u8string game_id, const std::string& version_string,
         ImGui::TextDisabled("N64 recompilation  ·  v%s", version_string.c_str());
         ImGui::Dummy(ImVec2(0.0f, 8.0f));
 
+        ImGui::BeginDisabled(capture_active);
+        if (ImGui::BeginTabBar("##launcher_tabs")) {
+        if (ImGui::BeginTabItem("Play")) {
         // --- ROM -----------------------------------------------------------
         ImGui::SeparatorText("ROM");
         if (rom_valid) {
@@ -332,6 +528,23 @@ Outcome run(std::u8string game_id, const std::string& version_string,
                               "Use 2x first; higher values are very GPU-intensive.");
         }
 
+        ImGui::EndTabItem();
+        }
+
+        if (ImGui::BeginTabItem("Controls")) {
+            draw_controls_tab(controls_device, capture_active, capture_device,
+                              capture_input, capture_slot, axis_neutral,
+                              controls_status);
+            ImGui::EndTabItem();
+        }
+
+        if (ImGui::BeginTabItem("Support")) {
+            draw_support_tab(support_status);
+            ImGui::EndTabItem();
+        }
+        ImGui::EndTabBar();
+        }
+
         // --- Start / Exit ---------------------------------------------------
         // Pinned to the bottom of the window.
         float button_h = ImGui::GetFrameHeight();
@@ -346,6 +559,33 @@ Outcome run(std::u8string game_id, const std::string& version_string,
         ImGui::SameLine();
         if (ImGui::Button("Exit", ImVec2(100.0f, 0.0f))) {
             running = false;
+        }
+        ImGui::EndDisabled();
+
+        if (capture_active) {
+            ImGui::SetNextWindowPos(
+                ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
+                ImGuiCond_Always,
+                                    ImVec2(0.5f, 0.5f));
+            ImGui::SetNextWindowBgAlpha(0.98f);
+            ImGui::Begin("Bind input", nullptr,
+                ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse |
+                ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
+            ImGui::Text("Binding %s (slot %zu)",
+                        mm_audio_input::input_name(capture_input), capture_slot + 1);
+            if (capture_device == mm_audio_input::ControlDevice::Controller) {
+                ImGui::TextWrapped(
+                    "Press a controller button, or move an axis from neutral.\n"
+                    "Return a held stick or trigger to neutral before binding it.");
+            } else {
+                ImGui::TextWrapped("Press a key.");
+            }
+            ImGui::TextDisabled("Escape cancels");
+            if (ImGui::Button("Cancel")) {
+                capture_active = false;
+                controls_status = "Binding cancelled.";
+            }
+            ImGui::End();
         }
 
         ImGui::End();
