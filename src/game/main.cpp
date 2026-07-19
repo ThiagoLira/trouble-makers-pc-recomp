@@ -45,6 +45,7 @@
 #include "app_dirs.h"
 #include "debug_menu.h"
 #include "session_log.h"
+#include "telemetry.h"
 #include "mm_rsp.hpp"
 #include "mm_audio_input.hpp"
 #ifdef MM_HAS_GRAPHICS
@@ -91,14 +92,9 @@ class StubRendererContext : public ultramodern::renderer::RendererContext {
     // does not flush stdio buffers — fflush keeps every counted line). Mirrors
     // the [gfx] send_dl counter in rt64_render_context.cpp (TEMP DIAGNOSTIC).
     void send_dl(const OSTask*) override {
-        static uint64_t n = 0;
-        if (n < 3 || n % 10 == 0) {
-            std::fprintf(stderr, "[gfx] send_dl #%llu\n", (unsigned long long)n);
-            std::fflush(stderr);
-        }
-        n++;
+        mm::telemetry::record_display_list(0);
     }
-    void update_screen() override {}
+    void update_screen() override { mm::telemetry::record_screen_update(0); }
     void shutdown() override {}
     uint32_t get_display_framerate() const override { return 60; }
     float get_resolution_scale() const override { return 1.0f; }
@@ -126,6 +122,19 @@ static int g_fps = 0;
 // immediately on the next run. Empty until a ROM validates.
 static std::string g_rom_path;
 static SDL_Window* g_sdl_window = nullptr;
+
+static void log_display_config(const char* state) {
+    const std::uint32_t target_rate = g_fps < 0 ? 0u
+        : static_cast<std::uint32_t>(g_fps > 60 ? g_fps : 60);
+    mm::telemetry::set_display_target(target_rate);
+    mm::telemetry::event("config",
+        "%s window=%dx%d fullscreen=%s widescreen=%s msaa=%d ssaa=%d "
+        "fps-mode=%s fps-value=%d debug-menu=%s",
+        state, g_window_w, g_window_h, g_fullscreen ? "yes" : "no",
+        g_widescreen ? "yes" : "no", g_msaa, g_ssaa,
+        g_fps < 0 ? "display" : (g_fps > 60 ? "manual" : "native"),
+        g_fps, g_debug_menu ? "yes" : "no");
+}
 
 // Keep renderer allocations inside combinations RT64 can recover from on
 // ordinary GPUs. SSAA is a per-dimension multiplier (2x means 4x as many
@@ -241,6 +250,10 @@ ultramodern::gfx_callbacks_t::gfx_data_t create_gfx() {
 #endif
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) < 0) {
         std::fprintf(stderr, "Failed to initialize SDL2: %s\n", SDL_GetError());
+    } else {
+        mm::telemetry::event("display", "SDL video initialized driver=%s",
+            SDL_GetCurrentVideoDriver() != nullptr
+                ? SDL_GetCurrentVideoDriver() : "unknown");
     }
     return nullptr;
 }
@@ -273,6 +286,31 @@ ultramodern::renderer::WindowHandle create_window(ultramodern::gfx_callbacks_t::
         g_window_w, g_window_h, window_flags);
     if (win == nullptr) {
         std::fprintf(stderr, "Failed to create window: %s\n", SDL_GetError());
+    } else {
+        int logical_width = 0;
+        int logical_height = 0;
+        SDL_GetWindowSize(win, &logical_width, &logical_height);
+        const int display_index = SDL_GetWindowDisplayIndex(win);
+        SDL_DisplayMode mode{};
+        const bool have_mode = display_index >= 0 &&
+            SDL_GetCurrentDisplayMode(display_index, &mode) == 0;
+        float diagonal_dpi = 0.0f;
+        float horizontal_dpi = 0.0f;
+        float vertical_dpi = 0.0f;
+        const bool have_dpi = display_index >= 0 &&
+            SDL_GetDisplayDPI(display_index, &diagonal_dpi,
+                              &horizontal_dpi, &vertical_dpi) == 0;
+        mm::telemetry::event("display",
+            "window-created logical=%dx%d display=%d desktop=%dx%d@%dHz dpi=%.1f",
+            logical_width, logical_height, display_index,
+            have_mode ? mode.w : 0, have_mode ? mode.h : 0,
+            have_mode ? mode.refresh_rate : 0,
+            have_dpi ? diagonal_dpi : 0.0f);
+        mm::telemetry::set_display_state(
+            static_cast<std::uint32_t>(std::max(logical_width, 0)),
+            static_cast<std::uint32_t>(std::max(logical_height, 0)),
+            static_cast<std::uint32_t>(
+                have_mode ? std::max(mode.refresh_rate, 0) : 0), 1.0f);
     }
     // RT64 owns HWND fullscreen transitions on Windows. Calling SDL first and
     // RT64 second mutates the same window twice and can leave its swap chain
@@ -353,7 +391,10 @@ create_render_context(uint8_t* /*rdram*/, ultramodern::renderer::WindowHandle /*
 // UI, which this project doesn't have yet).
 static bool g_rom_selected = false;
 static const std::u8string kGameId = u8"troublemakers.n64.us.1";
-static constexpr const char* kProjectVersion = "0.3.2";
+#ifndef MM_PROJECT_VERSION
+#define MM_PROJECT_VERSION "0.3.4"
+#endif
+static constexpr const char* kProjectVersion = MM_PROJECT_VERSION;
 
 namespace mm::stub::events {
 // Auto-start trigger. The reference starts the game from its launcher UI,
@@ -365,9 +406,13 @@ namespace mm::stub::events {
 // through the per-tick state swaps thereafter).
 void vi_callback() {
     static bool started = false;
+    mm::telemetry::record_vi();
     if (g_rom_selected && !started) {
         started = true;
+        mm::telemetry::set_phase(mm::telemetry::Phase::GameStarting,
+                                 "invoking recomp::start_game");
         recomp::start_game(kGameId);
+        mm::telemetry::event("lifecycle", "recomp::start_game returned");
     }
 }
 // Runs once the gfx thread has created the renderer; nothing to do here.
@@ -440,10 +485,25 @@ static void print_usage(const char* argv0) {
 
 int main(int argc, char** argv) {
     namespace fs = std::filesystem;
+    const auto environment_value = [](const char* name) -> std::string {
+        const char* value = std::getenv(name);
+        return value != nullptr && value[0] != '\0' ? value : "<unset>";
+    };
+    // Capture these once at main entry. Dynamic SDL builds may mirror
+    // SDL_AUDIODRIVER into their internal legacy variable before main runs,
+    // while an old-variable-only launch remains distinguishable here.
+    const std::string startup_sdl_audio_driver =
+        environment_value("SDL_AUDIODRIVER");
+    const std::string startup_mistaken_sdl_audio_driver =
+        environment_value("SDL_AUDIO_DRIVER");
+
     const fs::path config_dir = mm::get_app_folder_path();
     std::error_code config_ec;
     fs::create_directories(config_dir, config_ec);
     mm::session_log::start(config_dir, kProjectVersion);
+    mm::telemetry::start();
+    mm::telemetry::set_phase(mm::telemetry::Phase::Startup, "process entry");
+    mm::telemetry::log_system_info();
 
 #if defined(__linux__)
     // Prefer SDL's native Wayland backend in Wayland sessions. SDL2 defaults
@@ -465,6 +525,18 @@ int main(int argc, char** argv) {
         setenv("SDL_VIDEODRIVER", driver_list_ok ? "wayland,x11" : "wayland", 0);
     }
 #endif
+
+    const std::string sdl_video_driver = environment_value("SDL_VIDEODRIVER");
+    mm::telemetry::event("environment",
+        "SDL_AUDIODRIVER=%s SDL_AUDIO_DRIVER=%s SDL_VIDEODRIVER=%s",
+        startup_sdl_audio_driver.c_str(),
+        startup_mistaken_sdl_audio_driver.c_str(),
+        sdl_video_driver.c_str());
+    if (startup_mistaken_sdl_audio_driver != "<unset>" &&
+        startup_sdl_audio_driver == "<unset>") {
+        mm::telemetry::event("environment",
+            "SDL_AUDIO_DRIVER is ignored by SDL; use SDL_AUDIODRIVER instead");
+    }
 
     recomp::Version project_version{};
     if (!recomp::Version::from_string(kProjectVersion, project_version)) {
@@ -526,12 +598,7 @@ int main(int argc, char** argv) {
     }
     sanitize_display_config();
 
-    std::fprintf(stderr,
-        "[config] window=%dx%d fullscreen=%s widescreen=%s msaa=%d ssaa=%d "
-        "fps=%d debug-menu=%s\n",
-        g_window_w, g_window_h, g_fullscreen ? "yes" : "no",
-        g_widescreen ? "yes" : "no", g_msaa, g_ssaa, g_fps,
-        g_debug_menu ? "yes" : "no");
+    log_display_config("loaded");
 
     // Store config (mods, saves) under a per-project folder in the user's
     // config dir. Sibling workers may relocate this.
@@ -547,6 +614,7 @@ int main(int argc, char** argv) {
     // If a ROM path was given, validate + load it now; the game auto-starts
     // from the first VI tick (see vi_callback).
     if (rom_arg != nullptr) {
+        mm::telemetry::event("rom", "validation started source=command-line");
         // select_rom validates the ROM against the registered GameEntry keyed
         // by game_id, so we must name the game we registered above.
         std::u8string game_id = kGameId;
@@ -568,6 +636,8 @@ int main(int argc, char** argv) {
         g_rom_path = reinterpret_cast<const char*>(
             fs::path(rom_arg).u8string().c_str()); // remember for the launcher
         g_rom_selected = true; // gfx_init_callback starts the game once gfx is up
+        mm::telemetry::set_phase(mm::telemetry::Phase::RomReady,
+                                 "command-line ROM validated");
     }
 #ifdef MM_HAS_GRAPHICS
     else {
@@ -580,6 +650,8 @@ int main(int argc, char** argv) {
             g_msaa, g_ssaa, g_fps, g_debug_menu};
         fs::path rom_path = fs::path(
             std::u8string(g_rom_path.begin(), g_rom_path.end()));
+        mm::telemetry::set_phase(mm::telemetry::Phase::Launcher,
+                                 "launcher opened");
         auto outcome = mm::launcher::run(kGameId, project_version.to_string(), ds, rom_path);
         g_window_w = ds.window_w;
         g_window_h = ds.window_h;
@@ -592,10 +664,15 @@ int main(int argc, char** argv) {
         sanitize_display_config();
         g_rom_path = reinterpret_cast<const char*>(rom_path.u8string().c_str());
         save_display_config(); // keep choices even if the user exits here
+        log_display_config("launcher-selected");
         if (outcome != mm::launcher::Outcome::StartGame) {
+            mm::telemetry::set_phase(mm::telemetry::Phase::ShuttingDown,
+                                     "launcher exited without starting game");
             return EXIT_SUCCESS;
         }
         g_rom_selected = true;
+        mm::telemetry::set_phase(mm::telemetry::Phase::RomReady,
+                                 "launcher ROM validated");
     }
 #endif
 
@@ -604,6 +681,7 @@ int main(int argc, char** argv) {
     // persist the resolved options so they stick for the next run.
     apply_display_config();
     save_display_config();
+    log_display_config("active");
 
     mm::debug_menu::configure(g_debug_menu);
 #ifdef MM_HAS_GRAPHICS
@@ -698,8 +776,13 @@ int main(int argc, char** argv) {
 
     // Blocks until the runtime quits (window close via update_gfx above, or
     // ultramodern::quit() from elsewhere).
+    mm::telemetry::set_phase(mm::telemetry::Phase::RuntimeStarting,
+                             "entering recomp::start");
     recomp::start(cfg);
 
+    mm::telemetry::set_phase(mm::telemetry::Phase::ShuttingDown,
+                             "recomp::start returned");
+    mm::telemetry::stop();
     mm::session_log::stop();
     return EXIT_SUCCESS;
 }

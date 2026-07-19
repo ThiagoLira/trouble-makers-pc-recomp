@@ -11,11 +11,14 @@
 #include <SDL2/SDL.h>
 
 #include <algorithm>
+#include <atomic>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <vector>
 
 #include "mm_audio_input.hpp"
+#include "telemetry.h"
 
 namespace mm_audio_input {
 // Defined in input.cpp — brings up the game-controller subsystem and opens
@@ -48,6 +51,11 @@ void rebuild_converter() {
         return;
     }
     g_convert_valid = true;
+    mm::telemetry::set_audio_rates(g_sample_rate, kOutputSampleRate);
+    mm::telemetry::event("audio",
+        "converter input=%uHz output=%uHz conversion-needed=%s len-mult=%d ratio=%.6f",
+        g_sample_rate, kOutputSampleRate, ret == 0 ? "no" : "yes",
+        g_convert.len_mult, g_convert.len_ratio);
 }
 
 // ultramodern passes sample_count = number of int16 samples (i.e. 2 per stereo
@@ -55,6 +63,9 @@ void rebuild_converter() {
 // the device rate, and queue.
 void queue_samples(int16_t* audio_data, size_t sample_count) {
     if (g_audio_device == 0 || sample_count < kInputChannels) return;
+
+    const std::uint64_t queued_before_frames =
+        SDL_GetQueuedAudioSize(g_audio_device) / kBytesPerFrame;
 
     static std::vector<int16_t> buf;
     const size_t cap = (sample_count + 8u) * static_cast<size_t>(std::max(1, g_convert.len_mult));
@@ -66,6 +77,9 @@ void queue_samples(int16_t* audio_data, size_t sample_count) {
         buf[i + 1] = audio_data[i + 0];
     }
 
+    const int16_t* queued_samples = buf.data();
+    size_t queued_sample_count = sample_count;
+    int queue_result = 0;
     if (g_convert_valid) {
         g_convert.buf = reinterpret_cast<Uint8*>(buf.data());
         g_convert.len = static_cast<int>(sample_count * sizeof(int16_t));
@@ -73,17 +87,46 @@ void queue_samples(int16_t* audio_data, size_t sample_count) {
             fprintf(stderr, "mm_audio: SDL_ConvertAudio: %s\n", SDL_GetError());
             return;
         }
-        SDL_QueueAudio(g_audio_device, buf.data(), g_convert.len_cvt);
+        queued_sample_count = static_cast<size_t>(g_convert.len_cvt) / sizeof(int16_t);
+        queue_result = SDL_QueueAudio(g_audio_device, buf.data(), g_convert.len_cvt);
     } else {
         // No converter (e.g. BuildAudioCVT failed): queue as-is at input rate.
-        SDL_QueueAudio(g_audio_device, buf.data(), sample_count * sizeof(int16_t));
+        queue_result = SDL_QueueAudio(
+            g_audio_device, buf.data(), sample_count * sizeof(int16_t));
     }
+
+    int peak = 0;
+    std::uint64_t clipped = 0;
+    std::int64_t sum = 0;
+    for (size_t i = 0; i < queued_sample_count; ++i) {
+        const int sample = queued_samples[i];
+        const int magnitude = sample == -32768 ? 32768 : std::abs(sample);
+        peak = std::max(peak, magnitude);
+        if (magnitude >= 32767) ++clipped;
+        sum += sample;
+    }
+
+    if (queue_result < 0) {
+        static std::atomic_bool reported{false};
+        if (!reported.exchange(true, std::memory_order_relaxed)) {
+            std::fprintf(stderr, "mm_audio: SDL_QueueAudio: %s\n", SDL_GetError());
+        }
+    }
+    const std::uint64_t queued_after_frames =
+        SDL_GetQueuedAudioSize(g_audio_device) / kBytesPerFrame;
+    mm::telemetry::record_audio_buffer(
+        queued_before_frames, queued_after_frames, kOutputSampleRate,
+        queued_sample_count / kOutputChannels, peak, clipped, sum,
+        queued_sample_count, queue_result < 0);
 }
 
 void set_frequency(uint32_t freq) {
     if (freq == 0) return;
     if (freq == g_sample_rate) return;
+    const uint32_t previous = g_sample_rate;
     g_sample_rate = freq;
+    mm::telemetry::event("audio", "input sample rate changed %uHz -> %uHz",
+                         previous, g_sample_rate);
     rebuild_converter();
 }
 
@@ -117,6 +160,15 @@ void init() {
         fprintf(stderr, "mm_audio: SDL_InitSubSystem(AUDIO): %s\n", SDL_GetError());
     }
 
+    const int playback_devices = SDL_GetNumAudioDevices(0);
+    mm::telemetry::event("audio", "playback devices reported by SDL=%d",
+                         playback_devices);
+    for (int i = 0; i < std::min(playback_devices, 8); ++i) {
+        const char* name = SDL_GetAudioDeviceName(i, 0);
+        mm::telemetry::event("audio", "playback-device[%d]=%s", i,
+                             name != nullptr ? name : "unknown");
+    }
+
     SDL_AudioSpec desired{};
     desired.freq = static_cast<int>(kOutputSampleRate);
     desired.format = AUDIO_S16LSB;
@@ -131,10 +183,20 @@ void init() {
         fprintf(stderr, "mm_audio: SDL_OpenAudioDevice: %s\n", SDL_GetError());
         return;
     }
-    std::fprintf(stderr, "[audio] SDL driver: %s; device format: %d Hz, %u channel(s)\n",
-                 SDL_GetCurrentAudioDriver() != nullptr
-                    ? SDL_GetCurrentAudioDriver() : "unknown",
-                 obtained.freq, static_cast<unsigned int>(obtained.channels));
+    const double latency_ms = obtained.freq > 0
+        ? static_cast<double>(obtained.samples) * 1000.0 / obtained.freq : 0.0;
+    mm::telemetry::event("audio",
+        "driver=%s requested=%dHz/0x%04X/%u-ch/%u-samples "
+        "obtained=%dHz/0x%04X/%u-ch/%u-samples/%u-bytes latency=%.2fms",
+        SDL_GetCurrentAudioDriver() != nullptr
+            ? SDL_GetCurrentAudioDriver() : "unknown",
+        desired.freq, static_cast<unsigned int>(desired.format),
+        static_cast<unsigned int>(desired.channels),
+        static_cast<unsigned int>(desired.samples), obtained.freq,
+        static_cast<unsigned int>(obtained.format),
+        static_cast<unsigned int>(obtained.channels),
+        static_cast<unsigned int>(obtained.samples),
+        static_cast<unsigned int>(obtained.size), latency_ms);
     SDL_PauseAudioDevice(g_audio_device, 0); // begin playback
 
     rebuild_converter();

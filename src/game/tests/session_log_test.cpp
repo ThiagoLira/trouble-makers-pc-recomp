@@ -49,6 +49,7 @@ int main() {
                     "stderr capture");
 
     result |= check(start(root, "test-version"), "start second logger");
+    std::fprintf(stderr, "retained-static-diagnostic\n");
     const std::string noisy_chunk(64 * 1024, 'x');
     for (int i = 0; i < 10; ++i) {
         std::fwrite(noisy_chunk.data(), 1, noisy_chunk.size(), stdout);
@@ -62,6 +63,10 @@ int main() {
                     "latest rotates to previous");
     result |= check(current.find("second-session-tail") != std::string::npos,
                     "new latest session");
+    result |= check(current.find("retained-static-diagnostic") != std::string::npos,
+                    "compaction preserves initial diagnostics");
+    result |= check(current.find("[+") != std::string::npos,
+                    "captured lines receive elapsed timestamps");
     result |= check(fs::file_size(root / "logs" / "latest.log") <= 512 * 1024,
                     "latest log is bounded");
     result |= check(current.find("older session output was discarded") !=

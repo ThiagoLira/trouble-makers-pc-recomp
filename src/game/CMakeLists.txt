@@ -40,7 +40,8 @@ if(NOT MM_GIT_COMMIT)
 endif()
 target_compile_definitions(troublemakers PRIVATE
     MM_GIT_COMMIT="${MM_GIT_COMMIT}"
-    MM_BUILD_TYPE="$<CONFIG>")
+    MM_BUILD_TYPE="$<CONFIG>"
+    MM_PROJECT_VERSION="${MM_PROJECT_VERSION}")
 
 target_include_directories(troublemakers PRIVATE
     ${RUNTIME_INCLUDES}                 # recomp.h, librecomp/*.hpp, ultramodern/*.hpp
@@ -57,6 +58,7 @@ target_link_libraries(troublemakers PRIVATE
     "$<LINK_LIBRARY:WHOLE_ARCHIVE,mm_recompiled,librecomp,ultramodern>"
     mm_rsp
     mm_audio_input
+    mm_diagnostics
     ${SDL2_LIBRARIES}
 )
 

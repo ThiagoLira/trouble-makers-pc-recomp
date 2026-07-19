@@ -25,7 +25,7 @@ target_include_directories(mm_rsp PUBLIC
 
 # PUBLIC: w1's game target gets librecomp's headers + objects when it links
 # mm_rsp (the generated ucode and the callback glue both call into librecomp).
-target_link_libraries(mm_rsp PUBLIC librecomp)
+target_link_libraries(mm_rsp PUBLIC librecomp mm_diagnostics)
 
 # The generated ucode uses rabbitizer-emitted type-punning and -Wunused patterns
 # similar to the game recomp; mirror mm_recompiled's permissive flags.

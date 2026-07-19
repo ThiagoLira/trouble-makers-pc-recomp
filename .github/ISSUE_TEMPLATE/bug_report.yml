@@ -7,6 +7,8 @@ body:
       value: |
         Thanks for helping improve Trouble Makers. Please reproduce the issue once, relaunch the game, open **Support**, and click **Copy previous session** before filling this out.
 
+        For frame drops, slowdowns, or audio glitches, remain in the affected scene for at least 15 seconds before closing the game so the log captures three diagnostic snapshots.
+
   - type: dropdown
     id: platform
     attributes:
@@ -42,7 +44,8 @@ body:
       placeholder: |
         1. Start level ...
         2. Do ...
-        3. Observe ...
+        3. Observe the issue for at least 15 seconds (for performance/audio bugs)
+        4. Close and relaunch the game
     validations:
       required: true
 
