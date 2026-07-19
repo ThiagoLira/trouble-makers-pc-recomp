@@ -14,9 +14,10 @@ linked against [N64ModernRuntime](https://github.com/N64Recomp/N64ModernRuntime)
 rendering on Vulkan. It is **not** an emulator — there is no CPU simulated at
 runtime; the game *is* the native binary. Same toolchain as Zelda64Recomp.
 
-The companion **decompilation** at `../trouble-makers-ai-recomp` is read-only
-ground truth (source, `versions/us1/symbol_addrs*.txt`, asm). Its symbol-rich
-`troublemakers.elf` is the input to the recompiler here.
+The checked-in `symbols/troublemakers.us1.toml` map is the authoritative input
+for game functions and overlays. N64Recomp combines it with the builder's own
+US 1.1 ROM; no decompilation checkout or ELF is part of the build. Do not
+substitute symbols or code from an unrelated third-party decompilation.
 
 **No game code, ROM, or recompiler output is committed to this repo.** Users
 supply their own legally dumped Mischief Makers (US 1.1) ROM.
@@ -41,18 +42,19 @@ supply their own legally dumped Mischief Makers (US 1.1) ROM.
 - `src/audio_input/` — SDL2 audio, input, EEPROM save config
 - `patches/` — runtime patches pending upstream (`N64ModernRuntime/`, `rt64/`)
 - `tools/N64Recomp/` — the recompiler (submodule)
+- `symbols/troublemakers.us1.toml` — checked-in function/overlay metadata
 - `docs/` — full engineering history: phase notes, mission prompts, debugging
   recipes. Start with `docs/README.md`.
-- `input/troublemakers.elf` — the decomp build (gitignored; game code)
+- `input/troublemakers.us1.z64` — builder-supplied ROM (gitignored)
 - `RecompiledFuncs/`, `src/rsp/generated/` — generated C (gitignored)
 - `lib/rt64`, `lib/N64ModernRuntime` — see gotchas below
 
 ## Build & regenerate
 
 ```sh
-# 1. Generate the translated C (only after a toml or elf change):
-tools/N64Recomp/build/N64RecompCLI troublemakers.us1.toml   # -> RecompiledFuncs/
-tools/N64Recomp/build/RSPRecomp    aspMain.us1.rsp.toml     # -> src/rsp/generated/
+# 1. Put your own US 1.1 ROM at input/troublemakers.us1.z64, then generate:
+tools/N64Recomp/build/N64Recomp troublemakers.us1.toml  # -> RecompiledFuncs/
+tools/N64Recomp/build/RSPRecomp aspMain.us1.rsp.toml    # -> src/rsp/generated/
 
 # 2. Build the app:
 cmake -B build -DCMAKE_BUILD_TYPE=Release
@@ -62,8 +64,9 @@ cmake --build build --target troublemakers -j
 ./build/src/game/troublemakers [rom.z64] [--widescreen|--fullscreen|--window WxH|--msaa N|--ssaa N]
 ```
 
-- The N64Recomp **executable** target is `N64RecompCLI` (the bare name
-  `N64Recomp` is a static *library* — building it produces no runnable binary).
+- The N64Recomp **CMake target** is `N64RecompCLI`, which produces the
+  executable `tools/N64Recomp/build/N64Recomp`. The bare CMake target
+  `N64Recomp` is a static library.
 - Regenerating `RecompiledFuncs/` can add new `funcs_NN.c` files, so **re-run
   cmake configure** afterward (the source glob is configure-time).
 - Never hand-edit `RecompiledFuncs/*` — fixes belong in the `.toml` config or
@@ -108,7 +111,7 @@ read `docs/PHASE7_NOTES_widescreen.md` §2 and §4 before touching tile draws.
 
 `.github/workflows/build.yml` builds the Linux AppImage and the Windows
 package on every push (needs a `TM_ASSETS_REPO` secret providing
-`troublemakers.elf` + the pregenerated `aspMain.cpp`, so game code stays out
-of the public repo). Release binaries are those artifacts. Package an AppImage
+`troublemakers.us1.z64`; CI generates both the game and RSP code from it).
+Release binaries are those artifacts. Package an AppImage
 locally with `.github/linux/appimage.sh` (`NO_STRIP=1` on bleeding-edge
 distros; the host needs the SVG gdk-pixbuf loader, e.g. `librsvg2-common`).

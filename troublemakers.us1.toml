@@ -1,63 +1,11 @@
-# N64Recomp configuration for Mischief Makers (US 1.1)
-# input elf: the byte-perfect decomp build from trouble-makers-ai-recomp
+# N64Recomp configuration for Mischief Makers (US 1.1).
+# The checked-in symbol map describes the project's functions and overlays;
+# the builder's own ROM supplies all game bytes.
 [input]
 entrypoint = 0x80000400
-elf_path = "input/troublemakers.elf"
+symbols_file_path = "symbols/troublemakers.us1.toml"
+rom_file_path = "input/troublemakers.us1.z64"
 output_func_path = "RecompiledFuncs"
-
-# Static (file-local) functions whose symbols the decomp ELF drops — the
-# recompiler sees a symbol-table hole and skips their code, but the game
-# installs several of them as function POINTERS (libaudio sequencer
-# handlers, rmon internals), so they must be translated. Names/addrs from
-# the decomp's symbol_addrs; sizes from the decomp build's .o files
-# (fallback: gap to the next known function).
-manual_funcs = [
-    { name = "__CSPVoiceHandler", section = ".main", vram = 0x8009C6AC, size = 0x82C },  # gap
-    { name = "__CSPHandleNextSeqEvent", section = ".main", vram = 0x8009CF78, size = 0x11C },  # gap
-    { name = "__CSPHandleMIDIMsg", section = ".main", vram = 0x8009D094, size = 0xDAC },  # gap
-    { name = "__CSPHandleMetaMsg", section = ".main", vram = 0x8009DE40, size = 0x2C8 },  # gap
-    { name = "__CSPRepostEvent", section = ".main", vram = 0x8009E108, size = 0x128 },  # gap
-    { name = "__setUsptFromTempo", section = ".main", vram = 0x8009E230, size = 0x70 },  # gap
-    { name = "_timeToSamplesNoRound", section = ".main", vram = 0x8009ECD8, size = 0x68 },  # gap
-    { name = "__nextSampleTime", section = ".main", vram = 0x8009ED84, size = 0xEC },  # gap
-    { name = "__alCSeqGetTrackEvent", section = ".main", vram = 0x8009F288, size = 0x44C },  # gap
-    { name = "__getTrackByte", section = ".main", vram = 0x8009FB14, size = 0x1F4 },  # gap
-    { name = "__readVarLen", section = ".main", vram = 0x8009FD08, size = 0x98 },  # gap
-    { name = "drawbitmap", section = ".main", vram = 0x800A00BC, size = 0x28A0 },  # gap
-    { name = "proutSprintf", section = ".main", vram = 0x800A56BC, size = 0x54 },  # gap
-    { name = "proutSyncPrintf", section = ".main", vram = 0x800A57F0, size = 0x94 },  # gap
-    { name = "rmonPutchar", section = ".main", vram = 0x800A5884, size = 0x80 },  # gap
-    { name = "kmc_proutSyncPrintf", section = ".main", vram = 0x800A5904, size = 0x230 },  # gap
-    { name = "SetTempBreakpoint", section = ".main", vram = 0x800A9B00, size = 0xC8 },  # gap
-    { name = "ClearTempBreakpoint", section = ".main", vram = 0x800A9BC8, size = 0x124 },  # gap
-    { name = "IsJump", section = ".main", vram = 0x800AA304, size = 0xB0 },  # gap
-    { name = "rmonSendBreakMessage", section = ".main", vram = 0x800AA4D8, size = 0xC8 },  # gap
-    { name = "rmonFindFaultedThreads", section = ".main", vram = 0x800AA684, size = 0xFC },  # gap
-    { name = "__seqpVoiceHandler", section = ".main", vram = 0x800AB4B0, size = 0x774 },  # gap
-    { name = "__handleNextSeqEvent", section = ".main", vram = 0x800ABD2C, size = 0x108 },  # gap
-    { name = "__handleMIDIMsg", section = ".main", vram = 0x800ABE34, size = 0xC98 },  # gap
-    { name = "__handleMetaMsg", section = ".main", vram = 0x800ACACC, size = 0xA0 },  # gap
-    { name = "_Putfld", section = ".main", vram = 0x800B3BA4, size = 0x9AC },  # gap
-    { name = "__osDefaultHandler", section = ".main", vram = 0x800B4550, size = 0x60 },  # gap
-    { name = "string_to_u32", section = ".main", vram = 0x800B45B0, size = 0x70 },  # gap
-    { name = "send_packet", section = ".main", vram = 0x800B4620, size = 0x7C },  # gap
-    { name = "clear_IP6", section = ".main", vram = 0x800B469C, size = 0x78 },  # gap
-    { name = "send", section = ".main", vram = 0x800B4714, size = 0xE8 },  # gap
-    { name = "__osLeoAbnormalResume", section = ".main", vram = 0x800B51FC, size = 0xF8 },  # gap
-    { name = "__osLeoResume", section = ".main", vram = 0x800B52F4, size = 0x11C },  # gap
-    { name = "NotImplemented", section = ".main", vram = 0x800B5840, size = 0x1C },  # gap
-    { name = "LoadStoreSU", section = ".main", vram = 0x800B5990, size = 0x8C },  # gap
-    { name = "LoadStoreVU", section = ".main", vram = 0x800B5A1C, size = 0x9C },  # gap
-    { name = "SetUpForRCPop", section = ".main", vram = 0x800B5AB8, size = 0xB0 },  # gap
-    { name = "CleanupFromRCPop", section = ".main", vram = 0x800B5B68, size = 0xB0 },  # gap
-    { name = "rmonGetRcpRegister", section = ".main", vram = 0x800B6068, size = 0x74 },  # gap
-    { name = "read8", section = ".main", vram = 0x800B7A88, size = 0x30 },  # gap
-    { name = "read16", section = ".main", vram = 0x800B7AB8, size = 0x58 },  # gap
-    { name = "read32", section = ".main", vram = 0x800B7B10, size = 0xA0 },  # gap
-    { name = "readVarLen", section = ".main", vram = 0x800B7BB0, size = 0xA0 },  # gap
-    { name = "_Ldunscale", section = ".main", vram = 0x800B9904, size = 0x104 },  # gap
-    { name = "_Genld", section = ".main", vram = 0x800B9A08, size = 0x788 },  # gap
-]
 
 # Widescreen: widen the per-frame view-cull rectangle at translation time.
 # The game culls actor/sprite DRAWING against a rect it recomputes every
