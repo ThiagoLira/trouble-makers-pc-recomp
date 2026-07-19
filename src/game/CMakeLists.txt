@@ -120,6 +120,6 @@ if(BUILD_TESTING)
         session_log.cpp
     )
     target_include_directories(mm_session_log_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-    target_link_libraries(mm_session_log_tests PRIVATE ${SDL2_LIBRARIES} Threads::Threads)
+    target_link_libraries(mm_session_log_tests PRIVATE SDL2::SDL2 Threads::Threads)
     add_test(NAME mm_session_log COMMAND mm_session_log_tests)
 endif()

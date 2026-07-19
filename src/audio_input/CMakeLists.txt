@@ -27,7 +27,7 @@ target_include_directories(mm_audio_input PUBLIC
 target_link_libraries(mm_audio_input PUBLIC
     librecomp
     ultramodern
-    ${SDL2_LIBRARIES}
+    SDL2::SDL2
 )
 
 if(BUILD_TESTING)
