@@ -1,7 +1,7 @@
 # Trouble Makers
 
 Trouble Makers is a native PC port of the Nintendo 64 game *Mischief Makers*
-(Treasure, 1997), produced by static recompilation — playable, 60 fps,
+(Treasure, 1997), produced by static recompilation — playable, up to 240fps (with interpolation),
 high-resolution, with correct sound and **widescreen support!**
 
 ![Marina mid-battle in the opening forest, the scene rendered edge-to-edge in 16:9 widescreen](screenshots/hero-widescreen.png)
@@ -10,8 +10,7 @@ high-resolution, with correct sound and **widescreen support!**
 
 ## What this is
 
-*Mischief Makers* is the original N64 game. **Trouble Makers** is a
-recompilation of it: the game's own MIPS machine code is translated to C once,
+**Trouble Makers** is a recompilation of *Mischief Makers*: the game's own MIPS machine code is translated to C once,
 ahead of time, by [N64Recomp](https://github.com/N64Recomp/N64Recomp),
 compiled natively for your PC, and linked against
 [N64ModernRuntime](https://github.com/N64Recomp/N64ModernRuntime) (a libultra
@@ -20,11 +19,6 @@ display lists on Vulkan. It is not an emulator — there is no N64 CPU being
 simulated at runtime; the game *is* the native binary. Same approach as
 [Zelda64Recomp](https://github.com/Zelda64Recomp/Zelda64Recomp), applied to a
 very different, very Treasure-shaped game.
-
-The reverse-engineering work behind the port is captured here as a symbol and
-section map. N64Recomp combines that map with your own ROM to translate the
-game, so building this project does **not** require a separate decompilation
-checkout.
 
 **No game assets, ROM contents, or recompiler output are in this repository.**
 Everything runs locally from your own legally dumped ROM.
