@@ -100,8 +100,8 @@ jobs:
       - name: Build troublemakers
         run: |
           cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-          cmake --build build --target troublemakers mm_controls_tests mm_session_log_tests -j "$(nproc)"
-          ctest --test-dir build --output-on-failure -R 'mm_(controls|session_log)'
+          cmake --build build --target troublemakers mm_controls_tests mm_session_log_tests mm_telemetry_tests -j "$(nproc)"
+          ctest --test-dir build --output-on-failure -R 'mm_(controls|session_log|telemetry)'
       - name: Build AppImage
         run: ./.github/linux/appimage.sh
       - name: Upload AppImage
@@ -162,8 +162,8 @@ jobs:
         run: |
           cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release `
             -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl
-          cmake --build build --target troublemakers mm_controls_tests mm_session_log_tests -j
-          ctest --test-dir build --output-on-failure -R "mm_(controls|session_log)"
+          cmake --build build --target troublemakers mm_controls_tests mm_session_log_tests mm_telemetry_tests -j
+          ctest --test-dir build --output-on-failure -R "mm_(controls|session_log|telemetry)"
       - name: Package
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
@@ -187,6 +187,8 @@ jobs:
     permissions:
       contents: write        # GITHUB_TOKEN needs this to create the release
     steps:
+      - name: Checkout release notes
+        uses: actions/checkout@v4
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
@@ -195,10 +197,16 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          notes_file=".github/release-notes/$GITHUB_REF_NAME.md"
+          if [[ -f "$notes_file" ]]; then
+            notes_args=(--notes-file "$notes_file")
+          else
+            notes_args=(--generate-notes)
+          fi
           gh release create "$GITHUB_REF_NAME" \
             --repo "$GITHUB_REPOSITORY" \
             --title "Trouble Makers $GITHUB_REF_NAME" \
-            --generate-notes \
+            "${notes_args[@]}" \
             --prerelease \
             artifacts/TroubleMakers-AppImage-X64/TroubleMakers-x86_64.AppImage \
             artifacts/TroubleMakers-Windows-X64/TroubleMakers-Windows-X64.zip
