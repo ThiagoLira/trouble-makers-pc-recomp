@@ -79,6 +79,17 @@ else()
     )
 endif()
 
+# GCC 11 miscompiles part of the translated game. The failure first becomes
+# obvious when an NPC dialogue starts: the text box disappears and glyph tiles
+# become framebuffer garbage. Lower optimization levels either retain the
+# corruption or make the game too slow, while GCC 12 and newer render the same
+# dialogue correctly at -O3. Refuse to create another silently broken build.
+if(CMAKE_C_COMPILER_ID STREQUAL "GNU" AND
+   CMAKE_C_COMPILER_VERSION VERSION_LESS 12)
+    message(FATAL_ERROR
+        "GCC 12 or newer is required; GCC 11 corrupts translated game graphics")
+endif()
+
 target_include_directories(mm_recompiled PRIVATE
     ${CMAKE_SOURCE_DIR}/include            # game-specific shim (recomp_config.h, etc.)
     ${CMAKE_SOURCE_DIR}/RecompiledFuncs    # funcs.h, sibling of the .c TUs

@@ -43,6 +43,7 @@
 #include "recomp.h"
 
 #include "app_dirs.h"
+#include "debug_menu.h"
 #include "session_log.h"
 #include "mm_rsp.hpp"
 #include "mm_audio_input.hpp"
@@ -114,10 +115,37 @@ static bool g_fullscreen = false;
 static bool g_widescreen = false;
 static int g_ssaa = 1;
 static int g_msaa = 0;
+static bool g_debug_menu = false;
+// RT64 frame-interpolation target. 0 = native 60Hz (Original, no
+// interpolation); -1 = match the display refresh; a positive value is an
+// interpolated FPS target. The game's logic always runs at its native 60Hz —
+// RT64 synthesizes the extra display frames by matching and interpolating
+// draw calls between consecutive game frames.
+static int g_fps = 0;
 // Remembered ROM path (UTF-8), so the launcher can offer "Start Game"
 // immediately on the next run. Empty until a ROM validates.
 static std::string g_rom_path;
 static SDL_Window* g_sdl_window = nullptr;
+
+// Keep renderer allocations inside combinations RT64 can recover from on
+// ordinary GPUs. SSAA is a per-dimension multiplier (2x means 4x as many
+// pixels), and MSAA multiplies those targets again. Stacking both can exceed
+// both the 16384 texture-dimension limit and available VRAM before the first
+// frame, especially when interpolation keeps additional targets alive.
+static void sanitize_display_config() {
+    if (g_ssaa > 2) {
+        std::fprintf(stderr, "[gfx] SSAA above 2x is unsafe; clamping to 2x.\n");
+        g_ssaa = 2;
+    }
+    if (g_msaa > 4) {
+        std::fprintf(stderr, "[gfx] MSAA above 4x is unsafe; clamping to 4x.\n");
+        g_msaa = 4;
+    }
+    if (g_ssaa > 1 && g_msaa > 0) {
+        std::fprintf(stderr, "[gfx] SSAA and MSAA cannot be stacked safely; disabling MSAA.\n");
+        g_msaa = 0;
+    }
+}
 
 // Build the renderer config from the globals. Safe to call at runtime too:
 // trigger_config_action() makes the gfx thread hand old/new configs to
@@ -134,9 +162,19 @@ static void apply_display_config() {
                                  : ultramodern::renderer::AspectRatio::Original;
     cfg.msaa_option = g_msaa == 2 ? ultramodern::renderer::Antialiasing::MSAA2X
                     : g_msaa == 4 ? ultramodern::renderer::Antialiasing::MSAA4X
-                    : g_msaa == 8 ? ultramodern::renderer::Antialiasing::MSAA8X
                                   : ultramodern::renderer::Antialiasing::None;
-    cfg.rr_option = ultramodern::renderer::RefreshRate::Original; // natively 60Hz
+    // Frame interpolation: Original renders only the game's native 60 frames.
+    // Display interpolates up to the monitor's refresh; a positive g_fps
+    // interpolates to that target (RT64 clamps it to the swap-chain rate).
+    // See rr_manual_value below; game logic is unaffected (still 60Hz).
+    if (g_fps < 0) {
+        cfg.rr_option = ultramodern::renderer::RefreshRate::Display;
+    } else if (g_fps > 60) {
+        cfg.rr_option = ultramodern::renderer::RefreshRate::Manual;
+        cfg.rr_manual_value = g_fps;
+    } else {
+        cfg.rr_option = ultramodern::renderer::RefreshRate::Original; // natively 60Hz
+    }
     cfg.hpfb_option = ultramodern::renderer::HighPrecisionFramebuffer::Auto;
     cfg.ds_option = g_ssaa;
     ultramodern::renderer::set_graphics_config(cfg);
@@ -171,6 +209,8 @@ static void load_display_config() {
         else if (k == "widescreen") g_widescreen = value != 0;
         else if (k == "ssaa" && value >= 1 && value <= 8) g_ssaa = value;
         else if (k == "msaa" && (value == 0 || value == 2 || value == 4 || value == 8)) g_msaa = value;
+        else if (k == "debug_menu") g_debug_menu = value != 0;
+        else if (k == "fps" && value >= -1 && value <= 1000) g_fps = value;
     }
 }
 
@@ -182,7 +222,9 @@ static void save_display_config() {
     f << "window_w=" << g_window_w << "\nwindow_h=" << g_window_h
       << "\nfullscreen=" << (g_fullscreen ? 1 : 0)
       << "\nwidescreen=" << (g_widescreen ? 1 : 0)
-      << "\nssaa=" << g_ssaa << "\nmsaa=" << g_msaa << "\n";
+      << "\nssaa=" << g_ssaa << "\nmsaa=" << g_msaa
+      << "\nfps=" << g_fps
+      << "\ndebug_menu=" << (g_debug_menu ? 1 : 0) << "\n";
     if (!g_rom_path.empty()) {
         f << "rom=" << g_rom_path << "\n";
     }
@@ -232,11 +274,14 @@ ultramodern::renderer::WindowHandle create_window(ultramodern::gfx_callbacks_t::
     if (win == nullptr) {
         std::fprintf(stderr, "Failed to create window: %s\n", SDL_GetError());
     }
-    // RT64 also honors WindowMode::Fullscreen from the graphics config at
-    // context creation; setting the SDL flag here just avoids a visible
-    // windowed->fullscreen flip at startup.
+    // RT64 owns HWND fullscreen transitions on Windows. Calling SDL first and
+    // RT64 second mutates the same window twice and can leave its swap chain
+    // and saved placement inconsistent. RT64's SDL window wrapper does not
+    // implement fullscreen on Linux, so SDL remains the owner there.
     if (g_fullscreen) {
+#if !defined(_WIN32)
         SDL_SetWindowFullscreen(win, SDL_WINDOW_FULLSCREEN_DESKTOP);
+#endif
     }
     g_sdl_window = win;
     // WindowHandle is platform-specific (renderer_context.hpp): HWND+thread
@@ -258,15 +303,30 @@ void update_gfx(ultramodern::gfx_callbacks_t::gfx_data_t) {
     //   Tab (hold) fast-forward 3x (game speed via the VI/timer multiplier)
     SDL_Event ev;
     while (SDL_PollEvent(&ev)) {
-        if (ev.type == SDL_QUIT) {
+        if (mm::debug_menu::handle_event(ev)) {
+            // Opening or navigating the overlay cancels a held fast-forward
+            // so the menu remains readable at the normal cadence.
+            ultramodern::set_speed_multiplier(1);
+        } else if (ev.type == SDL_QUIT) {
             ultramodern::quit();
         } else if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0) {
             if (ev.key.keysym.scancode == SDL_SCANCODE_F11 && g_sdl_window != nullptr) {
                 g_fullscreen = !g_fullscreen;
+#if !defined(_WIN32)
                 SDL_SetWindowFullscreen(g_sdl_window,
                     g_fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
-                apply_display_config();
-                ultramodern::trigger_config_action();
+#endif
+                // Widescreen presentation is transient: stage select and
+                // cinematics force Original even when the saved preference is
+                // Expand. Rebuilding the complete display config here would
+                // restore that saved preference and leave those screens in an
+                // invalid expanded state until gameplay began. Change only the
+                // window mode and preserve the renderer's current aspect gate.
+                auto cfg = ultramodern::renderer::get_graphics_config();
+                cfg.wm_option = g_fullscreen
+                    ? ultramodern::renderer::WindowMode::Fullscreen
+                    : ultramodern::renderer::WindowMode::Windowed;
+                ultramodern::renderer::set_graphics_config(cfg);
                 save_display_config();
             } else if (ev.key.keysym.scancode == SDL_SCANCODE_TAB) {
                 ultramodern::set_speed_multiplier(3);
@@ -293,7 +353,7 @@ create_render_context(uint8_t* /*rdram*/, ultramodern::renderer::WindowHandle /*
 // UI, which this project doesn't have yet).
 static bool g_rom_selected = false;
 static const std::u8string kGameId = u8"troublemakers.n64.us.1";
-static constexpr const char* kProjectVersion = "0.2.6";
+static constexpr const char* kProjectVersion = "0.3.2";
 
 namespace mm::stub::events {
 // Auto-start trigger. The reference starts the game from its launcher UI,
@@ -361,14 +421,20 @@ static void print_usage(const char* argv0) {
         "  --fullscreen        borderless fullscreen (also toggles via RT64)\n"
         "  --window WxH        window size (default 1280x960); the scene renders\n"
         "                      at window-integer-scale, so bigger = sharper\n"
-        "  --ssaa N            supersample N x on top of the window scale (1-8)\n"
-        "  --msaa N            multisample antialiasing (2, 4, or 8)\n"
+        "  --ssaa N            supersample N x on top of the window scale (1-2)\n"
+        "  --msaa N            multisample antialiasing (2 or 4)\n"
+        "  --fps native|display|N  RT64 frame interpolation: native 60Hz,\n"
+        "                      match the display, or an interpolated target\n"
+        "                      like 240 (game logic still runs at 60Hz)\n"
         "  --widescreen        expand the rendered field to the window aspect\n"
         "                      (opt-in: can reveal off-stage areas in a 2D game)\n"
         "  --no-widescreen     force the original 4:3 presentation\n"
+        "  --debug-menu        enable the in-game debug overlay\n"
+        "  --no-debug-menu     disable the in-game debug overlay\n"
         "settings persist in the app config folder (display.cfg, controls.json)\n"
         "diagnostic logs are written under its logs/ directory\n"
-        "in game: F11 = fullscreen toggle, hold Tab = 3x fast-forward\n",
+        "in game: F11 = fullscreen, hold Tab = 3x fast-forward\n"
+        "debug: F1 or controller L+R+Start = overlay\n",
         argv0);
 }
 
@@ -419,6 +485,10 @@ int main(int argc, char** argv) {
             g_widescreen = true;
         } else if (arg == "--no-widescreen") {
             g_widescreen = false;
+        } else if (arg == "--debug-menu") {
+            g_debug_menu = true;
+        } else if (arg == "--no-debug-menu") {
+            g_debug_menu = false;
         } else if (arg == "--window" && i + 1 < argc) {
             if (std::sscanf(argv[++i], "%dx%d", &g_window_w, &g_window_h) != 2 ||
                 g_window_w < 320 || g_window_h < 240) {
@@ -427,10 +497,23 @@ int main(int argc, char** argv) {
             }
         } else if (arg == "--ssaa" && i + 1 < argc) {
             g_ssaa = std::atoi(argv[++i]);
-            if (g_ssaa < 1 || g_ssaa > 8) { print_usage(argv[0]); exit_error("--ssaa expects 1-8"); }
+            if (g_ssaa < 1 || g_ssaa > 2) { print_usage(argv[0]); exit_error("--ssaa expects 1-2"); }
+            if (g_ssaa > 1) g_msaa = 0;
         } else if (arg == "--msaa" && i + 1 < argc) {
             g_msaa = std::atoi(argv[++i]);
-            if (g_msaa != 2 && g_msaa != 4 && g_msaa != 8) { print_usage(argv[0]); exit_error("--msaa expects 2, 4 or 8"); }
+            if (g_msaa != 2 && g_msaa != 4) { print_usage(argv[0]); exit_error("--msaa expects 2 or 4"); }
+            g_ssaa = 1;
+        } else if (arg == "--fps" && i + 1 < argc) {
+            std::string_view v = argv[++i];
+            if (v == "native" || v == "60") g_fps = 0;
+            else if (v == "display" || v == "match") g_fps = -1;
+            else {
+                g_fps = std::atoi(argv[i]);
+                if (g_fps < 61 || g_fps > 1000) {
+                    print_usage(argv[0]);
+                    exit_error("--fps expects native, display, or a value 61-1000");
+                }
+            }
         } else if (arg == "--help" || arg == "-h") {
             print_usage(argv[0]);
             return EXIT_SUCCESS;
@@ -441,11 +524,14 @@ int main(int argc, char** argv) {
             exit_error("unknown option");
         }
     }
+    sanitize_display_config();
 
     std::fprintf(stderr,
-        "[config] window=%dx%d fullscreen=%s widescreen=%s msaa=%d ssaa=%d\n",
+        "[config] window=%dx%d fullscreen=%s widescreen=%s msaa=%d ssaa=%d "
+        "fps=%d debug-menu=%s\n",
         g_window_w, g_window_h, g_fullscreen ? "yes" : "no",
-        g_widescreen ? "yes" : "no", g_msaa, g_ssaa);
+        g_widescreen ? "yes" : "no", g_msaa, g_ssaa, g_fps,
+        g_debug_menu ? "yes" : "no");
 
     // Store config (mods, saves) under a per-project folder in the user's
     // config dir. Sibling workers may relocate this.
@@ -490,7 +576,8 @@ int main(int argc, char** argv) {
         // loads the ROM through the same recomp::select_rom path, so once it
         // returns StartGame the auto-start in vi_callback takes over.
         mm::launcher::DisplaySettings ds{
-            g_window_w, g_window_h, g_fullscreen, g_widescreen, g_msaa, g_ssaa};
+            g_window_w, g_window_h, g_fullscreen, g_widescreen,
+            g_msaa, g_ssaa, g_fps, g_debug_menu};
         fs::path rom_path = fs::path(
             std::u8string(g_rom_path.begin(), g_rom_path.end()));
         auto outcome = mm::launcher::run(kGameId, project_version.to_string(), ds, rom_path);
@@ -500,6 +587,9 @@ int main(int argc, char** argv) {
         g_widescreen = ds.widescreen;
         g_msaa = ds.msaa;
         g_ssaa = ds.ssaa;
+        g_fps = ds.fps;
+        g_debug_menu = ds.debug_menu;
+        sanitize_display_config();
         g_rom_path = reinterpret_cast<const char*>(rom_path.u8string().c_str());
         save_display_config(); // keep choices even if the user exits here
         if (outcome != mm::launcher::Outcome::StartGame) {
@@ -514,6 +604,12 @@ int main(int argc, char** argv) {
     // persist the resolved options so they stick for the next run.
     apply_display_config();
     save_display_config();
+
+    mm::debug_menu::configure(g_debug_menu);
+#ifdef MM_HAS_GRAPHICS
+    mm::graphics::set_overlay_draw_callback(
+        g_debug_menu ? mm::debug_menu::draw_overlay : nullptr);
+#endif
 
     // Tell translated-code hooks to populate the extra tile columns and omit
     // the original 4:3 side-border strips. Explicit environment values still

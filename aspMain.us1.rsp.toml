@@ -8,8 +8,7 @@
 # aspMain has no overlay slots (unlike naudio); it is a single flat IMEM image,
 # so this config needs only the text descriptor + the standard IMEM base address.
 #
-# rom_file_path points at the canonical US 1.1 ROM in the sibling decomp repo
-# (the same dump the whole pipeline uses; *.z64 is gitignored).
+# The same builder-supplied US 1.1 ROM feeds the main recompiler and RSPRecomp.
 
 text_offset = 0xBCAB0
 text_size = 0xE20
@@ -23,7 +22,7 @@ text_size = 0xE20
 # entry `jal 0x1150` (the ucode's own first-chunk prefetch) is misrouted, and the
 # command stream never advances — see PHASE4_NOTES_a.md.
 text_address = 0x04001080
-rom_file_path = "../trouble-makers-ai-recomp/baserom.us1.z64"
+rom_file_path = "input/troublemakers.us1.z64"
 output_file_path = "src/rsp/generated/aspMain.cpp"
 output_function_name = "aspMain"
 

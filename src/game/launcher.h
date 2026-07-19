@@ -23,6 +23,11 @@ struct DisplaySettings {
     bool widescreen;
     int msaa;
     int ssaa;
+    // Frame-rate target for RT64 frame interpolation. 0 = native 60Hz (no
+    // interpolation); -1 = match the display's refresh; a positive value is
+    // an interpolated FPS target (game logic still runs at 60Hz).
+    int fps;
+    bool debug_menu;
 };
 
 enum class Outcome {

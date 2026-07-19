@@ -21,12 +21,10 @@ simulated at runtime; the game *is* the native binary. Same approach as
 [Zelda64Recomp](https://github.com/Zelda64Recomp/Zelda64Recomp), applied to a
 very different, very Treasure-shaped game.
 
-That translation is made legible by a companion **decompilation**:
-[trouble-makers-ai-recomp](../trouble-makers-ai-recomp) reverse-engineers the
-game into readable, byte-perfect C, and its symbol-rich ELF is what feeds the
-recompiler here so every function arrives named. Decompilation (understanding
-the code) and recompilation (running it natively) are two halves of the same
-project.
+The reverse-engineering work behind the port is captured here as a symbol and
+section map. N64Recomp combines that map with your own ROM to translate the
+game, so building this project does **not** require a separate decompilation
+checkout.
 
 **No game assets, ROM contents, or recompiler output are in this repository.**
 Everything runs locally from your own legally dumped ROM.
@@ -57,8 +55,10 @@ Prefer to build it yourself? See [Building and running](#building-and-running).
 - ✅ EEPROM saves persist to disk
 - ✅ Remappable keyboard/controller inputs with two bindings per N64 control
 - ✅ Persistent current/previous session logs and copyable support reports
-- 🧪 Experimental widescreen (opt-in), F11 fullscreen, Tab fast-forward,
-  persistent display config
+- 🧪 Experimental widescreen (opt-in), high-FPS frame interpolation
+  (`--fps 240` / match display, opt-in via RT64), F11 fullscreen, Tab
+  fast-forward, persistent display config
+- 🧰 Launcher-gated, save-safe debug menu with campaign level warps
 - 🗺️ Next: full-playthrough verification, mod hooks, upstreaming runtime patches
 
 ## Experimental widescreen
@@ -95,8 +95,7 @@ actors, geometry, and tile layers are moving throughout each shot.
 ### Prerequisites
 
 - A legally dumped **Mischief Makers (US 1.1)** ROM (`.z64`, big-endian)
-- The sibling decomp built once (its `./trouble build` produces `troublemakers.elf`)
-- Linux: gcc/g++ (C++20), CMake ≥ 3.24, SDL2, a Vulkan-capable GPU + loader
+- Linux: GCC/G++ 12 or newer (C++20), CMake ≥ 3.24, SDL2, a Vulkan-capable GPU + loader
   (no Vulkan SDK needed — RT64 bundles headers and its shader compiler)
 - Windows: Visual Studio 2022 with the "Desktop development with C++", "C++
   Clang Compiler" and "C++ CMake tools" components — build with **clang-cl**
@@ -112,21 +111,27 @@ actors, geometry, and tile layers are moving throughout each shot.
 git clone --recurse-submodules https://github.com/ThiagoLira/trouble-makers-pc-recomp
 cd trouble-makers-pc-recomp
 
+# Supply your own big-endian US 1.1 ROM. It is ignored by git and never copied
+# into the resulting executable.
+mkdir -p input
+cp /path/to/your/mischief-makers-us-1.1.z64 input/troublemakers.us1.z64
+echo "e00ab74c3dee79efaafe8e10f2a6b67784d7327ab588d8ef90ad8945427da627  input/troublemakers.us1.z64" | sha256sum -c -
+
 # Runtime fixes not yet upstreamed (message delivery, overlay registration,
 # EEPROM semantics):
 git -C lib/N64ModernRuntime am "$(pwd)"/patches/N64ModernRuntime/*.patch
 
 # RT64 (renderer), pinned to the fork/commit Zelda64Recomp uses, plus the
-# widescreen wing-clear patch:
+# local rendering fixes:
 git clone https://github.com/rt64/rt64 lib/rt64
 git -C lib/rt64 checkout 23cab603
 git -C lib/rt64 submodule update --init --recursive
-git -C lib/rt64 apply "$(pwd)"/patches/rt64/0001-widescreen-wing-clear.patch
+git -C lib/rt64 apply "$(pwd)"/patches/rt64/*.patch
 
-# Translate the game + audio microcode:
-cp ../trouble-makers-ai-recomp/build/troublemakers.elf input/
+# Translate the game and audio microcode directly from your ROM, using the
+# symbol/section map checked into this repository:
 cmake -B tools/N64Recomp/build tools/N64Recomp
-cmake --build tools/N64Recomp/build --target N64Recomp RSPRecomp -j
+cmake --build tools/N64Recomp/build --target N64RecompCLI RSPRecomp -j
 tools/N64Recomp/build/N64Recomp troublemakers.us1.toml
 tools/N64Recomp/build/RSPRecomp aspMain.us1.rsp.toml
 ```
@@ -143,11 +148,15 @@ cmake --build build --target troublemakers -j8
 ./build/src/game/troublemakers path/to/your.z64                # windowed 1280x960
 ./build/src/game/troublemakers rom.z64 --fullscreen
 ./build/src/game/troublemakers rom.z64 --window 1920x1440 --msaa 4
+./build/src/game/troublemakers rom.z64 --fps 240      # RT64 frame interpolation:
+#   smoother-than-60 motion synthesized between the game's native 60Hz frames
+#   (game logic still runs at 60Hz). Use --fps display to match your monitor.
 ./build/src/game/troublemakers rom.z64 --widescreen    # real 16:9 scene rendering:
 #   entities, foreground, scrolling backdrops, environment and midground
 #   tile maps are drawn beyond the original 4:3 frame. Plain launches retain
 #   the original presentation.
 ./build/src/game/troublemakers rom.z64 --no-widescreen # force original 4:3
+./build/src/game/troublemakers rom.z64 --debug-menu     # enable debug overlay
 ```
 
 Widescreen uses the game's own wrapping maps and scene formulas—there is no
@@ -178,6 +187,9 @@ Run the complete playable-level screenshot/crash suite with:
 tools/test_widescreen_playable.sh ./build/src/game/troublemakers path/to/rom.z64 /tmp/mm-widescreen-suite
 ```
 
+On KDE Wayland, set `MM_VIDEO_DRIVER=wayland`; the suite uses Spectacle for
+native active-window captures instead of X11/XWayland window IDs.
+
 The suite targets exact progression-table stage indices, advances dialogue,
 waits for authoritative player-control state, moves Marina in short alternating
 bursts, audits expanded tile layers for wing coverage, and writes a TSV manifest
@@ -188,12 +200,23 @@ Display options persist to `display.cfg` and input mappings to `controls.json`
 in the app config folder (CLI display options override the file). In game:
 **F11** toggles fullscreen, **hold Tab** fast-forwards 3x.
 
+The launcher's **Enable debug menu** option enables an in-game overlay. Press
+**F1** or controller **L+R+Start** to open it; use Up/Down and Enter (or
+the D-pad and A) to select one of the 52 campaign stages. Left/Right switches
+pages and Esc/B closes it. Gameplay input is held while the overlay is open.
+The first debug warp disables all save-buffer mutations
+until the process exits, while reads continue to use the save loaded at
+startup, so debug progression cannot overwrite the player's save file.
+
 The launcher also exposes MSAA and SSAA. MSAA 4x is the recommended first
 choice: it smooths geometry edges at much lower cost than supersampling. SSAA
 2x renders above the automatic internal resolution and downsamples the result;
 it also smooths shader and texture edges, but uses roughly four times the
-rendering pixels before widescreen expansion. Higher SSAA values are intended
-for unusually fast GPUs.
+rendering pixels before widescreen expansion. To prevent oversized render
+targets and GPU-memory crashes, MSAA and SSAA are mutually exclusive, SSAA is
+capped at 2x, and MSAA is capped at 4x. Frame interpolation can be combined
+with either antialiasing method. See [Known Issues](KNOWN_ISSUES.md) for the
+current sprite-interpolation and terrain-strip limitations.
 
 The ROM is hash-validated (US 1.1 only), stored under
 `~/.config/troublemakers-recomp/` along with saves, and the game auto-starts.
@@ -219,10 +242,18 @@ Set `MM_RT64_UBERSHADERS_ONLY=1` to force that path when diagnosing a similar
 problem, or `MM_RT64_UBERSHADERS_ONLY=0` to disable the workaround.
 
 CI (`.github/workflows/build.yml`) builds both the Linux AppImage and the
-Windows package on every push and uploads them as artifacts — the binaries on
-the Releases page come from it. It needs a `TM_ASSETS_REPO` secret pointing at
-a private repo with `troublemakers.elf` and the pregenerated `aspMain.cpp`, so
-the game's code never lives in this public repository.
+Windows package on every push and uploads them as artifacts. Release CI needs
+a `TM_ASSETS_REPO` secret pointing at a private repo containing
+`troublemakers.us1.z64`; public builders only need their own ROM and do not
+need access to that private repo.
+
+**Cutting a release** is one command — push a version tag and CI builds both
+platforms and publishes a prerelease with the artifacts attached and
+auto-generated notes:
+
+```sh
+git tag v0.3.0 && git push origin v0.3.0
+```
 
 ### Controls
 
@@ -245,6 +276,8 @@ defaults. Changes are saved immediately to the versioned, human-readable
 The first SDL game controller is picked up automatically and hotplugged
 (rumble included). C-buttons also have convenient secondary face/shoulder
 bindings by default.
+When enabled in the launcher, the debug overlay uses **F1** or controller
+**L+R+Start**.
 
 ### Logs and bug reports
 
@@ -282,11 +315,19 @@ onboard an AI agent (or you) in one sitting. Headless dev harness:
 
 ## Licensing
 
-- Code in this repository: **MIT** (see `LICENSE`)
-- `N64ModernRuntime` (statically linked): **GPLv3** — distributed binaries
-  are combined works and carry GPLv3 obligations
-- `N64Recomp`, `RT64`: MIT
-- No Nintendo/Treasure code or assets are included or distributed
+Copyright (C) 2026 Thiago Lira. This project is **GPLv3** (see `LICENSE`).
+
+It statically links [`N64ModernRuntime`](https://github.com/N64Recomp/N64ModernRuntime),
+which is GPLv3, so the combined work — including the binaries on the Releases
+page — is a derivative work under GPLv3. This matches
+[Zelda64Recomp](https://github.com/Zelda64Recomp/Zelda64Recomp), which is
+GPLv3 for the same reason; the project cannot be distributed under a permissive
+license like MIT.
+
+- Some linked components carry their own permissive terms — `N64Recomp` and
+  `RT64` are MIT — but the copyleft obligation from `N64ModernRuntime` governs
+  the distributed whole.
+- No Nintendo/Treasure code or assets are included or distributed.
 
 ## Credits
 

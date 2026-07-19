@@ -179,8 +179,31 @@ for entry in "scene-00:$scene0_dir" "scene-68:$scene68_dir"; do
         exit 1
     fi
     for shot in "${shots[@]}"; do
-        inner=$(magick "$shot" -format '%[pixel:p{1575,775}]' info:)
-        wing=$(magick "$shot" -format '%[pixel:p{1590,775}]' info:)
+        sample_inner_x=1575
+        sample_wing_x=1590
+        sample_y=775
+        if [[ ${MM_VIDEO_DRIVER:-x11} == wayland ]]; then
+            # Spectacle preserves KWin's centered drop-shadow canvas around
+            # an active window, unlike ImageMagick's direct X11 window grab.
+            # Translate the established viewport samples by that symmetric
+            # padding instead of accidentally sampling the shadow/decoration.
+            read -r shot_width shot_height < <(
+                magick identify -format '%w %h\n' "$shot"
+            )
+            if (( shot_width > 1602 )); then
+                pad_x=$(((shot_width - 1602 + 1) / 2))
+                ((sample_inner_x += pad_x))
+                ((sample_wing_x += pad_x))
+            fi
+            if (( shot_height > 1022 )); then
+                pad_y=$(((shot_height - 1022 + 1) / 2))
+                ((sample_y += pad_y))
+            fi
+        fi
+        inner=$(magick "$shot" -format \
+            "%[pixel:p{$sample_inner_x,$sample_y}]" info:)
+        wing=$(magick "$shot" -format \
+            "%[pixel:p{$sample_wing_x,$sample_y}]" info:)
         if [[ $inner != "$wing" ]]; then
             echo "$name landscape rollover flickered: inner=$inner wing=$wing; see $shot" >&2
             exit 1

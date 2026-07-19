@@ -1,63 +1,11 @@
-# N64Recomp configuration for Mischief Makers (US 1.1)
-# input elf: the byte-perfect decomp build from trouble-makers-ai-recomp
+# N64Recomp configuration for Mischief Makers (US 1.1).
+# The checked-in symbol map describes the project's functions and overlays;
+# the builder's own ROM supplies all game bytes.
 [input]
 entrypoint = 0x80000400
-elf_path = "input/troublemakers.elf"
+symbols_file_path = "symbols/troublemakers.us1.toml"
+rom_file_path = "input/troublemakers.us1.z64"
 output_func_path = "RecompiledFuncs"
-
-# Static (file-local) functions whose symbols the decomp ELF drops — the
-# recompiler sees a symbol-table hole and skips their code, but the game
-# installs several of them as function POINTERS (libaudio sequencer
-# handlers, rmon internals), so they must be translated. Names/addrs from
-# the decomp's symbol_addrs; sizes from the decomp build's .o files
-# (fallback: gap to the next known function).
-manual_funcs = [
-    { name = "__CSPVoiceHandler", section = ".main", vram = 0x8009C6AC, size = 0x82C },  # gap
-    { name = "__CSPHandleNextSeqEvent", section = ".main", vram = 0x8009CF78, size = 0x11C },  # gap
-    { name = "__CSPHandleMIDIMsg", section = ".main", vram = 0x8009D094, size = 0xDAC },  # gap
-    { name = "__CSPHandleMetaMsg", section = ".main", vram = 0x8009DE40, size = 0x2C8 },  # gap
-    { name = "__CSPRepostEvent", section = ".main", vram = 0x8009E108, size = 0x128 },  # gap
-    { name = "__setUsptFromTempo", section = ".main", vram = 0x8009E230, size = 0x70 },  # gap
-    { name = "_timeToSamplesNoRound", section = ".main", vram = 0x8009ECD8, size = 0x68 },  # gap
-    { name = "__nextSampleTime", section = ".main", vram = 0x8009ED84, size = 0xEC },  # gap
-    { name = "__alCSeqGetTrackEvent", section = ".main", vram = 0x8009F288, size = 0x44C },  # gap
-    { name = "__getTrackByte", section = ".main", vram = 0x8009FB14, size = 0x1F4 },  # gap
-    { name = "__readVarLen", section = ".main", vram = 0x8009FD08, size = 0x98 },  # gap
-    { name = "drawbitmap", section = ".main", vram = 0x800A00BC, size = 0x28A0 },  # gap
-    { name = "proutSprintf", section = ".main", vram = 0x800A56BC, size = 0x54 },  # gap
-    { name = "proutSyncPrintf", section = ".main", vram = 0x800A57F0, size = 0x94 },  # gap
-    { name = "rmonPutchar", section = ".main", vram = 0x800A5884, size = 0x80 },  # gap
-    { name = "kmc_proutSyncPrintf", section = ".main", vram = 0x800A5904, size = 0x230 },  # gap
-    { name = "SetTempBreakpoint", section = ".main", vram = 0x800A9B00, size = 0xC8 },  # gap
-    { name = "ClearTempBreakpoint", section = ".main", vram = 0x800A9BC8, size = 0x124 },  # gap
-    { name = "IsJump", section = ".main", vram = 0x800AA304, size = 0xB0 },  # gap
-    { name = "rmonSendBreakMessage", section = ".main", vram = 0x800AA4D8, size = 0xC8 },  # gap
-    { name = "rmonFindFaultedThreads", section = ".main", vram = 0x800AA684, size = 0xFC },  # gap
-    { name = "__seqpVoiceHandler", section = ".main", vram = 0x800AB4B0, size = 0x774 },  # gap
-    { name = "__handleNextSeqEvent", section = ".main", vram = 0x800ABD2C, size = 0x108 },  # gap
-    { name = "__handleMIDIMsg", section = ".main", vram = 0x800ABE34, size = 0xC98 },  # gap
-    { name = "__handleMetaMsg", section = ".main", vram = 0x800ACACC, size = 0xA0 },  # gap
-    { name = "_Putfld", section = ".main", vram = 0x800B3BA4, size = 0x9AC },  # gap
-    { name = "__osDefaultHandler", section = ".main", vram = 0x800B4550, size = 0x60 },  # gap
-    { name = "string_to_u32", section = ".main", vram = 0x800B45B0, size = 0x70 },  # gap
-    { name = "send_packet", section = ".main", vram = 0x800B4620, size = 0x7C },  # gap
-    { name = "clear_IP6", section = ".main", vram = 0x800B469C, size = 0x78 },  # gap
-    { name = "send", section = ".main", vram = 0x800B4714, size = 0xE8 },  # gap
-    { name = "__osLeoAbnormalResume", section = ".main", vram = 0x800B51FC, size = 0xF8 },  # gap
-    { name = "__osLeoResume", section = ".main", vram = 0x800B52F4, size = 0x11C },  # gap
-    { name = "NotImplemented", section = ".main", vram = 0x800B5840, size = 0x1C },  # gap
-    { name = "LoadStoreSU", section = ".main", vram = 0x800B5990, size = 0x8C },  # gap
-    { name = "LoadStoreVU", section = ".main", vram = 0x800B5A1C, size = 0x9C },  # gap
-    { name = "SetUpForRCPop", section = ".main", vram = 0x800B5AB8, size = 0xB0 },  # gap
-    { name = "CleanupFromRCPop", section = ".main", vram = 0x800B5B68, size = 0xB0 },  # gap
-    { name = "rmonGetRcpRegister", section = ".main", vram = 0x800B6068, size = 0x74 },  # gap
-    { name = "read8", section = ".main", vram = 0x800B7A88, size = 0x30 },  # gap
-    { name = "read16", section = ".main", vram = 0x800B7AB8, size = 0x58 },  # gap
-    { name = "read32", section = ".main", vram = 0x800B7B10, size = 0xA0 },  # gap
-    { name = "readVarLen", section = ".main", vram = 0x800B7BB0, size = 0xA0 },  # gap
-    { name = "_Ldunscale", section = ".main", vram = 0x800B9904, size = 0x104 },  # gap
-    { name = "_Genld", section = ".main", vram = 0x800B9A08, size = 0x788 },  # gap
-]
 
 # Widescreen: widen the per-frame view-cull rectangle at translation time.
 # The game culls actor/sprite DRAWING against a rect it recomputes every
@@ -295,7 +243,13 @@ hook = [
     # menu instead of reusing stale map/overlay assets. Skips the intro/attract
     # wait for widescreen iteration. Optional MM_WARP_AT overrides the trigger
     # state (default 2 = title; 1 = intro to skip more).
-    { func = "func_80001670", text = '{ extern void mm_widescreen_sync_mode(uint8_t*); extern void mm_test_drive_marina(uint8_t*); extern void mm_test_trace_actors(uint8_t*); mm_widescreen_sync_mode(rdram); mm_test_drive_marina(rdram); mm_test_trace_actors(rdram); static int fc = 0; static int warped = 0; fc++; { extern char* getenv(const char*); char* te = getenv("MM_TEST_AUTO_ADVANCE"); if (te && te[0] == 0x31 && (fc % 120) == 0 && MEM_HU(0, (gpr)(int32_t)0x800BE4F0) == 6) { int buttons = MEM_HU(0, (gpr)(int32_t)0x800BE52C) | MEM_HU(0, (gpr)(int32_t)0x800BE530); MEM_H(0, (gpr)(int32_t)0x800BE4FC) = MEM_HU(0, (gpr)(int32_t)0x800BE4FC) | buttons; MEM_H(0, (gpr)(int32_t)0x800BE4F8) = MEM_HU(0, (gpr)(int32_t)0x800BE4F8) | buttons; } } if (!warped) { extern char* getenv(const char*); extern int atoi(const char*); char* e = getenv("MM_WARP"); char* se = getenv("MM_WARP_STAGE"); if (e != 0 || se != 0) { char* a = getenv("MM_WARP_AT"); int at = a ? atoi(a) : 1; char* d = getenv("MM_WARP_DELAY"); int dl = d ? atoi(d) : 90; int gs = MEM_HU(0, (gpr)(int32_t)0x800BE4F0); if (gs == at && fc > dl) { int requested_scene = e ? atoi(e) : -1; int requested_stage = se ? atoi(se) : -1; extern int mm_debug_warp_prepare(uint8_t*, int, int); int warp_scene = mm_debug_warp_prepare(rdram, requested_scene, requested_stage); MEM_H(0, (gpr)(int32_t)0x800BE5D0) = (int16_t)warp_scene; MEM_H(0, (gpr)(int32_t)0x800BE4EC) = 0; MEM_H(0, (gpr)(int32_t)0x800D2908) = 1; MEM_H(0, (gpr)(int32_t)0x800BE4F0) = 5; MEM_H(0, (gpr)(int32_t)0x800BE4F4) = 0; { int i; for (i = 0; i < 0x1000; i++) { MEM_W(i*4, (gpr)(int32_t)0x8027CEE8) = 0; } for (i = 0; i < 0xC00; i++) { MEM_W(i*4, (gpr)(int32_t)0x8027EEE8) = 0; } } warped = 1; } } } }' },
+    { func = "func_80001670", text = '{ extern void mm_widescreen_sync_mode(uint8_t*); extern void mm_test_drive_marina(uint8_t*); extern void mm_test_trace_actors(uint8_t*); extern void mm_debug_menu_tick(uint8_t*); mm_widescreen_sync_mode(rdram); mm_test_drive_marina(rdram); mm_test_trace_actors(rdram); mm_debug_menu_tick(rdram); static int fc = 0; static int warped = 0; fc++; { extern char* getenv(const char*); char* te = getenv("MM_TEST_AUTO_ADVANCE"); if (te && te[0] == 0x31 && (fc % 120) == 0 && MEM_HU(0, (gpr)(int32_t)0x800BE4F0) == 6) { int buttons = MEM_HU(0, (gpr)(int32_t)0x800BE52C) | MEM_HU(0, (gpr)(int32_t)0x800BE530); MEM_H(0, (gpr)(int32_t)0x800BE4FC) = MEM_HU(0, (gpr)(int32_t)0x800BE4FC) | buttons; MEM_H(0, (gpr)(int32_t)0x800BE4F8) = MEM_HU(0, (gpr)(int32_t)0x800BE4F8) | buttons; } } if (!warped) { extern char* getenv(const char*); extern int atoi(const char*); char* e = getenv("MM_WARP"); char* se = getenv("MM_WARP_STAGE"); if (e != 0 || se != 0) { char* a = getenv("MM_WARP_AT"); int at = a ? atoi(a) : 1; char* d = getenv("MM_WARP_DELAY"); int dl = d ? atoi(d) : 90; int gs = MEM_HU(0, (gpr)(int32_t)0x800BE4F0); if (gs == at && fc > dl) { int requested_scene = e ? atoi(e) : -1; int requested_stage = se ? atoi(se) : -1; extern int mm_debug_warp_prepare(uint8_t*, int, int); int warp_scene = mm_debug_warp_prepare(rdram, requested_scene, requested_stage); MEM_H(0, (gpr)(int32_t)0x800BE5D0) = (int16_t)warp_scene; MEM_H(0, (gpr)(int32_t)0x800BE4EC) = 0; MEM_H(0, (gpr)(int32_t)0x800D2908) = 1; MEM_H(0, (gpr)(int32_t)0x800BE4F0) = 5; MEM_H(0, (gpr)(int32_t)0x800BE4F4) = 0; { int i; for (i = 0; i < 0x1000; i++) { MEM_W(i*4, (gpr)(int32_t)0x8027CEE8) = 0; } for (i = 0; i < 0xC00; i++) { MEM_W(i*4, (gpr)(int32_t)0x8027EEE8) = 0; } } warped = 1; } } } }' },
+    # Camera_UpdateViewBounds is widened for rendering, but func_80014C44 also
+    # consumes the same globals as Marina's hard world walls. Replace only the
+    # two loaded collision operands with their vanilla +/-0x90 equivalents;
+    # the widened globals remain intact for every visual-culling consumer.
+    { func = "func_80014C44", before_vram = 0x80014D60, text = '{ extern int32_t mm_ws_player_left_bound(uint8_t*, int32_t); ctx->r8 = (gpr)(int32_t)mm_ws_player_left_bound(rdram, (int32_t)ctx->r8); }' },
+    { func = "func_80014C44", before_vram = 0x80014DE4, text = '{ extern int32_t mm_ws_player_right_bound(uint8_t*, int32_t); ctx->r6 = (gpr)(int32_t)mm_ws_player_right_bound(rdram, (int32_t)ctx->r6); }' },
     # Widescreen can push a top-level frame display list past the original
     # 0x6000-byte payload. Scene 68 reaches 0x62A8 after its later terrain
     # actors stream in; buffer B then overwrites gPlayerControllerIndex at

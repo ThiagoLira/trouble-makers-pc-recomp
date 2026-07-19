@@ -53,6 +53,8 @@ constexpr uint32_t kViewLeft = 0x800BE568u;
 constexpr uint32_t kViewRight = 0x800BE56Cu;
 constexpr uint32_t kViewBottom = 0x800BE570u;
 constexpr uint32_t kViewTop = 0x800BE574u;
+constexpr uint32_t kStageLeft = 0x800D2920u;
+constexpr uint32_t kStageRight = 0x800D2924u;
 constexpr uint32_t kCamShake = 0x800BE594u;
 constexpr uint32_t kMidColMask = 0x800BE64Cu;
 constexpr uint32_t kMidRowMask = 0x800BE650u;
@@ -316,6 +318,61 @@ int raw_gameplay_active(uint8_t* rdram) {
 
 } // namespace
 
+// Camera_UpdateViewBounds is widened at translation time so actors remain
+// drawable in the expanded wings. The original player collision routine also
+// reads that shared rectangle as its horizontal hard wall, though, so feeding
+// it the widened values lets Marina walk beyond a stage's authored floor.
+//
+// Restore the vanilla +/-0x90 wall only when the value has the exact shape
+// produced by our +/-0x180 camera patch. Stage overlays sometimes author these
+// globals directly; leaving non-matching values alone preserves those custom
+// boundaries.
+extern "C" int32_t mm_ws_player_left_bound(
+    uint8_t* rdram, int32_t current_bound) {
+    const int stage_id = MEM_HU(
+        0, static_cast<gpr>(static_cast<int32_t>(kCurrentStageId)));
+    if (stage_id >= 0x68) {
+        return current_bound;
+    }
+
+    const int camera = static_cast<int16_t>(MEM_HU(
+        0, static_cast<gpr>(static_cast<int32_t>(kCamX))));
+    const int stage_left = static_cast<int16_t>(MEM_HU(
+        0, static_cast<gpr>(static_cast<int32_t>(kStageLeft))));
+    const int wide_whole = std::min(camera - 0x180, stage_left);
+    if ((current_bound >> 16) != wide_whole) {
+        return current_bound;
+    }
+
+    const int vanilla_whole = std::min(camera - 0x90, stage_left);
+    return static_cast<int32_t>(
+        (static_cast<uint32_t>(vanilla_whole & 0xFFFF) << 16) |
+        (static_cast<uint32_t>(current_bound) & 0xFFFFu));
+}
+
+extern "C" int32_t mm_ws_player_right_bound(
+    uint8_t* rdram, int32_t current_bound) {
+    const int stage_id = MEM_HU(
+        0, static_cast<gpr>(static_cast<int32_t>(kCurrentStageId)));
+    if (stage_id >= 0x68) {
+        return current_bound;
+    }
+
+    const int camera = static_cast<int16_t>(MEM_HU(
+        0, static_cast<gpr>(static_cast<int32_t>(kCamX))));
+    const int stage_right = static_cast<int16_t>(MEM_HU(
+        0, static_cast<gpr>(static_cast<int32_t>(kStageRight))));
+    const int wide_whole = std::max(camera + 0x180, stage_right);
+    if ((current_bound >> 16) != wide_whole) {
+        return current_bound;
+    }
+
+    const int vanilla_whole = std::max(camera + 0x90, stage_right);
+    return static_cast<int32_t>(
+        (static_cast<uint32_t>(vanilla_whole & 0xFFFF) << 16) |
+        (static_cast<uint32_t>(current_bound) & 0xFFFFu));
+}
+
 // Widescreen is intentionally a gameplay-only feature. Cinematics frequently
 // stage actors and fixed-size sets immediately outside the 4:3 viewport; the
 // original game hides those areas by construction. gCannotPause is asserted
@@ -347,6 +404,7 @@ extern "C" void mm_widescreen_sync_mode(uint8_t* rdram) {
     static int previous_active = -1;
     static int candidate_active = -1;
     static int candidate_frames = 0;
+    bool mode_changed = false;
     const int scene = static_cast<int16_t>(MEM_HU(
         0, static_cast<gpr>(static_cast<int32_t>(kCurrentScene))));
     report_gameplay_ready(rdram, scene);
@@ -379,11 +437,12 @@ extern "C" void mm_widescreen_sync_mode(uint8_t* rdram) {
     if (previous_active < 0) {
         previous_active = raw_active;
         candidate_active = raw_active;
+        candidate_frames = 0;
+        mode_changed = true;
     }
     else if (raw_active == previous_active) {
         candidate_active = raw_active;
         candidate_frames = 0;
-        return;
     }
     else {
         if (raw_active != candidate_active) {
@@ -403,14 +462,17 @@ extern "C" void mm_widescreen_sync_mode(uint8_t* rdram) {
         // an in-stage cinema gets one second of hysteresis before the wings
         // close, which is preferable to destructive gameplay flicker.
         const int required_frames = raw_active ? 30 : 60;
-        if (candidate_frames < required_frames) {
-            return;
+        if (candidate_frames >= required_frames) {
+            previous_active = raw_active;
+            candidate_frames = 0;
+            mode_changed = true;
         }
-        previous_active = raw_active;
-        candidate_frames = 0;
     }
     g_gameplay_wide_active = previous_active;
 
+    // Reassert the presentation on stable frames too. Runtime display changes
+    // such as F11 must never be able to desynchronize RT64's aspect ratio from
+    // the gameplay/cinematic state machine.
     auto config = ultramodern::renderer::get_graphics_config();
     const auto desired = previous_active
         ? ultramodern::renderer::AspectRatio::Expand
@@ -419,8 +481,10 @@ extern "C" void mm_widescreen_sync_mode(uint8_t* rdram) {
         config.ar_option = desired;
         ultramodern::renderer::set_graphics_config(config);
     }
-    std::fprintf(stderr, "[widescreen] mode=%s\n",
-        previous_active ? "gameplay-expand" : "cinematic-4:3");
+    if (mode_changed) {
+        std::fprintf(stderr, "[widescreen] mode=%s\n",
+            previous_active ? "gameplay-expand" : "cinematic-4:3");
+    }
 }
 
 // The debug warp must select a complete stage-table row, not merely change
@@ -457,6 +521,8 @@ extern "C" int mm_debug_warp_prepare(
 // holds it long enough to engage Marina's jet and traverse a meaningful part
 // of the stage. jet-bounce alternates long right/left jets so a render-cull
 // boundary is crossed in both directions during a single frame burst.
+// MM_TEST_MOVE_4X3=1 also enables the driver in original-aspect gameplay so
+// the same harness can cover 4:3-only rendering regressions.
 extern "C" void mm_test_drive_marina(uint8_t* rdram) {
     static int motion_frame = 0;
     static uint16_t previous_input = 0;
@@ -478,8 +544,9 @@ extern "C" void mm_test_drive_marina(uint8_t* rdram) {
     const uint16_t button_left = MEM_HU(0,
         static_cast<gpr>(static_cast<int32_t>(kButtonDLeft)));
     const uint16_t jet_direction = jet_left ? button_left : button_right;
+    const bool test_original_aspect = env_enabled("MM_TEST_MOVE_4X3");
     const bool controls_blocked =
-        !mm_widescreen_gameplay_active(rdram) ||
+        (!test_original_aspect && !mm_widescreen_gameplay_active(rdram)) ||
         MEM_HU(0, static_cast<gpr>(static_cast<int32_t>(kGameState))) != 6 ||
         MEM_HU(0, static_cast<gpr>(static_cast<int32_t>(kCannotPause))) != 0;
     if (controls_blocked) {

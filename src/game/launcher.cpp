@@ -255,19 +255,23 @@ Outcome run(std::u8string game_id, const std::string& version_string,
                  SDL_GetCurrentVideoDriver() != nullptr
                     ? SDL_GetCurrentVideoDriver() : "unknown");
 
-    // 640x480 is unreadably small on high-density displays: pick an integer
-    // UI scale from the desktop height (1080p -> 1x, 1440p -> 2x, 4K -> 3x)
-    // and scale window, style metrics, and font together below.
+    // Scale the launcher on platforms where SDL reports physical desktop
+    // pixels without the window system scaling the window for us. Windows
+    // already applies the user's display scale to an SDL window; deriving a
+    // second scale from the physical desktop height makes a 1440p/150% setup
+    // effectively 3x, which overflows the launcher and breaks hit testing.
     int ui_scale = 1;
+#if !defined(_WIN32)
     SDL_DisplayMode desktop{};
     if (SDL_GetDesktopDisplayMode(0, &desktop) == 0 && desktop.h > 0) {
         ui_scale = std::clamp(desktop.h / 720, 1, 4);
     }
+#endif
 
     SDL_Window* window = SDL_CreateWindow(
         "Trouble Makers",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-        640 * ui_scale, 480 * ui_scale, SDL_WINDOW_ALLOW_HIGHDPI);
+        640 * ui_scale, 560 * ui_scale, SDL_WINDOW_ALLOW_HIGHDPI);
     if (window == nullptr) {
         std::fprintf(stderr, "[launcher] window creation failed: %s\n", SDL_GetError());
         return Outcome::Quit;
@@ -490,21 +494,23 @@ Outcome run(std::u8string game_id, const std::string& version_string,
 
         const char* msaa_preview = settings.msaa == 2 ? "2x"
                                  : settings.msaa == 4 ? "4x"
-                                 : settings.msaa == 8 ? "8x"
                                                       : "Off";
         ImGui::SetNextItemWidth(220.0f);
         if (ImGui::BeginCombo("MSAA", msaa_preview)) {
-            constexpr int values[] = {0, 2, 4, 8};
-            constexpr const char* labels[] = {"Off", "2x", "4x", "8x"};
+            constexpr int values[] = {0, 2, 4};
+            constexpr const char* labels[] = {"Off", "2x", "4x"};
             for (int i = 0; i < static_cast<int>(std::size(values)); ++i) {
                 if (ImGui::Selectable(labels[i], settings.msaa == values[i])) {
                     settings.msaa = values[i];
+                    if (settings.msaa > 0) {
+                        settings.ssaa = 1;
+                    }
                 }
             }
             ImGui::EndCombo();
         }
-        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-            ImGui::SetTooltip("Smooths polygon edges. 4x is recommended.");
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Smooths polygon edges. Selecting MSAA disables SSAA.");
         }
 
         char ssaa_preview[16] = "Off";
@@ -513,19 +519,57 @@ Outcome run(std::u8string game_id, const std::string& version_string,
         }
         ImGui::SetNextItemWidth(220.0f);
         if (ImGui::BeginCombo("SSAA", ssaa_preview)) {
-            constexpr int values[] = {1, 2, 3, 4, 5, 6, 7, 8};
-            constexpr const char* labels[] = {
-                "Off", "2x", "3x", "4x", "5x", "6x", "7x", "8x"};
+            constexpr int values[] = {1, 2};
+            constexpr const char* labels[] = {"Off", "2x"};
             for (int i = 0; i < static_cast<int>(std::size(values)); ++i) {
                 if (ImGui::Selectable(labels[i], settings.ssaa == values[i])) {
                     settings.ssaa = values[i];
+                    if (settings.ssaa > 1) {
+                        settings.msaa = 0;
+                    }
+                }
+            }
+            ImGui::EndCombo();
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Renders at 2x each dimension (4x as many pixels) and downsamples.\n"
+                              "Selecting SSAA disables MSAA.");
+        }
+
+        // --- Advanced ------------------------------------------------------
+        ImGui::SeparatorText("Advanced");
+
+        // Frame interpolation (RT64). 0 = native 60; -1 = match display; a
+        // positive value is an interpolated target (game logic stays 60Hz).
+        char fps_preview[24];
+        if (settings.fps == 0)       std::snprintf(fps_preview, sizeof fps_preview, "Native (60)");
+        else if (settings.fps < 0)   std::snprintf(fps_preview, sizeof fps_preview, "Match display");
+        else                         std::snprintf(fps_preview, sizeof fps_preview, "%d fps", settings.fps);
+        ImGui::SetNextItemWidth(220.0f);
+        if (ImGui::BeginCombo("Frame rate", fps_preview)) {
+            constexpr int values[] = {0, 120, 144, 240, -1};
+            constexpr const char* labels[] = {
+                "Native (60)", "120 fps", "144 fps", "240 fps", "Match display"};
+            for (int i = 0; i < static_cast<int>(std::size(values)); ++i) {
+                if (ImGui::Selectable(labels[i], settings.fps == values[i])) {
+                    settings.fps = values[i];
                 }
             }
             ImGui::EndCombo();
         }
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-            ImGui::SetTooltip("Renders above the selected resolution and downsamples.\n"
-                              "Use 2x first; higher values are very GPU-intensive.");
+            ImGui::SetTooltip("Interpolates smoother motion above the game's 60Hz using RT64.\n"
+                              "The game's logic still runs at 60Hz; the extra frames are\n"
+                              "synthesized. Capped to your monitor's refresh rate.");
+        }
+
+        ImGui::Checkbox("Enable debug menu", &settings.debug_menu);
+        ImGui::SameLine();
+        ImGui::TextDisabled("(?)");
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+            ImGui::SetTooltip(
+                "F1 or controller L+R+Start opens the in-game overlay.\n"
+                "Using a debug warp blocks all save writes until exit.");
         }
 
         ImGui::EndTabItem();
@@ -549,7 +593,14 @@ Outcome run(std::u8string game_id, const std::string& version_string,
         // Pinned to the bottom of the window.
         float button_h = ImGui::GetFrameHeight();
         float pad_b = ImGui::GetStyle().WindowPadding.y;
-        ImGui::SetCursorPosY(ImGui::GetWindowHeight() - button_h - pad_b);
+        const float footer_y = ImGui::GetWindowHeight() - button_h - pad_b;
+        // Never move the cursor backwards over the Advanced controls. Apart
+        // from drawing the rows on top of each other, overlapping ImGui items
+        // leave the earlier checkbox's hit rectangle in charge, so clicking
+        // Start toggles the hidden checkbox instead. If an unusually small
+        // window still cannot fit everything, keeping the natural cursor
+        // position lets ImGui expose the footer through normal scrolling.
+        ImGui::SetCursorPosY(std::max(ImGui::GetCursorPosY(), footer_y));
         ImGui::BeginDisabled(!rom_valid);
         if (ImGui::Button("Start Game", ImVec2(160.0f, 0.0f))) {
             outcome = Outcome::StartGame;

@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -33,6 +34,7 @@ constexpr uint16_t BTN_CR     = 0x0001; // CONT_F
 const Uint8* g_keys = nullptr;
 int g_numkeys = 0;
 SDL_GameController* g_controller = nullptr;
+std::atomic_bool g_input_blocked{false};
 
 constexpr float kDigitalAxisThreshold = 0.5f;
 
@@ -129,6 +131,13 @@ bool get_input(int controller_num, uint16_t* buttons, float* x, float* y) {
         return false;
     }
 
+    if (g_input_blocked.load(std::memory_order_relaxed)) {
+        *buttons = 0;
+        *x = 0.0f;
+        *y = 0.0f;
+        return true;
+    }
+
     struct DigitalInput {
         N64Input input;
         uint16_t mask;
@@ -191,6 +200,10 @@ ultramodern::input::connected_device_info_t get_connected_device_info(int contro
 
 void refresh_controllers() {
     refresh_controller_internal();
+}
+
+void set_input_blocked(bool blocked) {
+    g_input_blocked.store(blocked, std::memory_order_relaxed);
 }
 
 // Bring up the game-controller subsystem from init() (audio init lives in
