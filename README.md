@@ -1,7 +1,7 @@
 # Trouble Makers
 
 Trouble Makers is a native PC port of the Nintendo 64 game *Mischief Makers*
-(Treasure, 1997), produced by static recompilation — playable, up to 240fps (with interpolation),
+(Treasure, 1997), produced by static recompilation — playable with up to 240fps (with interpolation),
 high-resolution, with correct sound and **widescreen support!**
 
 ![Marina mid-battle in the opening forest, the scene rendered edge-to-edge in 16:9 widescreen](screenshots/hero-widescreen.png)
