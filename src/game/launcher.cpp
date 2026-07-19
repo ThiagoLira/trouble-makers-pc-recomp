@@ -590,9 +590,21 @@ Outcome run(std::u8string game_id, const std::string& version_string,
         }
 
         // --- Start / Exit ---------------------------------------------------
-        // Pinned to the bottom of the window.
-        float button_h = ImGui::GetFrameHeight();
-        float pad_b = ImGui::GetStyle().WindowPadding.y;
+        // Pinned to the bottom of the window. Derive the size from the scaled
+        // font and padding: fixed pixel widths clip both labels when the Linux
+        // launcher scales itself for a high-DPI desktop.
+        const ImGuiStyle& style = ImGui::GetStyle();
+        const float extra_edge = 2.0f * static_cast<float>(ui_scale);
+        const float button_h = ImGui::GetFontSize() + style.FramePadding.y * 2.0f +
+                               extra_edge;
+        const auto button_width = [&](const char* label, float base_width) {
+            return std::max(base_width * static_cast<float>(ui_scale),
+                ImGui::CalcTextSize(label).x + style.FramePadding.x * 2.0f +
+                extra_edge);
+        };
+        const float start_button_w = button_width("Start Game", 160.0f);
+        const float exit_button_w = button_width("Exit", 100.0f);
+        const float pad_b = style.WindowPadding.y;
         const float footer_y = ImGui::GetWindowHeight() - button_h - pad_b;
         // Never move the cursor backwards over the Advanced controls. Apart
         // from drawing the rows on top of each other, overlapping ImGui items
@@ -602,13 +614,13 @@ Outcome run(std::u8string game_id, const std::string& version_string,
         // position lets ImGui expose the footer through normal scrolling.
         ImGui::SetCursorPosY(std::max(ImGui::GetCursorPosY(), footer_y));
         ImGui::BeginDisabled(!rom_valid);
-        if (ImGui::Button("Start Game", ImVec2(160.0f, 0.0f))) {
+        if (ImGui::Button("Start Game", ImVec2(start_button_w, button_h))) {
             outcome = Outcome::StartGame;
             running = false;
         }
         ImGui::EndDisabled();
         ImGui::SameLine();
-        if (ImGui::Button("Exit", ImVec2(100.0f, 0.0f))) {
+        if (ImGui::Button("Exit", ImVec2(exit_button_w, button_h))) {
             running = false;
         }
         ImGui::EndDisabled();
