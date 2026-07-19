@@ -27,6 +27,7 @@ target_include_directories(mm_audio_input PUBLIC
 target_link_libraries(mm_audio_input PUBLIC
     librecomp
     ultramodern
+    mm_diagnostics
     SDL2::SDL2
 )
 

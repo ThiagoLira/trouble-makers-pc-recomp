@@ -108,6 +108,7 @@ target_compile_definitions(mm_graphics PRIVATE
 
 target_link_libraries(mm_graphics PUBLIC
     ultramodern                                 # RendererContext interface, ViRegs, GraphicsConfig (PUBLIC includes)
+    mm_diagnostics
 )
 
 target_link_libraries(mm_graphics PRIVATE

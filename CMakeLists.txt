@@ -2,12 +2,30 @@
 # GNU ld / lld-link / ld64; see src/game/CMakeLists.txt).
 cmake_minimum_required(VERSION 3.24)
 
-project(troublemakers_recomp LANGUAGES C CXX)
+project(troublemakers_recomp VERSION 0.3.4 LANGUAGES C CXX)
 include(CTest)
 set(CMAKE_C_STANDARD 17)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+# Release builds are configured from a version tag. Derive the user-visible
+# version from that exact tag so logs and launcher metadata cannot drift from
+# the downloadable release again. Source/development builds fall back to the
+# latest declared project version while the commit field keeps them unique.
+set(MM_PROJECT_VERSION "${PROJECT_VERSION}")
+find_package(Git QUIET)
+if(GIT_FOUND)
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} describe --tags --exact-match --match "v[0-9]*"
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        OUTPUT_VARIABLE MM_EXACT_VERSION_TAG
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET)
+    if(MM_EXACT_VERSION_TAG MATCHES "^v([0-9]+\\.[0-9]+\\.[0-9]+)$")
+        set(MM_PROJECT_VERSION "${CMAKE_MATCH_1}")
+    endif()
+endif()
 
 if(WIN32)
     # Same workaround as the reference: opt out of the constexpr std::mutex
@@ -110,7 +128,7 @@ option(MM_BUILD_PROBE "Link mm_recompiled against librecomp/ultramodern to enume
 
 # `game` must come last: its CMakeLists links whichever component targets
 # exist (if(TARGET mm_graphics) etc.), so the components must be added first.
-set(MM_PHASE2_COMPONENTS rsp graphics audio_input game)
+set(MM_PHASE2_COMPONENTS diagnostics rsp graphics audio_input game)
 set(MM_ANY_COMPONENT OFF)
 foreach(_c ${MM_PHASE2_COMPONENTS})
     if(EXISTS ${CMAKE_SOURCE_DIR}/src/${_c}/CMakeLists.txt)

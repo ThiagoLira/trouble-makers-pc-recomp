@@ -4,10 +4,12 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <climits>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <ctime>
 #include <fstream>
 #include <iomanip>
@@ -36,6 +38,7 @@ namespace {
 
 constexpr size_t kMaximumLogBytes = 512 * 1024;
 constexpr size_t kCompactionSlack = 64 * 1024;
+constexpr size_t kRetainedPrefixBytes = 32 * 1024;
 constexpr std::string_view kCompactionMarker =
     "\n[log] ... older session output was discarded ...\n";
 
@@ -48,6 +51,8 @@ std::filesystem::path g_current_path;
 std::filesystem::path g_previous_path;
 std::string g_header;
 size_t g_file_size = 0;
+std::chrono::steady_clock::time_point g_log_started_at;
+bool g_at_line_start = true;
 bool g_started = false;
 bool g_redirected = false;
 bool g_atexit_registered = false;
@@ -164,23 +169,63 @@ void write_all_to_console(const char* data, size_t size) {
     }
 }
 
+void write_timestamped_locked(const char* data, size_t size) {
+    size_t offset = 0;
+    while (offset < size) {
+        if (g_at_line_start) {
+            const double elapsed = std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - g_log_started_at).count();
+            std::array<char, 32> prefix{};
+            const int count = std::snprintf(
+                prefix.data(), prefix.size(), "[+%09.3fs] ", elapsed);
+            const size_t prefix_size = count > 0
+                ? std::min<size_t>(static_cast<size_t>(count), prefix.size() - 1)
+                : 0;
+            g_log_file.write(prefix.data(),
+                static_cast<std::streamsize>(prefix_size));
+            g_file_size += prefix_size;
+            g_at_line_start = false;
+        }
+
+        const void* newline_ptr = std::memchr(data + offset, '\n', size - offset);
+        const size_t segment_size = newline_ptr != nullptr
+            ? static_cast<const char*>(newline_ptr) - (data + offset) + 1
+            : size - offset;
+        g_log_file.write(data + offset,
+            static_cast<std::streamsize>(segment_size));
+        g_file_size += segment_size;
+        offset += segment_size;
+        if (newline_ptr != nullptr) g_at_line_start = true;
+    }
+}
+
 void compact_locked() {
     if (g_file_size <= kMaximumLogBytes || g_current_path.empty()) return;
 
     g_log_file.flush();
     g_log_file.close();
 
-    const size_t fixed_size = g_header.size() + kCompactionMarker.size();
-    const size_t tail_capacity = kMaximumLogBytes > fixed_size
-        ? kMaximumLogBytes - fixed_size : 0;
+    std::string prefix;
     std::string tail;
-    if (tail_capacity > 0) {
-        std::ifstream source(g_current_path, std::ios::binary | std::ios::ate);
-        if (source.is_open()) {
-            const std::streamoff end = source.tellg();
-            const std::streamoff wanted = static_cast<std::streamoff>(tail_capacity);
-            const std::streamoff start = std::max<std::streamoff>(0, end - wanted);
-            source.seekg(start);
+    std::ifstream source(g_current_path, std::ios::binary | std::ios::ate);
+    if (source.is_open()) {
+        const std::streamoff end = source.tellg();
+        const size_t total = end > 0 ? static_cast<size_t>(end) : 0;
+        const size_t prefix_size = std::min(total, kRetainedPrefixBytes);
+        prefix.resize(prefix_size);
+        source.seekg(0);
+        source.read(prefix.data(), static_cast<std::streamsize>(prefix.size()));
+        prefix.resize(static_cast<size_t>(source.gcount()));
+
+        const size_t fixed_size = prefix.size() + kCompactionMarker.size();
+        const size_t tail_capacity = kMaximumLogBytes > fixed_size
+            ? kMaximumLogBytes - fixed_size : 0;
+        const size_t tail_start = total > tail_capacity
+            ? std::max(prefix.size(), total - tail_capacity)
+            : prefix.size();
+        if (tail_start < total) {
+            source.clear();
+            source.seekg(static_cast<std::streamoff>(tail_start));
             tail.assign(std::istreambuf_iterator<char>(source),
                         std::istreambuf_iterator<char>());
         }
@@ -191,12 +236,13 @@ void compact_locked() {
         g_file_size = 0;
         return;
     }
-    g_log_file.write(g_header.data(), static_cast<std::streamsize>(g_header.size()));
+    if (prefix.empty()) prefix = g_header;
+    g_log_file.write(prefix.data(), static_cast<std::streamsize>(prefix.size()));
     g_log_file.write(kCompactionMarker.data(),
                      static_cast<std::streamsize>(kCompactionMarker.size()));
     g_log_file.write(tail.data(), static_cast<std::streamsize>(tail.size()));
     g_log_file.flush();
-    g_file_size = fixed_size + tail.size();
+    g_file_size = prefix.size() + kCompactionMarker.size() + tail.size();
 }
 
 void reader_main() {
@@ -214,9 +260,8 @@ void reader_main() {
         write_all_to_console(buffer.data(), size);
         std::lock_guard lock(g_file_mutex);
         if (g_log_file.is_open()) {
-            g_log_file.write(buffer.data(), static_cast<std::streamsize>(size));
+            write_timestamped_locked(buffer.data(), size);
             g_log_file.flush();
-            g_file_size += size;
             if (g_file_size > kMaximumLogBytes + kCompactionSlack) {
                 compact_locked();
             }
@@ -350,6 +395,8 @@ bool start(const std::filesystem::path& app_folder, const std::string& version) 
     }
 
     g_header = make_header(version);
+    g_log_started_at = std::chrono::steady_clock::now();
+    g_at_line_start = true;
     g_log_file.open(g_current_path, std::ios::binary | std::ios::trunc);
     if (!g_log_file.is_open()) return false;
     g_log_file.write(g_header.data(), static_cast<std::streamsize>(g_header.size()));

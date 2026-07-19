@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -29,6 +30,7 @@
 #include "ultramodern/config.hpp"
 
 #include "mm_graphics.h"
+#include "telemetry.h"
 
 namespace mm::graphics {
 
@@ -162,6 +164,8 @@ void apply_config(RT64::Application& app, const ultramodern::renderer::GraphicsC
 class Rt64Context final : public ultramodern::renderer::RendererContext {
 public:
     Rt64Context(uint8_t* rdram, ultramodern::renderer::WindowHandle window, bool developer_mode) {
+        mm::telemetry::set_phase(mm::telemetry::Phase::RendererStarting,
+                                 "RT64 setup beginning");
         RT64::Application::Core core{};
         // RT64's RenderWindow is HWND on Windows, SDL_Window* on Linux;
         // ultramodern's WindowHandle wraps HWND+thread_id on Windows. Same
@@ -222,6 +226,8 @@ public:
         setup_result = to_setup_result(app_->setup(0));
         chosen_api = from_rt64_api(app_->chosenGraphicsAPI);
         if (setup_result != ultramodern::renderer::SetupResult::Success) {
+            mm::telemetry::event("gfx", "RT64 setup failed result=%d api=%s",
+                static_cast<int>(setup_result), graphics_api_name(chosen_api));
             app_.reset();
             return;
         }
@@ -240,6 +246,8 @@ public:
             active_msaa == requested_msaa ? "" : " (hardware fallback)",
             requested_ssaa,
             app_->device->getCapabilities().sampleLocations ? "yes" : "no");
+        mm::telemetry::set_phase(mm::telemetry::Phase::RendererReady,
+                                 "RT64 setup completed");
 
         // NVIDIA's 610-series Linux Vulkan driver was observed corrupting RT64's
         // specialized per-material SPIR-V on Blackwell: small sprites and glyphs
@@ -321,27 +329,32 @@ public:
     void send_dl(const OSTask* task) override {
         // Fresh RSP state per task, load the task's microcode (gspFast3D for
         // this game), then let RT64 interpret the display list out of RDRAM.
-        // TEMP DIAGNOSTIC (pixels bring-up): trace DL traffic.
-        static uint64_t dl_count = 0;
-        if (dl_count < 3 || dl_count % 10 == 0) {
-            std::fprintf(stderr, "[gfx] send_dl #%llu ucode=%08X data_ptr=%08X data_size=%u\n",
-                (unsigned long long)dl_count, task->t.ucode, task->t.data_ptr, task->t.data_size);
+        static std::atomic_bool first{true};
+        if (first.exchange(false, std::memory_order_relaxed)) {
+            mm::telemetry::event("gfx",
+                "first display list ucode=%08X data-ptr=%08X data-size=%u",
+                task->t.ucode, task->t.data_ptr, task->t.data_size);
         }
-        dl_count++;
+        const auto started = std::chrono::steady_clock::now();
         app_->state->rsp->reset();
         app_->interpreter->loadUCodeGBI(physical(task->t.ucode), physical(task->t.ucode_data), true);
         app_->processDisplayLists(app_->core.RDRAM, physical(task->t.data_ptr), 0, true);
+        const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - started).count();
+        mm::telemetry::record_display_list(
+            static_cast<std::uint64_t>(std::max<std::int64_t>(elapsed, 0)));
     }
 
     void update_screen() override {
-        // TEMP DIAGNOSTIC (pixels bring-up): trace VI scanout state.
-        static uint64_t vi_count = 0;
-        if (vi_count < 3 || vi_count % 600 == 0) {
+        static std::uint64_t screen_count = 0;
+        if (screen_count == 0) {
             ultramodern::renderer::ViRegs* vi = ultramodern::renderer::get_vi_regs();
-            std::fprintf(stderr, "[gfx] update_screen #%llu VI_ORIGIN=%08X VI_WIDTH=%u VI_STATUS=%08X\n",
-                (unsigned long long)vi_count, vi->VI_ORIGIN_REG, vi->VI_WIDTH_REG, vi->VI_STATUS_REG);
+            mm::telemetry::event("gfx",
+                "first screen update VI_ORIGIN=%08X VI_WIDTH=%u VI_STATUS=%08X",
+                vi->VI_ORIGIN_REG, vi->VI_WIDTH_REG, vi->VI_STATUS_REG);
         }
-        vi_count++;
+        ++screen_count;
+        const auto screen_started = std::chrono::steady_clock::now();
 
         // Reuse RT64's inspector renderer as a small, host-owned post-present
         // ImGui pass. Developer mode stays off, so State::inspect() never
@@ -363,10 +376,45 @@ public:
             inspector->endFrame();
         }
         app_->updateScreen();
+        const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now() - screen_started).count();
+        mm::telemetry::record_screen_update(
+            static_cast<std::uint64_t>(std::max<std::int64_t>(elapsed, 0)));
+
+        if (screen_count == 1 || screen_count % 300 == 0) {
+            std::uint32_t width = 0;
+            std::uint32_t height = 0;
+            std::uint32_t refresh = 0;
+            float scale = 1.0f;
+            {
+                const std::scoped_lock lock(
+                    app_->sharedQueueResources->configurationMutex);
+                width = app_->sharedQueueResources->swapChainWidth;
+                height = app_->sharedQueueResources->swapChainHeight;
+                refresh = app_->sharedQueueResources->swapChainRate;
+                constexpr float kN64Lines = 240.0f;
+                if (app_->userConfig.resolution ==
+                    RT64::UserConfiguration::Resolution::Manual) {
+                    scale = static_cast<float>(
+                        app_->userConfig.resolutionMultiplier);
+                } else if (height > 0) {
+                    scale = std::max(std::ceil(height / kN64Lines), 1.0f);
+                }
+            }
+            mm::telemetry::set_display_state(width, height, refresh, scale);
+            if (screen_count == 1) {
+                mm::telemetry::event("display",
+                    "RT64 drawable=%ux%u refresh=%uHz resolution-scale=%.2fx",
+                    width, height, refresh, scale);
+            }
+        }
     }
 
     void shutdown() override {
         if (app_ != nullptr) {
+            mm::telemetry::set_phase(mm::telemetry::Phase::ShuttingDown,
+                                     "RT64 shutdown requested");
+            mm::telemetry::event("gfx", "RT64 shutdown beginning");
             app_->end();
         }
     }

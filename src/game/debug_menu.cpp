@@ -8,6 +8,7 @@
 
 #include "librecomp/game.hpp"
 #include "mm_audio_input.hpp"
+#include "telemetry.h"
 #include "recomp.h"
 
 #ifdef MM_HAS_GRAPHICS
@@ -288,17 +289,19 @@ bool handle_event(const SDL_Event& event) {
 }
 
 extern "C" void mm_debug_menu_tick(unsigned char* rdram) {
+    const int game_state = MEM_HU(0, rdram_gpr(kGameState));
+    const int current_stage = MEM_HU(0, rdram_gpr(kCurrentStage));
+    const int current_scene = static_cast<int16_t>(
+        MEM_HU(0, rdram_gpr(kCurrentScene)));
+    mm::telemetry::record_scene(game_state, current_stage, current_scene);
+
     if (!g_enabled.load(std::memory_order_acquire)) {
         return;
     }
 
-    const int game_state = MEM_HU(0, rdram_gpr(kGameState));
     g_current_game_state.store(game_state, std::memory_order_relaxed);
-    g_current_stage.store(MEM_HU(0, rdram_gpr(kCurrentStage)),
-                          std::memory_order_relaxed);
-    g_current_scene.store(
-        static_cast<int16_t>(MEM_HU(0, rdram_gpr(kCurrentScene))),
-        std::memory_order_relaxed);
+    g_current_stage.store(current_stage, std::memory_order_relaxed);
+    g_current_scene.store(current_scene, std::memory_order_relaxed);
     g_game_ready.store(game_state != 0, std::memory_order_release);
 
     const int selected = g_pending_warp.exchange(-1, std::memory_order_acq_rel);

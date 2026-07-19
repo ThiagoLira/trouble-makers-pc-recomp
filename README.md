@@ -283,8 +283,17 @@ captured under the app config folder:
 - Portable mode: beside the executable/AppImage
 
 `logs/latest.log` is the active run and `logs/previous.log` is the run before
-it. Logs are bounded to 512 KiB and retain a diagnostic header plus the newest
-output.
+it. Logs are bounded to 512 KiB and retain the diagnostic header, early startup
+details, and the newest output. Each captured line has an elapsed timestamp.
+
+While the game is running, the log records a compact diagnostic snapshot every
+five seconds. These snapshots include native frame cadence and slow-frame
+counts, VI/screen/display-list rates, CPU submission time, active display and
+render scale, audio conversion and queue health, and a progress watchdog. The
+same log also identifies the CPU, memory, GPU/driver, SDL backends, resolved
+display settings, lifecycle milestones, and scene transitions. The hot paths
+only update counters; formatting and file output happen on the background
+reporter interval.
 
 For a crash or gameplay bug, reproduce it once, relaunch the game, open
 **Support**, and choose **Copy previous session**. Paste that report into the
@@ -292,6 +301,10 @@ GitHub bug form; attach the full `previous.log` only when requested. The
 copyable report is capped for GitHub, and its diagnostic header omits ROM and
 home-directory paths. Skim it before posting because an operating-system or
 third-party error may still quote a local path.
+
+For frame drops, slowdowns, or audio glitches, stay in the affected scene for
+at least 15 seconds before closing the game. That captures three comparable
+five-second windows in the previous-session report.
 
 ## How it works / hacking on it
 
