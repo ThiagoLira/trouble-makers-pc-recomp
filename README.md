@@ -21,12 +21,10 @@ simulated at runtime; the game *is* the native binary. Same approach as
 [Zelda64Recomp](https://github.com/Zelda64Recomp/Zelda64Recomp), applied to a
 very different, very Treasure-shaped game.
 
-That translation is made legible by a companion **decompilation**:
-[trouble-makers-ai-recomp](../trouble-makers-ai-recomp) reverse-engineers the
-game into readable, byte-perfect C, and its symbol-rich ELF is what feeds the
-recompiler here so every function arrives named. Decompilation (understanding
-the code) and recompilation (running it natively) are two halves of the same
-project.
+The reverse-engineering work behind the port is captured here as a symbol and
+section map. N64Recomp combines that map with your own ROM to translate the
+game, so building this project does **not** require a separate decompilation
+checkout.
 
 **No game assets, ROM contents, or recompiler output are in this repository.**
 Everything runs locally from your own legally dumped ROM.
@@ -95,7 +93,6 @@ actors, geometry, and tile layers are moving throughout each shot.
 ### Prerequisites
 
 - A legally dumped **Mischief Makers (US 1.1)** ROM (`.z64`, big-endian)
-- The sibling decomp built once (its `./trouble build` produces `troublemakers.elf`)
 - Linux: GCC/G++ 12 or newer (C++20), CMake ≥ 3.24, SDL2, a Vulkan-capable GPU + loader
   (no Vulkan SDK needed — RT64 bundles headers and its shader compiler)
 - Windows: Visual Studio 2022 with the "Desktop development with C++", "C++
@@ -112,6 +109,12 @@ actors, geometry, and tile layers are moving throughout each shot.
 git clone --recurse-submodules https://github.com/ThiagoLira/trouble-makers-pc-recomp
 cd trouble-makers-pc-recomp
 
+# Supply your own big-endian US 1.1 ROM. It is ignored by git and never copied
+# into the resulting executable.
+mkdir -p input
+cp /path/to/your/mischief-makers-us-1.1.z64 input/troublemakers.us1.z64
+echo "e00ab74c3dee79efaafe8e10f2a6b67784d7327ab588d8ef90ad8945427da627  input/troublemakers.us1.z64" | sha256sum -c -
+
 # Runtime fixes not yet upstreamed (message delivery, overlay registration,
 # EEPROM semantics):
 git -C lib/N64ModernRuntime am "$(pwd)"/patches/N64ModernRuntime/*.patch
@@ -123,10 +126,10 @@ git -C lib/rt64 checkout 23cab603
 git -C lib/rt64 submodule update --init --recursive
 git -C lib/rt64 apply "$(pwd)"/patches/rt64/*.patch
 
-# Translate the game + audio microcode:
-cp ../trouble-makers-ai-recomp/build/troublemakers.elf input/
+# Translate the game and audio microcode directly from your ROM, using the
+# symbol/section map checked into this repository:
 cmake -B tools/N64Recomp/build tools/N64Recomp
-cmake --build tools/N64Recomp/build --target N64Recomp RSPRecomp -j
+cmake --build tools/N64Recomp/build --target N64RecompCLI RSPRecomp -j
 tools/N64Recomp/build/N64Recomp troublemakers.us1.toml
 tools/N64Recomp/build/RSPRecomp aspMain.us1.rsp.toml
 ```
@@ -236,10 +239,10 @@ Set `MM_RT64_UBERSHADERS_ONLY=1` to force that path when diagnosing a similar
 problem, or `MM_RT64_UBERSHADERS_ONLY=0` to disable the workaround.
 
 CI (`.github/workflows/build.yml`) builds both the Linux AppImage and the
-Windows package on every push and uploads them as artifacts. It needs a
-`TM_ASSETS_REPO` secret pointing at a private repo with `troublemakers.elf`
-and the pregenerated `aspMain.cpp`, so the game's code never lives in this
-public repository.
+Windows package on every push and uploads them as artifacts. Release CI needs
+a `TM_ASSETS_REPO` secret pointing at a private repo containing
+`troublemakers.us1.z64`; public builders only need their own ROM and do not
+need access to that private repo.
 
 **Cutting a release** is one command — push a version tag and CI builds both
 platforms and publishes a prerelease with the artifacts attached and

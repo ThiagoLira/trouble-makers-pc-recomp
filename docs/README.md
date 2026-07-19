@@ -47,9 +47,12 @@ nothing, RESULT blocks) and the repro recipes that worked.
   correct as-is (the ^3 swizzle only affects sub-word accesses).
 - **Never** `pkill -f` a pattern that matches your own command line; always
   `timeout -k` (the game sometimes ignores plain SIGTERM).
-- The decomp at `../trouble-makers-ai-recomp` is READ-ONLY ground truth:
-  source, `versions/us1/symbol_addrs*.txt`, asm. The game is **natively
-  60fps**, uses **gspFast3D** (not F3DEX) + **aspMain** (RSPRecomp'd, IMEM
+- Current builds use the checked-in `symbols/troublemakers.us1.toml` map plus
+  `input/troublemakers.us1.z64`; no decomp checkout or ELF is required. The
+  historical phase notes may mention the maintainer's private reverse-
+  engineering checkout, but do not substitute an unrelated third-party
+  decompilation. The game is **natively 60fps**, uses **gspFast3D** (not
+  F3DEX) + **aspMain** (RSPRecomp'd, IMEM
   base **0x04001080**), saves to **4Kbit EEPROM**, and pokes exactly one
   hardware register raw (AI_LEN — mirrored, see PHASE5_NOTES_c.md).
 - Temp diagnostics still in tree (marked TEMP): `[gfx]`/`[mm_rsp]` stderr
