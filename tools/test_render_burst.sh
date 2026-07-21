@@ -7,7 +7,7 @@ set -u
 
 usage() {
     echo "usage: $0 GAME_BINARY ROM OUTPUT_DIR STAGE_INDEX" >&2
-    echo "env: MM_VIDEO_DRIVER=x11|wayland MM_CAPTURE_FRAMES=12 MM_CAPTURE_INTERVAL=0.25 MM_CAPTURE_DELAY=60 MM_CAPTURE_WARMUP=0 MM_CAPTURE_CAMERA_X= MM_CAPTURE_EARLY=0 MM_CAPTURE_GEOMETRY=1602x1022+39+59 MM_WINDOW=1600x900 MM_WIDESCREEN=1 MM_AUTO_ADVANCE=1 MM_FAST_FORWARD=1 MM_TEST_MOVE=1|jet-right|jet-hop-right|jet-left|jet-bounce MM_TEST_ACTOR_TRACE=1 MM_TEST_STREAM_TRACE=1 MM_TEST_STREAM_CAMERA=x[,y]" >&2
+    echo "env: MM_VIDEO_DRIVER=x11|wayland MM_CAPTURE_FRAMES=12 MM_CAPTURE_INTERVAL=0.25 MM_CAPTURE_DELAY=60 MM_CAPTURE_WARMUP=0 MM_CAPTURE_CAMERA_X= MM_CAPTURE_EARLY=0 MM_CAPTURE_GEOMETRY=1602x1022+39+59 MM_WINDOW=1600x900 MM_WIDESCREEN=1 MM_FPS=native|display|N MM_MSAA=0|2|4 MM_SSAA=1|2 MM_AUTO_ADVANCE=1 MM_FAST_FORWARD=1 MM_TEST_MOVE=1|walk-right|jet-right|jet-hop-right|jet-left|jet-bounce MM_TEST_ACTOR_TRACE=1 MM_TEST_STREAM_TRACE=1 MM_TEST_STREAM_CAMERA=x[,y]" >&2
 }
 
 if (( $# != 4 )); then
@@ -30,11 +30,18 @@ capture_geometry=${MM_CAPTURE_GEOMETRY:-1602x1022+39+59}
 window_size=${MM_WINDOW:-1600x900}
 video_driver=${MM_VIDEO_DRIVER:-x11}
 widescreen=${MM_WIDESCREEN:-1}
+fps=${MM_FPS:-native}
+msaa=${MM_MSAA:-0}
+ssaa=${MM_SSAA:-1}
 auto_advance=${MM_AUTO_ADVANCE:-1}
 fast_forward=${MM_FAST_FORWARD:-1}
 test_move=${MM_TEST_MOVE:-1}
 stream_trace=${MM_TEST_STREAM_TRACE:-0}
 stream_camera=${MM_TEST_STREAM_CAMERA:-}
+test_move_4x3=$((1 - widescreen))
+case $stage in
+    13|21) test_move_4x3=1 ;;
+esac
 
 if [[ -n $capture_camera_x && ! $capture_camera_x =~ ^-?[0-9]+$ ]]; then
     echo "MM_CAPTURE_CAMERA_X must be an integer: $capture_camera_x" >&2
@@ -78,7 +85,12 @@ esac
 
 mkdir -p "$output_dir"
 log="$output_dir/stage-$(printf '%02d' "$stage").log"
-args=("$game" "$rom" --window "$window_size")
+config_dir="$output_dir/config"
+mkdir -p "$config_dir"
+args=("$game" "$rom" --window "$window_size" --fps "$fps" --ssaa "$ssaa")
+if [[ $msaa != 0 ]]; then
+    args+=(--msaa "$msaa")
+fi
 if [[ $widescreen == 1 ]]; then
     args+=(--widescreen)
 else
@@ -87,9 +99,10 @@ fi
 
 setsid env MM_WARP_STAGE="$stage" MM_WARP_AT=1 MM_WARP_DELAY=1 \
     MM_TEST_AUTO_ADVANCE="$auto_advance" MM_TEST_MOVE="$test_move" \
-    MM_TEST_MOVE_4X3="$((1 - widescreen))" \
+    MM_TEST_MOVE_4X3="$test_move_4x3" \
     MM_TEST_STREAM_TRACE="$stream_trace" \
     MM_TEST_STREAM_CAMERA="$stream_camera" \
+    APP_FOLDER_PATH="$config_dir" XDG_CONFIG_HOME="$config_dir" \
     MM_WIN_POS=40,40 SDL_VIDEODRIVER="$video_driver" \
     "${args[@]}" >"$log" 2>&1 &
 pid=$!
@@ -98,13 +111,26 @@ game_window=
 
 find_game_window() {
     local window
+    local window_pid
     game_window=
-    command -v xdotool >/dev/null || return 1
-    window=$(xdotool search --onlyvisible --pid "$pid" 2>/dev/null | tail -1)
-    if [[ -n $window ]] &&
-        xdotool getwindowgeometry "$window" >/dev/null 2>&1; then
-        game_window=$window
-        return 0
+    if command -v xdotool >/dev/null; then
+        window=$(xdotool search --onlyvisible --pid "$pid" 2>/dev/null | tail -1)
+        if [[ -n $window ]] &&
+            xdotool getwindowgeometry "$window" >/dev/null 2>&1; then
+            game_window=$window
+            return 0
+        fi
+    fi
+    if command -v xprop >/dev/null; then
+        for window in $(xprop -root _NET_CLIENT_LIST_STACKING 2>/dev/null |
+                sed -nE 's/.*# //p' | tr ',' ' '); do
+            window_pid=$(xprop -id "$window" _NET_WM_PID 2>/dev/null |
+                sed -nE 's/.*= ([0-9]+).*/\1/p')
+            if [[ $window_pid == "$pid" ]]; then
+                game_window=$window
+                return 0
+            fi
+        done
     fi
     return 1
 }
@@ -155,7 +181,7 @@ trap cleanup EXIT INT TERM
 
 is_fixed_4x3_stage() {
     case $1 in
-        11|27|47|52|56|57) return 0 ;;
+        11|13|21|27|47|52|56|57) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -256,7 +282,16 @@ for ((frame = 0; frame < capture_frames; ++frame)); do
     sleep "$capture_interval"
 done
 
-if ! magick montage "${frames[@]}" -thumbnail 400x256 -tile 4x \
+sheet_columns=4
+if (( capture_frames > 32 )); then
+    # Very tall PNGs are mis-tiled by some image viewers, which can look
+    # indistinguishable from a framebuffer-trail regression even though every
+    # source frame is clean. Keep dense sheets closer to square and retain the
+    # individual full-resolution PNGs as the ground truth.
+    sheet_columns=8
+fi
+if ! magick montage "${frames[@]}" -thumbnail 400x256 \
+    -tile "${sheet_columns}x" \
     -geometry +2+2 "$output_dir/contact-sheet.png"; then
     echo "failed to assemble contact sheet; see $log" >&2
     exit 1

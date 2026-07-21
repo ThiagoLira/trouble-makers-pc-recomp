@@ -1,0 +1,29 @@
+From 63fb1c7f6d9bb9b4bbc7ed6baa909251439effc6 Mon Sep 17 00:00:00 2001
+From: Thiago Lira <thlira15@gmail.com>
+Date: Mon, 20 Jul 2026 23:00:00 -0300
+Subject: [PATCH] Skip specialized shaders in ubershader-only mode
+
+The host can force RT64's ubershader to avoid a driver miscompilation. Do not
+continue compiling specialized pipelines in the background when they can
+never be selected. On affected drivers this removes startup CPU and driver
+work while preserving the selected rendering path.
+---
+ src/hle/rt64_state.cpp | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/src/hle/rt64_state.cpp b/src/hle/rt64_state.cpp
+index d4a550e..0955330 100644
+--- a/src/hle/rt64_state.cpp
++++ b/src/hle/rt64_state.cpp
+@@ -1056,7 +1056,8 @@ namespace RT64 {
+ 
+                     // Submit the shader to the cache so compilation can start right away.
+                     // Ignore any calls that use fill type, as they're emulated without using a shader.
+-                    if (callDesc.otherMode.cycleType() != G_CYC_FILL) {
++                    if ((callDesc.otherMode.cycleType() != G_CYC_FILL) &&
++                        !ext.workloadQueue->ubershadersOnly) {
+                         ext.rasterShaderCache->submit(shaderDesc);
+                     }
+ 
+-- 
+2.54.0

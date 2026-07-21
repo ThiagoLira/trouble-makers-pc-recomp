@@ -1,139 +1,71 @@
 diff --git a/src/gbi/rt64_gbi_rdp.cpp b/src/gbi/rt64_gbi_rdp.cpp
+index 6255872..cd8acdb 100644
 --- a/src/gbi/rt64_gbi_rdp.cpp
 +++ b/src/gbi/rt64_gbi_rdp.cpp
-@@ -10,17 +10,40 @@
+@@ -10,6 +10,18 @@
  
  namespace RT64 {
      namespace GBI_RDP {
--        static int32_t rectX(State *state, uint32_t value) {
 +        static int32_t signedRectX(uint32_t value) {
-             // The RDP rectangle fields are 12-bit fixed-point values. MM's
--            // widescreen hooks intentionally submit rectangles left of x=0;
--            // preserve their two's-complement sign while the wing path is on.
--            if (state->ext.enhancementConfig->rect.clearWings && ((value & 0x800U) != 0)) {
++            // MM's widened tile hooks encode off-left X coordinates in the
++            // 12-bit quarter-pixel field using two's complement. Keep those
++            // negative rectangles intact so RT64's normal scissor crops the
++            // geometry and texture interpolation together.
 +            if ((value & 0x800U) != 0) {
-                 return static_cast<int32_t>(value | ~0xFFFU);
-             }
- 
-             return static_cast<int32_t>(value);
-         }
- 
-+        static int32_t clippedRectLeft(State *state, uint32_t value,
-+                bool flip, int16_t dsdx, int16_t dtdy,
-+                int16_t &uls, int16_t &ult) {
-+            const int32_t signedValue = signedRectX(value);
-+            if ((signedValue >= 0) || state->ext.enhancementConfig->rect.clearWings) {
-+                return signedValue;
++                return static_cast<int32_t>(value | ~0xFFFU);
 +            }
 +
-+            // The widened MM display lists start partially off-screen tiles at
-+            // S=0. Original 4:3 code clamps X to zero and advances the texture
-+            // coordinate by the clipped distance. RDP X is quarter-pixel,
-+            // while dS/dX and S use 5.10 and 10.5 fixed point respectively.
-+            const int32_t clippedQuarters = -signedValue;
-+            if (flip) {
-+                ult = static_cast<int16_t>(ult +
-+                    ((static_cast<int32_t>(dtdy) * clippedQuarters) >> 7));
-+            }
-+            else {
-+                uls = static_cast<int16_t>(uls +
-+                    ((static_cast<int32_t>(dsdx) * clippedQuarters) >> 7));
-+            }
-+
-+            return 0;
++            return static_cast<int32_t>(value);
 +        }
 +
          void noOp(State *state, DisplayList **dl) {
              // Do nothing.
          }
-@@ -180,66 +203,74 @@
+@@ -169,9 +180,9 @@ namespace RT64 {
          }
  
          void texrect(State *state, DisplayList **dl) {
--            const int32_t ulx = rectX(state, (*dl)->p1(12, 12));
-+            const uint32_t rawUlx = (*dl)->p1(12, 12);
+-            const int32_t ulx = (*dl)->p1(12, 12);
++            const int32_t ulx = signedRectX((*dl)->p1(12, 12));
              const int32_t uly = (*dl)->p1(0, 12);
--            const int32_t lrx = rectX(state, (*dl)->p0(12, 12));
+-            const int32_t lrx = (*dl)->p0(12, 12);
 +            const int32_t lrx = signedRectX((*dl)->p0(12, 12));
              const int32_t lry = (*dl)->p0(0, 12);
              const uint8_t tile = (*dl)->p1(24, 3);
              *dl = *dl + 1;
- 
--            const int16_t uls = (*dl)->p1(16, 16);
--            const int16_t ult = (*dl)->p1(0, 16);
-+            int16_t uls = (*dl)->p1(16, 16);
-+            int16_t ult = (*dl)->p1(0, 16);
-             *dl = *dl + 1;
-             
-             const int16_t dsdx = (*dl)->p1(16, 16);
-             const int16_t dtdy = (*dl)->p1(0, 16);
-+            const int32_t ulx = clippedRectLeft(
-+                state, rawUlx, false, dsdx, dtdy, uls, ult);
-             state->rdp->drawTexRect(ulx, uly, lrx, lry, tile, uls, ult, dsdx, dtdy, false);
+@@ -186,9 +197,9 @@ namespace RT64 {
          }
          
          void texrectFlip(State *state, DisplayList **dl) {
--            const int32_t ulx = rectX(state, (*dl)->p1(12, 12));
-+            const uint32_t rawUlx = (*dl)->p1(12, 12);
+-            const int32_t ulx = (*dl)->p1(12, 12);
++            const int32_t ulx = signedRectX((*dl)->p1(12, 12));
              const int32_t uly = (*dl)->p1(0, 12);
--            const int32_t lrx = rectX(state, (*dl)->p0(12, 12));
+-            const int32_t lrx = (*dl)->p0(12, 12);
 +            const int32_t lrx = signedRectX((*dl)->p0(12, 12));
              const int32_t lry = (*dl)->p0(0, 12);
              const uint8_t tile = (*dl)->p1(24, 3);
              *dl = *dl + 1;
- 
--            const int16_t uls = (*dl)->p1(16, 16);
--            const int16_t ult = (*dl)->p1(0, 16);
-+            int16_t uls = (*dl)->p1(16, 16);
-+            int16_t ult = (*dl)->p1(0, 16);
-             *dl = *dl + 1;
- 
-             const int16_t dsdx = (*dl)->p1(16, 16);
-             const int16_t dtdy = (*dl)->p1(0, 16);
-+            const int32_t ulx = clippedRectLeft(
-+                state, rawUlx, true, dsdx, dtdy, uls, ult);
-             
-             state->rdp->drawTexRect(ulx, uly, lrx, lry, tile, uls, ult, dsdx, dtdy, true);
-         }
+@@ -205,9 +216,9 @@ namespace RT64 {
  
          // TODO replace the normal rect commands with these and pass a temporary RDP buffer when rdphalf_2 is run in the RSP
          void texrectLLE(State* state, DisplayList** dl) {
--            const int32_t ulx = rectX(state, (*dl)[0].p1(12, 12));
-+            const uint32_t rawUlx = (*dl)[0].p1(12, 12);
+-            const int32_t ulx = (*dl)[0].p1(12, 12);
++            const int32_t ulx = signedRectX((*dl)[0].p1(12, 12));
              const int32_t uly = (*dl)[0].p1(0, 12);
--            const int32_t lrx = rectX(state, (*dl)[0].p0(12, 12));
+-            const int32_t lrx = (*dl)[0].p0(12, 12);
 +            const int32_t lrx = signedRectX((*dl)[0].p0(12, 12));
              const int32_t lry = (*dl)[0].p0(0, 12);
              const uint8_t tile = (*dl)[0].p1(24, 3);
  
--            const int16_t uls = (*dl)[1].p0(16, 16);
--            const int16_t ult = (*dl)[1].p0(0, 16);
-+            int16_t uls = (*dl)[1].p0(16, 16);
-+            int16_t ult = (*dl)[1].p0(0, 16);
-             const int16_t dsdx = (*dl)[1].p1(16, 16);
-             const int16_t dtdy = (*dl)[1].p1(0, 16);
-+            const int32_t ulx = clippedRectLeft(
-+                state, rawUlx, false, dsdx, dtdy, uls, ult);
-             state->rdp->drawTexRect(ulx, uly, lrx, lry, tile, uls, ult, dsdx, dtdy, false);
+@@ -219,9 +230,9 @@ namespace RT64 {
          }
  
          void texrectFlipLLE(State* state, DisplayList** dl) {
--            const int32_t ulx = rectX(state, (*dl)[0].p1(12, 12));
-+            const uint32_t rawUlx = (*dl)[0].p1(12, 12);
+-            const int32_t ulx = (*dl)[0].p1(12, 12);
++            const int32_t ulx = signedRectX((*dl)[0].p1(12, 12));
              const int32_t uly = (*dl)[0].p1(0, 12);
--            const int32_t lrx = rectX(state, (*dl)[0].p0(12, 12));
+-            const int32_t lrx = (*dl)[0].p0(12, 12);
 +            const int32_t lrx = signedRectX((*dl)[0].p0(12, 12));
              const int32_t lry = (*dl)[0].p0(0, 12);
              const uint8_t tile = (*dl)[0].p1(24, 3);
- 
--            const int16_t uls = (*dl)[1].p0(16, 16);
--            const int16_t ult = (*dl)[1].p0(0, 16);
-+            int16_t uls = (*dl)[1].p0(16, 16);
-+            int16_t ult = (*dl)[1].p0(0, 16);
-             const int16_t dsdx = (*dl)[1].p1(16, 16);
-             const int16_t dtdy = (*dl)[1].p1(0, 16);
-+            const int32_t ulx = clippedRectLeft(
-+                state, rawUlx, true, dsdx, dtdy, uls, ult);
-             state->rdp->drawTexRect(ulx, uly, lrx, lry, tile, uls, ult, dsdx, dtdy, true);
-         }
  

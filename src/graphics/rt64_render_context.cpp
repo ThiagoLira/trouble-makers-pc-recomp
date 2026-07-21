@@ -17,6 +17,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
+#include <mutex>
+#include <string>
 
 #ifndef HLSL_CPU
 #define HLSL_CPU
@@ -37,6 +39,10 @@ namespace mm::graphics {
 namespace {
 
 std::atomic<OverlayDrawCallback> g_overlay_draw_callback{nullptr};
+
+int ring_queue_depth(int thread_cursor, int write_cursor, int queue_size) {
+    return (write_cursor - thread_cursor + queue_size) % queue_size;
+}
 
 // N64 bus addresses carry segment bits in the top byte; RT64 wants the
 // physical offset into RDRAM.
@@ -240,6 +246,13 @@ public:
             static_cast<unsigned int>(device.vendor),
             static_cast<unsigned long long>(device.driverVersion),
             static_cast<unsigned long long>(device.dedicatedVideoMemory / (1024 * 1024)));
+        if ((chosen_api == ultramodern::renderer::GraphicsApi::Vulkan) &&
+            ((device.name.find("llvmpipe") != std::string::npos) ||
+             (device.name.find("lavapipe") != std::string::npos) ||
+             (device.name.find("SwiftShader") != std::string::npos))) {
+            std::fprintf(stderr,
+                "[gfx] WARNING: software Vulkan device selected; performance will be extremely low\n");
+        }
         std::fprintf(stderr,
             "[gfx] antialiasing msaa=%ux%s ssaa=%dx sample-locations=%s\n",
             active_msaa,
@@ -254,8 +267,10 @@ public:
         // collapse into lines or solid blocks. RT64's ubershader consumes the
         // same draw data without the re-spirv specialization pass and renders
         // correctly.
-        // Keep the workaround scoped to the affected driver generation; the
-        // environment override makes testing a future driver fix immediate.
+        // Keep the workaround scoped to Blackwell. Applying it to every older
+        // NVIDIA GPU on a 610-series driver turns a correctness workaround into
+        // a substantial performance regression.
+        // The environment override makes testing a future driver fix immediate.
         bool ubershaders_only = false;
 #if defined(__linux__)
         if ((chosen_api == ultramodern::renderer::GraphicsApi::Vulkan) &&
@@ -264,9 +279,12 @@ public:
             constexpr uint64_t kNvidiaDriverMajorShift = 22;
             const uint32_t driver_major =
                 static_cast<uint32_t>(device.driverVersion >> kNvidiaDriverMajorShift);
+            const bool blackwell =
+                (device.name.find("NVIDIA GeForce RTX 50") != std::string::npos) ||
+                (device.name.find("Blackwell") != std::string::npos);
             ubershaders_only =
                 (device.vendor == RT64::RenderDeviceVendor::NVIDIA) &&
-                (driver_major >= 610);
+                blackwell && (driver_major >= 610);
         }
 #endif
         if (const char* env = std::getenv("MM_RT64_UBERSHADERS_ONLY")) {
@@ -380,6 +398,45 @@ public:
             std::chrono::steady_clock::now() - screen_started).count();
         mm::telemetry::record_screen_update(
             static_cast<std::uint64_t>(std::max<std::int64_t>(elapsed, 0)));
+
+        if ((screen_count % 60) == 0) {
+            int workload_thread = 0;
+            int workload_write = 0;
+            {
+                const std::scoped_lock lock(app_->workloadQueue->cursorMutex);
+                workload_thread = app_->workloadQueue->threadCursor;
+                workload_write = app_->workloadQueue->writeCursor;
+            }
+            int present_thread = 0;
+            int present_write = 0;
+            {
+                const std::scoped_lock lock(app_->presentQueue->cursorMutex);
+                present_thread = app_->presentQueue->threadCursor;
+                present_write = app_->presentQueue->writeCursor;
+            }
+            std::uint64_t texture_slots = 0;
+            std::uint64_t resident_textures = 0;
+            {
+                const std::scoped_lock lock(app_->textureCache->textureMapMutex);
+                texture_slots = app_->textureCache->textureMap.textures.size();
+                resident_textures = static_cast<std::uint64_t>(std::count_if(
+                    app_->textureCache->textureMap.textures.begin(),
+                    app_->textureCache->textureMap.textures.end(),
+                    [](const RT64::Texture* texture) { return texture != nullptr; }));
+            }
+            std::uint64_t pending_texture_uploads = 0;
+            {
+                const std::scoped_lock lock(app_->textureCache->uploadQueueMutex);
+                pending_texture_uploads = app_->textureCache->uploadQueue.size();
+            }
+            mm::telemetry::set_renderer_state(
+                static_cast<std::uint32_t>(ring_queue_depth(
+                    workload_thread, workload_write, WORKLOAD_QUEUE_SIZE)),
+                static_cast<std::uint32_t>(ring_queue_depth(
+                    present_thread, present_write, PRESENT_QUEUE_SIZE)),
+                app_->rasterShaderCache->shaderCount(), resident_textures,
+                texture_slots, pending_texture_uploads);
+        }
 
         if (screen_count == 1 || screen_count % 300 == 0) {
             std::uint32_t width = 0;

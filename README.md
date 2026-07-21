@@ -163,10 +163,12 @@ Entity spawn/despawn windows are widened to match, so objects no longer pop
 in at the wing edges.
 Opening/in-stage cinematics automatically switch back to centered 4:3 and
 return to widescreen only after player control is stable. NPC conversations
-during gameplay remain widescreen. A small remaining fallback set currently
-stays 4:3 while its fixed-canvas composition is being validated (scenes 25,
-27, 57, 71, 79, and 85). Vertigo and Seasick Climb now render their rotating
-textured walls in widescreen without framebuffer trails.
+during gameplay remain widescreen. A small fallback set stays centered 4:3
+because those scenes author a fixed 320x240 canvas (scenes 13, 25, 27, 57, 69,
+71, 79, and 85). This includes Vertigo and Seasick Climb: their rotating walls
+and 3D platforms retain the correct textures and fully overwrite the canvas
+without framebuffer trails, while ordinary scrolling stages remain genuinely
+expanded.
 See the live [scene 22 capture](screenshots/widescreen-scene-22.png), the
 [forest artifact comparison](screenshots/widescreen-forest-fix.png), and the
 labeled [coverage](screenshots/widescreen-coverage-scenes.png) and
@@ -181,6 +183,13 @@ Run the complete playable-level screenshot/crash suite with:
 tools/test_widescreen_playable.sh ./build/src/game/troublemakers path/to/rom.z64 /tmp/mm-widescreen-suite
 ```
 
+Run the dense rotation-stage regression matrix in 4:3 and with a widescreen
+preference, at native 60 and display-rate interpolation, with:
+
+```sh
+tools/test_rotation_regressions.sh ./build/src/game/troublemakers path/to/rom.z64 /tmp/mm-rotation-suite
+```
+
 On KDE Wayland, set `MM_VIDEO_DRIVER=wayland`; the suite uses Spectacle for
 native active-window captures instead of X11/XWayland window IDs.
 
@@ -189,6 +198,9 @@ waits for authoritative player-control state, moves Marina in short alternating
 bursts, audits expanded tile layers for wing coverage, and writes a TSV manifest
 plus a multi-frame contact sheet and log for every level. For transient 3D
 problems, capture a sustained frame sequence with `tools/test_render_burst.sh`.
+The rotation suite uses 64 dense frames per case and rejects the neutral gray
+slab produced by a missing platform material; its contact sheets still require
+visual review for trails and texture correctness.
 
 Display options persist to `display.cfg` and input mappings to `controls.json`
 in the app config folder (CLI display options override the file). In game:
@@ -230,10 +242,12 @@ distro you want to support: the AppImage requires the build machine's glibc
 or newer. Put a `portable.txt` next to the AppImage to keep config/saves in
 that folder instead of `~/.config/troublemakers-recomp`.
 
-On Linux, NVIDIA 610-series and newer drivers automatically use RT64's
-ubershader path to avoid a driver-specific corruption of text and sprites.
-Set `MM_RT64_UBERSHADERS_ONLY=1` to force that path when diagnosing a similar
-problem, or `MM_RT64_UBERSHADERS_ONLY=0` to disable the workaround.
+On Linux, GeForce RTX 50-series/Blackwell GPUs using NVIDIA 610-series and
+newer drivers automatically use RT64's ubershader path to avoid a
+driver-specific corruption of text and sprites. Older NVIDIA generations keep
+the faster specialized-shader path. Set `MM_RT64_UBERSHADERS_ONLY=1` to force
+the workaround when diagnosing a similar problem, or
+`MM_RT64_UBERSHADERS_ONLY=0` to disable it.
 
 CI (`.github/workflows/build.yml`) builds both the Linux AppImage and the
 Windows package on every push and uploads them as artifacts. Release CI needs
@@ -288,12 +302,13 @@ details, and the newest output. Each captured line has an elapsed timestamp.
 
 While the game is running, the log records a compact diagnostic snapshot every
 five seconds. These snapshots include native frame cadence and slow-frame
-counts, VI/screen/display-list rates, CPU submission time, active display and
-render scale, audio conversion and queue health, and a progress watchdog. The
-same log also identifies the CPU, memory, GPU/driver, SDL backends, resolved
-display settings, lifecycle milestones, and scene transitions. The hot paths
-only update counters; formatting and file output happen on the background
-reporter interval.
+counts, VI/screen/display-list rates, CPU submission time, renderer queue and
+texture/upload occupancy, process RSS/thread count, active display and render
+scale, audio conversion and queue health, and a progress watchdog. The same log
+also identifies the CPU, memory, GPU/driver, SDL backends, resolved display
+settings, lifecycle milestones, and scene transitions. The hot paths only
+update counters; formatting and file output happen on the background reporter
+interval.
 
 For a crash or gameplay bug, reproduce it once, relaunch the game, open
 **Support**, and choose **Copy previous session**. Paste that report into the
@@ -319,6 +334,10 @@ boot" to "playable", every mission brief, and the debugging recipes — lives in
 [`docs/`](docs/). It is written to
 onboard an AI agent (or you) in one sitting. Headless dev harness:
 `MM_HEADLESS_GFX=1` runs the full game loop with no GPU.
+
+For optimized native sampling, long-session telemetry interpretation, measured
+slowdown causes, and the current optimization backlog, see
+[`docs/PERFORMANCE.md`](docs/PERFORMANCE.md).
 
 ## Licensing
 

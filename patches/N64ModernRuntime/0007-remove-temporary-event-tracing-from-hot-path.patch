@@ -1,0 +1,159 @@
+From 2d613834cde3a11a915c14918fbc057feaa1c0be Mon Sep 17 00:00:00 2001
+From: Thiago Lira <thlira15@gmail.com>
+Date: Mon, 20 Jul 2026 23:30:00 -0300
+Subject: [PATCH] Remove temporary event tracing from hot path
+
+The MM_EVENT_TRACE bring-up instrumentation is no longer needed now that the
+renderer and queue profiles are stable. Even while disabled, its out-of-line
+queue predicate took 0.185 sampled CPU-second in a 90-second soak and every
+external delivery carried an unused path string.
+
+Remove the temporary checks from message send/receive and completion paths.
+This leaves the normal runtime behavior unchanged while eliminating diagnostic
+branches from functions called many times per frame.
+---
+ ultramodern/src/events.cpp    | 14 --------------
+ ultramodern/src/mesgqueue.cpp | 35 ++++++-----------------------------
+ 2 files changed, 6 insertions(+), 43 deletions(-)
+
+diff --git a/ultramodern/src/events.cpp b/ultramodern/src/events.cpp
+index bbd3ba5..518529d 100644
+--- a/ultramodern/src/events.cpp
++++ b/ultramodern/src/events.cpp
+@@ -249,29 +249,15 @@ void vi_thread_func() {
+     }
+ }
+ 
+-// TEMP (trouble-makers bring-up): event-flow tracing, enabled by MM_EVENT_TRACE=1.
+-bool mm_event_trace() {
+-    static const bool enabled = getenv("MM_EVENT_TRACE") != nullptr;
+-    return enabled;
+-}
+-
+ void sp_complete() {
+     uint8_t* rdram = events_context.rdram;
+     std::lock_guard lock{ events_context.message_mutex };
+-    if (mm_event_trace()) {
+-        static int n = 0;
+-        fprintf(stderr, "[ev] sp_complete #%d -> mq %08X\n", ++n, (uint32_t)events_context.sp.mq);
+-    }
+     ultramodern::enqueue_external_message_src(events_context.sp.mq, events_context.sp.msg, false, ultramodern::EventMessageSource::Sp);
+ }
+ 
+ void dp_complete() {
+     uint8_t* rdram = events_context.rdram;
+     std::lock_guard lock{ events_context.message_mutex };
+-    if (mm_event_trace()) {
+-        static int n = 0;
+-        fprintf(stderr, "[ev] dp_complete #%d -> mq %08X\n", ++n, (uint32_t)events_context.dp.mq);
+-    }
+     ultramodern::enqueue_external_message_src(events_context.dp.mq, events_context.dp.msg, false, ultramodern::EventMessageSource::Dp);
+ }
+ 
+diff --git a/ultramodern/src/mesgqueue.cpp b/ultramodern/src/mesgqueue.cpp
+index ae57146..0c975bd 100644
+--- a/ultramodern/src/mesgqueue.cpp
++++ b/ultramodern/src/mesgqueue.cpp
+@@ -44,12 +44,7 @@ void ultramodern::enqueue_external_message(PTR(OSMesgQueue) mq, OSMesg msg, bool
+ 
+ bool do_send(RDRAM_ARG PTR(OSMesgQueue) mq_, OSMesg msg, bool jam, bool block);
+ 
+-static bool mm_q_trace(uint32_t mq); // TEMP (trouble-makers bring-up), defined below
+-
+-static bool try_deliver_external_message(RDRAM_ARG const QueuedMessage& to_send, const char* path) {
+-    if (mm_q_trace((uint32_t)to_send.mq)) {
+-        fprintf(stderr, "[ev] deq   mq %08X (%s)\n", (uint32_t)to_send.mq, path);
+-    }
++static bool try_deliver_external_message(RDRAM_ARG const QueuedMessage& to_send) {
+     return do_send(PASS_RDRAM to_send.mq, to_send.mesg, to_send.jam, false) ||
+         !to_send.requeue_if_blocked;
+ }
+@@ -61,7 +56,7 @@ void dequeue_external_messages(RDRAM_ARG1) {
+     const size_t retry_count = deferred_messages.size();
+     for (size_t i = 0; i < retry_count; ++i) {
+         const QueuedMessage to_send = deferred_messages[i];
+-        if (!try_deliver_external_message(PASS_RDRAM to_send, "deferred")) {
++        if (!try_deliver_external_message(PASS_RDRAM to_send)) {
+             deferred_messages[still_deferred++] = to_send;
+         }
+     }
+@@ -71,7 +66,7 @@ void dequeue_external_messages(RDRAM_ARG1) {
+     // producer streams that wait_dequeue alone can starve.
+     QueuedMessage to_send;
+     while (external_messages.try_dequeue(to_send)) {
+-        if (!try_deliver_external_message(PASS_RDRAM to_send, "drain")) {
++        if (!try_deliver_external_message(PASS_RDRAM to_send)) {
+             deferred_messages.push_back(to_send);
+         }
+     }
+@@ -80,7 +75,7 @@ void dequeue_external_messages(RDRAM_ARG1) {
+ void ultramodern::wait_for_external_message(RDRAM_ARG1) {
+     QueuedMessage to_send;
+     external_messages.wait_dequeue(to_send);
+-    if (!try_deliver_external_message(PASS_RDRAM to_send, "wait")) {
++    if (!try_deliver_external_message(PASS_RDRAM to_send)) {
+         deferred_messages.push_back(to_send);
+     }
+     // Deliver everything else that's pending, not just the first message.
+@@ -96,7 +91,7 @@ void ultramodern::wait_for_external_message_timed(RDRAM_ARG u32 millis) {
+ void ultramodern::wait_for_external_message_timed(RDRAM_ARG u32 millis) {
+     QueuedMessage to_send;
+     if (external_messages.wait_dequeue_timed(to_send, std::chrono::milliseconds{millis})) {
+-        if (!try_deliver_external_message(PASS_RDRAM to_send, "timed")) {
++        if (!try_deliver_external_message(PASS_RDRAM to_send)) {
+             deferred_messages.push_back(to_send);
+         }
+         // A fresh host event is also the retry signal for older blocked
+@@ -127,35 +122,19 @@ s32 MQ_IS_FULL(OSMesgQueue* mq) {
+     return MQ_GET_COUNT(mq) >= mq->msgCount;
+ }
+ 
+-// TEMP (trouble-makers bring-up): per-queue tracing via MM_EVENT_TRACE=1 for
+-// the game's DP (0x8012ABF0), audio SP (0x801377D0) and VI (0x8012ABC0) queues.
+-static bool mm_q_trace(uint32_t mq) {
+-    static const bool enabled = getenv("MM_EVENT_TRACE") != nullptr;
+-    if (!enabled) return false;
+-    return mq == 0x8012ABF0u || mq == 0x801377D0u || mq == 0x8012ABC0u;
+-}
+-
+ bool do_send(RDRAM_ARG PTR(OSMesgQueue) mq_, OSMesg msg, bool jam, bool block) {
+     OSMesgQueue* mq = TO_PTR(OSMesgQueue, mq_);
+     if (!block) {
+         // If non-blocking, fail if the queue is full.
+         if (MQ_IS_FULL(mq)) {
+-            if (mm_q_trace((uint32_t)mq_)) {
+-                fprintf(stderr, "[ev] send  mq %08X FULL (dropped or requeued)\n", (uint32_t)mq_);
+-            }
+             return false;
+         }
+     }
+-    if (mm_q_trace((uint32_t)mq_)) {
+-        fprintf(stderr, "[ev] send  mq %08X ok valid=%d->%d\n", (uint32_t)mq_, mq->validCount, mq->validCount + 1);
+-    }
+-    else {
+-        // Otherwise, yield this thread until the queue has room.
+-        while (MQ_IS_FULL(mq)) {
+-            debug_printf("[Message Queue] Thread %d is blocked on send\n", TO_PTR(OSThread, ultramodern::this_thread())->id);
+-            ultramodern::thread_queue_insert(PASS_RDRAM GET_MEMBER(OSMesgQueue, mq_, blocked_on_send), ultramodern::this_thread());
+-            ultramodern::run_next_thread_and_wait(PASS_RDRAM1);
+-        }
++    // Otherwise, yield this thread until the queue has room.
++    while (MQ_IS_FULL(mq)) {
++        debug_printf("[Message Queue] Thread %d is blocked on send\n", TO_PTR(OSThread, ultramodern::this_thread())->id);
++        ultramodern::thread_queue_insert(PASS_RDRAM GET_MEMBER(OSMesgQueue, mq_, blocked_on_send), ultramodern::this_thread());
++        ultramodern::run_next_thread_and_wait(PASS_RDRAM1);
+     }
+     
+     if (jam) {
+@@ -182,9 +161,6 @@ bool do_send(RDRAM_ARG PTR(OSMesgQueue) mq_, OSMesg msg, bool jam, bool block) {
+ 
+ bool do_recv(RDRAM_ARG PTR(OSMesgQueue) mq_, PTR(OSMesg) msg_, bool block) {
+     OSMesgQueue* mq = TO_PTR(OSMesgQueue, mq_);
+-    if (mm_q_trace((uint32_t)mq_)) {
+-        fprintf(stderr, "[ev] recv  mq %08X valid=%d block=%d\n", (uint32_t)mq_, mq->validCount, block);
+-    }
+     if (!block) {
+         // If non-blocking, fail if the queue is empty
+         if (MQ_IS_EMPTY(mq)) {
+-- 
+2.54.0

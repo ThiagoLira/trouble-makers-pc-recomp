@@ -19,8 +19,10 @@ folder is the deep history. Read in this order:
 | `PHASE5_NOTES_c.md` | Release build + the AI_LEN mirror (real audio pacing; fixed pacing 17→58fps) |
 | `PHASE6_NOTES_a/b.md` | Widescreen groundwork: the view cull rect lever (D_800BE568..574); RT64 Expand + stale-wing analysis |
 | `PHASE7_NOTES_widescreen.md` | **Real widescreen** (branch `real-widescreen` @ f1b0a85): walking-pointer root cause, catch-all repack, RT64 dual-path wing clear, MM_WARP debug tool, opt-in wing fills. Read §2 and §4 BEFORE touching the tile draws — §4 lists conclusions we falsified |
+| `PHASE8_NOTES_rotation_wall.md` | Resolved Vertigo/Seasick wall and 3D-platform material failure: exact actor/list ownership, removed clear/LOD hacks, fixed-canvas policy, and dense regression matrix |
 | `TERRAIN_POP_INVESTIGATION.md` | Current playable-widescreen terrain-pop investigation: proved layer ownership, falsified fixes, exact A/B commands, evidence, and the next experiment |
 | `DIALOGUE_TOOLCHAIN_REGRESSION.md` | July 2026 release regression: GCC 11 corrupted dialogue/display-list code; compiler boundary, package A/B proof, fix, and Wayland validation gate |
+| `PERFORMANCE.md` | Native profiling workflow, measured startup/long-session slowdown causes, runtime/launcher fixes, and ranked optimization opportunities |
 
 ## 2. Mission prompts (`prompts/`)
 
@@ -33,8 +35,10 @@ nothing, RESULT blocks) and the repro recipes that worked.
 - **Headless harness**: `cmake -B build_headless -DMM_BUILD_GRAPHICS=OFF`,
   then `MM_HEADLESS_GFX=1 SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy
   ./build_headless/src/game/troublemakers rom.z64` — full game loop, no GPU.
-- **Event tracing**: `MM_EVENT_TRACE=1` (runtime patch) traces sp/dp
-  completions and the interesting message queues on stderr.
+- **Runtime diagnostics**: `logs/latest.log` records bounded five-second
+  performance/audio/watchdog snapshots. Reproduce for at least 15 seconds,
+  relaunch, and use **Support > Copy previous session**. The obsolete
+  `MM_EVENT_TRACE` hot-path instrumentation is removed by runtime patch 0007.
 - **The submodule rule**: `lib/N64ModernRuntime` is pinned to UPSTREAM; the
   local working tree runs branch `tm-fixes` = pin + `patches/N64ModernRuntime/`
   applied (`git -C lib/N64ModernRuntime am "$(pwd)"/patches/N64ModernRuntime/*.patch`).
@@ -55,8 +59,8 @@ nothing, RESULT blocks) and the repro recipes that worked.
   F3DEX) + **aspMain** (RSPRecomp'd, IMEM
   base **0x04001080**), saves to **4Kbit EEPROM**, and pokes exactly one
   hardware register raw (AI_LEN — mirrored, see PHASE5_NOTES_c.md).
-- Temp diagnostics still in tree (marked TEMP): `[gfx]`/`[mm_rsp]` stderr
-  counters, MM_EVENT_TRACE. Strip before a proper release.
+- Historical phase notes mention temporary `[gfx]`/`[mm_rsp]` counters and
+  `MM_EVENT_TRACE`; current builds use the bounded session logger instead.
 
 ## 3.5 WORKSPACE RULE learned the hard way (Phase 7)
 
