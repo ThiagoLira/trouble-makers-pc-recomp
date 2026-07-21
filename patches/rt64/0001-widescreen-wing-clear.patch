@@ -27,118 +27,11 @@ index ffabdbf..dab74d9 100644
          };
  
          struct F3DEX {
-diff --git a/src/gbi/rt64_gbi_rdp.cpp b/src/gbi/rt64_gbi_rdp.cpp
-index 6255872..a4338c1 100644
---- a/src/gbi/rt64_gbi_rdp.cpp
-+++ b/src/gbi/rt64_gbi_rdp.cpp
-@@ -10,6 +10,17 @@
- 
- namespace RT64 {
-     namespace GBI_RDP {
-+        static int32_t rectX(State *state, uint32_t value) {
-+            // The RDP rectangle fields are 12-bit fixed-point values. MM's
-+            // widescreen hooks intentionally submit rectangles left of x=0;
-+            // preserve their two's-complement sign while the wing path is on.
-+            if (state->ext.enhancementConfig->rect.clearWings && ((value & 0x800U) != 0)) {
-+                return static_cast<int32_t>(value | ~0xFFFU);
-+            }
-+
-+            return static_cast<int32_t>(value);
-+        }
-+
-         void noOp(State *state, DisplayList **dl) {
-             // Do nothing.
-         }
-@@ -169,9 +180,9 @@ namespace RT64 {
-         }
- 
-         void texrect(State *state, DisplayList **dl) {
--            const int32_t ulx = (*dl)->p1(12, 12);
-+            const int32_t ulx = rectX(state, (*dl)->p1(12, 12));
-             const int32_t uly = (*dl)->p1(0, 12);
--            const int32_t lrx = (*dl)->p0(12, 12);
-+            const int32_t lrx = rectX(state, (*dl)->p0(12, 12));
-             const int32_t lry = (*dl)->p0(0, 12);
-             const uint8_t tile = (*dl)->p1(24, 3);
-             *dl = *dl + 1;
-@@ -186,9 +197,9 @@ namespace RT64 {
-         }
-         
-         void texrectFlip(State *state, DisplayList **dl) {
--            const int32_t ulx = (*dl)->p1(12, 12);
-+            const int32_t ulx = rectX(state, (*dl)->p1(12, 12));
-             const int32_t uly = (*dl)->p1(0, 12);
--            const int32_t lrx = (*dl)->p0(12, 12);
-+            const int32_t lrx = rectX(state, (*dl)->p0(12, 12));
-             const int32_t lry = (*dl)->p0(0, 12);
-             const uint8_t tile = (*dl)->p1(24, 3);
-             *dl = *dl + 1;
-@@ -205,9 +216,9 @@ namespace RT64 {
- 
-         // TODO replace the normal rect commands with these and pass a temporary RDP buffer when rdphalf_2 is run in the RSP
-         void texrectLLE(State* state, DisplayList** dl) {
--            const int32_t ulx = (*dl)[0].p1(12, 12);
-+            const int32_t ulx = rectX(state, (*dl)[0].p1(12, 12));
-             const int32_t uly = (*dl)[0].p1(0, 12);
--            const int32_t lrx = (*dl)[0].p0(12, 12);
-+            const int32_t lrx = rectX(state, (*dl)[0].p0(12, 12));
-             const int32_t lry = (*dl)[0].p0(0, 12);
-             const uint8_t tile = (*dl)[0].p1(24, 3);
- 
-@@ -219,9 +230,9 @@ namespace RT64 {
-         }
- 
-         void texrectFlipLLE(State* state, DisplayList** dl) {
--            const int32_t ulx = (*dl)[0].p1(12, 12);
-+            const int32_t ulx = rectX(state, (*dl)[0].p1(12, 12));
-             const int32_t uly = (*dl)[0].p1(0, 12);
--            const int32_t lrx = (*dl)[0].p0(12, 12);
-+            const int32_t lrx = rectX(state, (*dl)[0].p0(12, 12));
-             const int32_t lry = (*dl)[0].p0(0, 12);
-             const uint8_t tile = (*dl)[0].p1(24, 3);
- 
 diff --git a/src/hle/rt64_state.cpp b/src/hle/rt64_state.cpp
-index 6b0bb31..5c156c1 100644
+index 6b0bb31..9fbbd31 100644
 --- a/src/hle/rt64_state.cpp
 +++ b/src/hle/rt64_state.cpp
-@@ -298,14 +298,21 @@ namespace RT64 {
-                     dstRDPTile.stride = int(tile.line) << 3;
-                     dstRDPTile.address = int(tile.tmem) << 3;
-                     dstRDPTile.palette = tile.palette;
--                    dstRDPTile.masks = (tile.masks > 0) ? (1 << tile.masks) : 0;
--                    dstRDPTile.maskt = (tile.maskt > 0) ? (1 << tile.maskt) : 0;
-+                    extern int mm_widescreen_rotation_wall_wrap();
-+                    const bool rotationWallWrap =
-+                        mm_widescreen_rotation_wall_wrap() != 0;
-+                    dstRDPTile.masks = (tile.masks > 0) ? (1 << tile.masks) :
-+                        (rotationWallWrap ? 32 : 0);
-+                    dstRDPTile.maskt = (tile.maskt > 0) ? (1 << tile.maskt) :
-+                        (rotationWallWrap ? 32 : 0);
-                     dstRDPTile.shifts = ShiftScaleMap[tile.shifts];
-                     dstRDPTile.shiftt = ShiftScaleMap[tile.shiftt];
-                     dstRDPTile.uls = float(tile.uls);
-                     dstRDPTile.ult = float(tile.ult);
--                    dstRDPTile.cms = tile.cms | ((tile.masks == 0) ? G_TX_CLAMP : 0);
--                    dstRDPTile.cmt = tile.cmt | ((tile.maskt == 0) ? G_TX_CLAMP : 0);
-+                    dstRDPTile.cms = tile.cms |
-+                        (((tile.masks == 0) && !rotationWallWrap) ? G_TX_CLAMP : 0);
-+                    dstRDPTile.cmt = tile.cmt |
-+                        (((tile.maskt == 0) && !rotationWallWrap) ? G_TX_CLAMP : 0);
- 
-                     // Since we can't simulate not sending the triangle coefficients individually and it falls in the realm
-                     // of undefined behavior, when the texture state is off, we merely clamp the result.
-@@ -399,8 +406,8 @@ namespace RT64 {
-                             }
-                         };
- 
--                        uint8_t nativeCms = (tile.masks == 0) ? (tile.cms | G_TX_CLAMP) : tile.cms;
--                        uint8_t nativeCmt = (tile.maskt == 0) ? (tile.cmt | G_TX_CLAMP) : tile.cmt;
-+                        uint8_t nativeCms = ((tile.masks == 0) && !rotationWallWrap) ? (tile.cms | G_TX_CLAMP) : tile.cms;
-+                        uint8_t nativeCmt = ((tile.maskt == 0) && !rotationWallWrap) ? (tile.cmt | G_TX_CLAMP) : tile.cmt;
-                         dstRDPTile.nativeSampler = nativeSamplerFromAddressing(nativeCms, nativeCmt);;
-                     }
-                     else {
-@@ -1248,6 +1255,10 @@ namespace RT64 {
+@@ -1248,6 +1248,10 @@ namespace RT64 {
                          drawParams.deltaTimeMs = 0.0f;
 -                        drawParams.ubershadersOnly = false;
 +                        // Keep the mid-frame submission path on the same shader
@@ -150,7 +43,7 @@ index 6b0bb31..5c156c1 100644
                          drawParams.postBlendNoise = ext.emulatorConfig->dither.postBlendNoise;
                          drawParams.postBlendNoiseNegative = ext.emulatorConfig->dither.postBlendNoiseNegative;
                          drawParams.maxGameCall = UINT_MAX;
-@@ -2736,4 +2747,4 @@ namespace RT64 {
+@@ -2736,4 +2740,4 @@ namespace RT64 {
              break;
          }
      }
@@ -175,7 +68,7 @@ index 5b0b726..2db3f9e 100644
 +        }
 +
          uint32_t msaaSampleCount = ext.sharedResources->userConfig.msaaSampleCount();
-@@ -247,6 +247,7 @@ namespace RT64 {
+@@ -247,6 +256,7 @@ namespace RT64 {
  #   endif
          
          workloadConfig.fixRectLR = ext.sharedResources->enhancementConfig.rect.fixRectLR;
@@ -183,7 +76,7 @@ index 5b0b726..2db3f9e 100644
          workloadConfig.postBlendNoise = ext.sharedResources->emulatorConfig.dither.postBlendNoise;
          workloadConfig.postBlendNoiseNegative = ext.sharedResources->emulatorConfig.dither.postBlendNoiseNegative;
          
-@@ -620,6 +621,7 @@ namespace RT64 {
+@@ -620,6 +630,7 @@ namespace RT64 {
                      drawParams.deltaTimeMs = deltaTimeMs;
                      drawParams.ubershadersOnly = ubershadersOnly;
                      drawParams.fixRectLR = workloadConfig.fixRectLR;
@@ -207,7 +100,7 @@ diff --git a/src/render/rt64_framebuffer_renderer.cpp b/src/render/rt64_framebuf
 index c4cf1bf..eef8d11 100644
 --- a/src/render/rt64_framebuffer_renderer.cpp
 +++ b/src/render/rt64_framebuffer_renderer.cpp
-@@ -1274,6 +1274,63 @@ namespace RT64 {
+@@ -1274,6 +1274,57 @@ namespace RT64 {
  
          bool depthState = false;
          worker->commandList->setFramebuffer(targetDrawCall.fbStorage->colorDepthWrite.get());
@@ -223,14 +116,16 @@ index c4cf1bf..eef8d11 100644
 +        // scene draws, so 3D geometry (whose projection IS widened by the
 +        // aspect-ratio scale) redraws fresh into the wings while 2D stays put.
 +        // See PHASE6_NOTES_b.md. Gated by enhancementConfig.rect.clearWings.
-+        // Mischief Makers host hook. Rotating-camera scenes require a fresh
-+        // HD color canvas or old sprite pixels form long trails.
-+        extern int mm_widescreen_force_frame_clear();
-+        const bool forceFrameClear = mm_widescreen_force_frame_clear() != 0;
-+        if ((framebuffer.clearWings || forceFrameClear) && (colorTarget != nullptr) && (colorTarget->width > 0) && (colorTarget->height > 0) &&
-+            (wingClearFrame[colorTarget] != framebuffer.submissionFrame)) {
-+            wingClearFrame[colorTarget] = framebuffer.submissionFrame;
-+            {
++        if (framebuffer.clearWings && (colorTarget != nullptr) &&
++            (colorTarget->width > 0) && (colorTarget->height > 0)) {
++            // Bound the bookkeeping to the current submission. Render-target
++            // recreation during long sessions must not grow this map forever.
++            if (wingClearSubmissionFrame != framebuffer.submissionFrame) {
++                wingClearFrame.clear();
++                wingClearSubmissionFrame = framebuffer.submissionFrame;
++            }
++            if (wingClearFrame.emplace(
++                    colorTarget, framebuffer.submissionFrame).second) {
 +                // [MM] Wing width = target width minus the game content width.
 +                // Content width = fbWidth * pure resolution multiplier (the Y
 +                // scale; X additionally carries the aspect widening). This works
@@ -241,29 +136,21 @@ index c4cf1bf..eef8d11 100644
 +                const int32_t fullW = static_cast<int32_t>(colorTarget->width);
 +                const int32_t fullH = static_cast<int32_t>(colorTarget->height);
 +                const int32_t innerW = static_cast<int32_t>(std::lround(framebuffer.contentWidth));
-+                if (forceFrameClear) {
-+                    // Both affected rotation stages author a dark burgundy
-+                    // feedback canvas. Reset to its base tone: black removes
-+                    // the trails too, but also erases the intended field.
-+                    const RenderColor clearColor(0.20f, 0.035f, 0.0f, 1.0f);
-+                    const RenderRect fullFrame(0, 0, fullW, fullH);
-+                    worker->commandList->clearColor(0, clearColor, &fullFrame, 1);
-+                }
-+                else if (innerW <= 0 || innerW + 2 > fullW) { /* no wings */ }
-+                else {
-+                const int32_t leftEdge = (fullW - innerW) / 2;
-+                const int32_t rightEdge = leftEdge + innerW;
-+                // [MM] Wing clear color — black by default. Tweak here if the
-+                // game's natural off-stage background is a different solid color.
-+                const RenderColor wingColor(0.0f, 0.0f, 0.0f, 1.0f);
-+                if (leftEdge > 0) {
-+                    const RenderRect leftWing(0, 0, leftEdge, fullH);
-+                    worker->commandList->clearColor(0, wingColor, &leftWing, 1);
-+                }
-+                if (rightEdge < fullW) {
-+                    const RenderRect rightWing(rightEdge, 0, fullW, fullH);
-+                    worker->commandList->clearColor(0, wingColor, &rightWing, 1);
-+                }
++                if (innerW > 0 && innerW + 2 <= fullW) {
++                    const int32_t leftEdge = (fullW - innerW) / 2;
++                    const int32_t rightEdge = leftEdge + innerW;
++                    const RenderColor wingColor(0.0f, 0.0f, 0.0f, 1.0f);
++                    if (leftEdge > 0) {
++                        const RenderRect leftWing(0, 0, leftEdge, fullH);
++                        worker->commandList->clearColor(
++                            0, wingColor, &leftWing, 1);
++                    }
++                    if (rightEdge < fullW) {
++                        const RenderRect rightWing(
++                            rightEdge, 0, fullW, fullH);
++                        worker->commandList->clearColor(
++                            0, wingColor, &rightWing, 1);
++                    }
 +                }
 +            }
 +        }
@@ -271,18 +158,17 @@ index c4cf1bf..eef8d11 100644
          for (const auto &pair : targetDrawCall.sceneIndices) {
  #       if RT_ENABLED
              if (pair.second) {
-@@ -1359,6 +1416,10 @@ namespace RT64 {
+@@ -1359,6 +1410,9 @@ namespace RT64 {
          }
  
          Framebuffer &framebuffer = framebufferVector[framebufferCount - 1];
 +        framebuffer.clearWings = p.clearWings;
-+        framebuffer.aspectScale = (p.aspectRatioSource > 0.0f) ? (p.aspectRatioTarget / p.aspectRatioSource) : 1.0f;
 +        framebuffer.submissionFrame = p.submissionFrame;
 +        framebuffer.contentWidth = float(p.fbWidth) * p.resolutionScale.y;
          void *paramBufferBytes = framebuffer.paramsBuffer->map();
          memcpy(paramBufferBytes, &fbParams, sizeof(interop::FramebufferParams));
          framebuffer.paramsBuffer->unmap();
-@@ -1688,7 +1749,28 @@ namespace RT64 {
+@@ -1688,7 +1742,28 @@ namespace RT64 {
                              break;
                          }
  
@@ -312,7 +198,7 @@ index c4cf1bf..eef8d11 100644
                          
                          if (triangles.vertexTestZ) {
                              if ((proj.type == Projection::Type::Perspective) || (proj.type == Projection::Type::Orthographic)) {
-@@ -1926,4 +2008,4 @@ namespace RT64 {
+@@ -1926,4 +2001,4 @@ namespace RT64 {
          unsigned int im3dVertexCount;
      };
  };
@@ -328,7 +214,6 @@ index f593ab0..cd2e8b9 100644
              std::set<RenderTarget *> transitionRenderTargetSet;
              RenderTargetDrawCall renderTargetDrawCall;
 +            bool clearWings = false; // [MM] per-framebuffer wing-clear request
-+            float aspectScale = 1.0f; // [MM] aspectRatioTarget/Source (1.0 = no widen)
 +            uint64_t submissionFrame = 0; // [MM] for once-per-frame wing clear
 +            float contentWidth = 0.0f; // [MM] game content width in target pixels
          };
@@ -338,6 +223,7 @@ index f593ab0..cd2e8b9 100644
 +        // per color target clears the wings; later records skip so content
 +        // drawn into the wings earlier in the frame is preserved.
 +        std::unordered_map<RenderTarget *, uint64_t> wingClearFrame;
++        uint64_t wingClearSubmissionFrame = UINT64_MAX;
          std::vector<BufferUploader *> pendingUploaders;
          uint32_t framebufferCount = 0;
  
@@ -349,28 +235,3 @@ index f593ab0..cd2e8b9 100644
              bool postBlendNoise;
              bool postBlendNoiseNegative;
              uint32_t maxGameCall;
-diff --git a/src/shaders/TextureSampler.hlsli b/src/shaders/TextureSampler.hlsli
-index 5164e16..54fc73f 100644
---- a/src/shaders/TextureSampler.hlsli
-+++ b/src/shaders/TextureSampler.hlsli
-@@ -65,8 +65,11 @@ void computeLOD(OtherMode otherMode, uint rdpTileCount, float2 primLOD, float re
-         tileIndex1 = clamp(tileBase + 1, 0, tileMax);
-     }
-     else {
--        lodFraction = 1.0f;
--
-+        // [MM] With texture LOD disabled (G_TL_TILE) the RDP resolves
-+        // LOD_FRAC to 0, so TRILERP-style combiners collapse to TEXEL0.
-+        // 1.0 here made Mischief Makers' rotation-stage wall panels sample
-+        // the stale, never-configured tile 1 instead of their texture.
-+        lodFraction = 0.0f;
-     }
- }
- 
-@@ -355,4 +358,4 @@ float4 sampleTexture(OtherMode otherMode, RenderFlags renderFlags, float2 inputU
-     }
-     
-     return textureColor;
--}
-\ No newline at end of file
-+}

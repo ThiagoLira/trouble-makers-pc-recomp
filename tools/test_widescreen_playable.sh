@@ -6,7 +6,7 @@ set -u
 
 usage() {
     echo "usage: $0 GAME_BINARY ROM OUTPUT_DIR [STAGE_INDEX ...]" >&2
-    echo "env: MM_VIDEO_DRIVER=x11|wayland MM_CAPTURE_DELAY=60 MM_CAPTURE_WARMUP=0 MM_CAPTURE_CAMERA_X= MM_CAPTURE_FRAMES=3 MM_CAPTURE_INTERVAL=0.35 MM_CAPTURE_GEOMETRY=1602x1022+39+59 MM_WINDOW=1600x900 MM_AUTO_ADVANCE=1 MM_TEST_MOVE=1|jet-right|jet-left|jet-bounce MM_TEST_ACTOR_TRACE=1 MM_TEST_STREAM_TRACE=1 MM_TEST_STREAM_CAMERA=x[,y]" >&2
+    echo "env: MM_VIDEO_DRIVER=x11|wayland MM_CAPTURE_DELAY=60 MM_CAPTURE_WARMUP=0 MM_CAPTURE_CAMERA_X= MM_CAPTURE_FRAMES=3 MM_CAPTURE_INTERVAL=0.35 MM_CAPTURE_GEOMETRY=1602x1022+39+59 MM_WINDOW=1600x900 MM_WIDESCREEN=0|1 MM_FPS=native|display|N MM_MSAA=0|2|4 MM_SSAA=1|2 MM_AUTO_ADVANCE=1 MM_TEST_MOVE=1|walk-right|jet-right|jet-left|jet-bounce MM_TEST_ACTOR_TRACE=1 MM_TEST_STREAM_TRACE=1 MM_TEST_STREAM_CAMERA=x[,y]" >&2
 }
 
 if (( $# < 3 )); then
@@ -25,6 +25,10 @@ capture_camera_x=${MM_CAPTURE_CAMERA_X:-}
 capture_geometry=${MM_CAPTURE_GEOMETRY:-1602x1022+39+59}
 window_size=${MM_WINDOW:-1600x900}
 video_driver=${MM_VIDEO_DRIVER:-x11}
+widescreen=${MM_WIDESCREEN:-1}
+fps=${MM_FPS:-native}
+msaa=${MM_MSAA:-0}
+ssaa=${MM_SSAA:-1}
 auto_advance=${MM_AUTO_ADVANCE:-1}
 capture_frames=${MM_CAPTURE_FRAMES:-3}
 capture_interval=${MM_CAPTURE_INTERVAL:-0.35}
@@ -73,6 +77,8 @@ case $video_driver in
 esac
 
 mkdir -p "$output_dir/logs"
+config_dir="$output_dir/config"
+mkdir -p "$config_dir"
 manifest="$output_dir/results.tsv"
 printf 'stage\tscene\tstatus\tscreenshot\n' >"$manifest"
 
@@ -82,13 +88,26 @@ game_window=
 
 find_game_window() {
     local window
+    local window_pid
     game_window=
-    command -v xdotool >/dev/null || return 1
-    window=$(xdotool search --onlyvisible --pid "$active_pid" 2>/dev/null | tail -1)
-    if [[ -n $window ]] &&
-        xdotool getwindowgeometry "$window" >/dev/null 2>&1; then
-        game_window=$window
-        return 0
+    if command -v xdotool >/dev/null; then
+        window=$(xdotool search --onlyvisible --pid "$active_pid" 2>/dev/null | tail -1)
+        if [[ -n $window ]] &&
+            xdotool getwindowgeometry "$window" >/dev/null 2>&1; then
+            game_window=$window
+            return 0
+        fi
+    fi
+    if command -v xprop >/dev/null; then
+        for window in $(xprop -root _NET_CLIENT_LIST_STACKING 2>/dev/null |
+                sed -nE 's/.*# //p' | tr ',' ' '); do
+            window_pid=$(xprop -id "$window" _NET_WM_PID 2>/dev/null |
+                sed -nE 's/.*= ([0-9]+).*/\1/p')
+            if [[ $window_pid == "$active_pid" ]]; then
+                game_window=$window
+                return 0
+            fi
+        done
     fi
     return 1
 }
@@ -155,7 +174,7 @@ is_requested() {
 
 is_fixed_4x3_stage() {
     case $1 in
-        11|27|47|52|56|57) return 0 ;;
+        11|13|21|27|47|52|56|57) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -174,13 +193,30 @@ for entry in "${playable[@]}"; do
     fast_window=
     game_window=
 
+    game_args=("$game" "$rom" --window "$window_size"
+        --fps "$fps" --ssaa "$ssaa")
+    if [[ $widescreen == 1 ]]; then
+        game_args+=(--widescreen)
+    else
+        game_args+=(--no-widescreen)
+    fi
+    if [[ $msaa != 0 ]]; then
+        game_args+=(--msaa "$msaa")
+    fi
+
+    test_move_4x3=$((1 - widescreen))
+    if is_fixed_4x3_stage "$stage"; then
+        test_move_4x3=1
+    fi
+
     setsid env MM_WARP_STAGE="$stage" MM_WARP_AT=1 MM_WARP_DELAY=1 \
         MM_TEST_AUTO_ADVANCE="$auto_advance" MM_TEST_MOVE="$test_move" \
+        MM_TEST_MOVE_4X3="$test_move_4x3" \
         MM_TEST_STREAM_TRACE="$stream_trace" \
         MM_TEST_STREAM_CAMERA="$stream_camera" \
+        APP_FOLDER_PATH="$config_dir" XDG_CONFIG_HOME="$config_dir" \
         MM_WIN_POS=40,40 SDL_VIDEODRIVER="$video_driver" \
-        "$game" "$rom" \
-        --window "$window_size" --widescreen >"$log" 2>&1 &
+        "${game_args[@]}" >"$log" 2>&1 &
     pid=$!
     active_pid=$pid
 
@@ -208,7 +244,7 @@ for entry in "${playable[@]}"; do
             continue
         fi
         current_mode=$(grep '\[widescreen\] mode=' "$log" 2>/dev/null | tail -1)
-        if is_fixed_4x3_stage "$stage"; then
+        if [[ $widescreen != 1 ]] || is_fixed_4x3_stage "$stage"; then
             if grep -q "\[widescreen\] gameplay-ready scene=$scene" \
                 "$log" 2>/dev/null; then
                 reached_gameplay=1
@@ -277,7 +313,7 @@ for entry in "${playable[@]}"; do
         # draws in expanded gameplay. Any partially empty 70-tile wing is a
         # render-quality failure even if the process stayed alive; this catches
         # the Taurus 4:3 layer box that the original crash-only suite missed.
-        if ! is_fixed_4x3_stage "$stage" &&
+        if [[ $widescreen == 1 ]] && ! is_fixed_4x3_stage "$stage" &&
             grep -Eq 'wings=([0-9]|[1-6][0-9])/70' "$log"; then
             layer_ok=0
             echo "  FAILED incomplete widescreen layer (see $log)" >&2
@@ -305,13 +341,19 @@ for entry in "${playable[@]}"; do
     active_pid=
     fast_window=
     game_window=
-    if (( capture_ok && stopped_by_suite && layer_ok )); then
+    fatal_log=0
+    if grep -Eqi \
+        'segmentation fault|assertion.*failed|fatal error|aborted|RT64 setup failed' \
+        "$log"; then
+        fatal_log=1
+    fi
+    if (( capture_ok && stopped_by_suite && layer_ok && !fatal_log )); then
         status=pass
         ((passes += 1))
     else
         status=fail
         ((failures += 1))
-        echo "  FAILED rc=$rc gameplay=$reached_gameplay capture=$capture_ok (see $log)" >&2
+        echo "  FAILED rc=$rc gameplay=$reached_gameplay capture=$capture_ok fatal=$fatal_log (see $log)" >&2
         tail -20 "$log" >&2
     fi
     printf '%s\t%s\t%s\t%s\n' "$stage" "$scene" "$status" "$screenshot" >>"$manifest"

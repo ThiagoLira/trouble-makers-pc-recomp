@@ -2,6 +2,7 @@ input/
 RecompiledFuncs/
 build/
 build_probe/
+build-profile/
 .cache/
 reference/
 *.z64

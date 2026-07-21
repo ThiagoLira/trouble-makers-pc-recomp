@@ -272,6 +272,12 @@ hook = [
     # Fixed-viewport color grading is implemented as a frozen top-layer actor
     # in several stages. Drop that actor only while gameplay is expanded.
     { func = "func_80009BE8", text = '{ extern void mm_ws_filter_fixed_viewport_effects(uint8_t*, recomp_context*); mm_ws_filter_fixed_viewport_effects(rdram, ctx); }' },
+    # Actors 0x508/0x509 are the rotating-wall and 3D-platform families. Their
+    # legacy material leaves mip tile 1 undefined and combines mask-zero tiles
+    # with repeating UVs, which RT64 resolves as a transparent/flat wall or
+    # stretched platform edges. Normalize only these exact actor display lists
+    # after the standard setup DL and immediately before actor->dlist_17C.
+    { func = "func_80009BE8", before_vram = 0x8000D388, text = '{ extern void mm_fix_rotation_material(uint8_t*, recomp_context*); mm_fix_rotation_material(rdram, ctx); }' },
     # Portrait entries 0..63 are a fixed 8x8 death/room-transition wipe;
     # entries 64/65 are the HUD. Skip only the wipe's render loop while wide.
     { func = "func_8000EA88", before_vram = 0x8000EB4C, text = '{ extern int mm_ws_portrait_draw_start(uint8_t*); int start = mm_ws_portrait_draw_start(rdram); if (start != 0) { ctx->r12 = start; } }' },

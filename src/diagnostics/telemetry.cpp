@@ -100,6 +100,12 @@ std::atomic<std::uint32_t> g_drawable_height{0};
 std::atomic<std::uint32_t> g_refresh_rate{0};
 std::atomic<std::uint32_t> g_target_rate{60};
 std::atomic<std::uint32_t> g_resolution_scale_milli{1000};
+std::atomic<std::uint64_t> g_workload_queue_depth{0};
+std::atomic<std::uint64_t> g_present_queue_depth{0};
+std::atomic<std::uint64_t> g_shader_count{0};
+std::atomic<std::uint64_t> g_resident_textures{0};
+std::atomic<std::uint64_t> g_texture_slots{0};
+std::atomic<std::uint64_t> g_pending_texture_uploads{0};
 
 std::atomic<std::uint64_t> g_scene_state{
     std::numeric_limits<std::uint64_t>::max()};
@@ -109,6 +115,32 @@ std::uint64_t now_ns() {
     return static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::nanoseconds>(
             Clock::now().time_since_epoch()).count());
+}
+
+struct ProcessResourceSnapshot {
+    std::uint64_t resident_kib = 0;
+    std::uint64_t peak_resident_kib = 0;
+    std::uint32_t thread_count = 0;
+};
+
+ProcessResourceSnapshot process_resource_snapshot() {
+    ProcessResourceSnapshot snapshot{};
+#if defined(__linux__)
+    std::ifstream status("/proc/self/status");
+    std::string line;
+    while (std::getline(status, line)) {
+        unsigned long long value = 0;
+        unsigned int threads = 0;
+        if (std::sscanf(line.c_str(), "VmRSS: %llu kB", &value) == 1) {
+            snapshot.resident_kib = value;
+        } else if (std::sscanf(line.c_str(), "VmHWM: %llu kB", &value) == 1) {
+            snapshot.peak_resident_kib = value;
+        } else if (std::sscanf(line.c_str(), "Threads: %u", &threads) == 1) {
+            snapshot.thread_count = threads;
+        }
+    }
+#endif
+    return snapshot;
 }
 
 const char* phase_name(Phase phase) {
@@ -211,7 +243,10 @@ void reset_statistics() {
                         &g_audio_queue_current, &g_audio_queue_max,
                         &g_audio_empty_events, &g_audio_queue_errors,
                         &g_audio_submitted_frames, &g_audio_clipped_samples,
-                        &g_audio_measured_samples, &g_audio_peak}) {
+                        &g_audio_measured_samples, &g_audio_peak,
+                        &g_workload_queue_depth, &g_present_queue_depth,
+                        &g_shader_count, &g_resident_textures,
+                        &g_texture_slots, &g_pending_texture_uploads}) {
         value->store(0, std::memory_order_relaxed);
     }
     g_audio_sample_sum.store(0, std::memory_order_relaxed);
@@ -246,6 +281,7 @@ void emit_report(double interval_seconds) {
     const std::uint32_t target = g_target_rate.load(std::memory_order_relaxed);
     const double scale = static_cast<double>(
         g_resolution_scale_milli.load(std::memory_order_relaxed)) / 1000.0;
+    const ProcessResourceSnapshot resources = process_resource_snapshot();
 
     if (phase >= Phase::RuntimeStarting || vi != 0 || dl != 0 || screen != 0) {
         event("perf",
@@ -253,7 +289,9 @@ void emit_report(double interval_seconds) {
             "audio-tasks=%.1f/s frame-ms(avg/p95/max)=%.2f/%.2f/%.2f "
             "slow(>20/>33)=%llu/%llu screen-cpu-ms(avg/max)=%.2f/%.2f "
             "dl-cpu-ms(avg/max)=%.2f/%.2f display=%ux%u@%uHz target=%uHz scale=%.2fx "
-            "audio-task-errors=%llu",
+            "audio-task-errors=%llu renderer-queues=%llu/%llu shaders=%llu "
+            "textures=%llu/%llu uploads=%llu rss-mib=%.1f peak-rss-mib=%.1f "
+            "threads=%u",
             seconds, phase_name(phase), vi / seconds, screen / seconds,
             dl / seconds, audio_tasks / seconds, average_ms(frames), frames.p95_ms,
             static_cast<double>(frames.maximum_us) / 1000.0,
@@ -264,7 +302,22 @@ void emit_report(double interval_seconds) {
             average_ms(dl_cpu),
             static_cast<double>(dl_cpu.maximum_us) / 1000.0,
             width, height, refresh, target, scale,
-            static_cast<unsigned long long>(audio_failures));
+            static_cast<unsigned long long>(audio_failures),
+            static_cast<unsigned long long>(
+                g_workload_queue_depth.load(std::memory_order_relaxed)),
+            static_cast<unsigned long long>(
+                g_present_queue_depth.load(std::memory_order_relaxed)),
+            static_cast<unsigned long long>(
+                g_shader_count.load(std::memory_order_relaxed)),
+            static_cast<unsigned long long>(
+                g_resident_textures.load(std::memory_order_relaxed)),
+            static_cast<unsigned long long>(
+                g_texture_slots.load(std::memory_order_relaxed)),
+            static_cast<unsigned long long>(
+                g_pending_texture_uploads.load(std::memory_order_relaxed)),
+            resources.resident_kib / 1024.0,
+            resources.peak_resident_kib / 1024.0,
+            resources.thread_count);
     }
 
     const std::uint64_t audio_buffers =
@@ -589,6 +642,21 @@ void set_display_state(std::uint32_t drawable_width,
 
 void set_display_target(std::uint32_t target_rate) {
     g_target_rate.store(target_rate, std::memory_order_relaxed);
+}
+
+void set_renderer_state(std::uint32_t workload_queue_depth,
+                        std::uint32_t present_queue_depth,
+                        std::uint32_t shader_count,
+                        std::uint64_t resident_textures,
+                        std::uint64_t texture_slots,
+                        std::uint64_t pending_texture_uploads) {
+    g_workload_queue_depth.store(workload_queue_depth, std::memory_order_relaxed);
+    g_present_queue_depth.store(present_queue_depth, std::memory_order_relaxed);
+    g_shader_count.store(shader_count, std::memory_order_relaxed);
+    g_resident_textures.store(resident_textures, std::memory_order_relaxed);
+    g_texture_slots.store(texture_slots, std::memory_order_relaxed);
+    g_pending_texture_uploads.store(
+        pending_texture_uploads, std::memory_order_relaxed);
 }
 
 } // namespace mm::telemetry

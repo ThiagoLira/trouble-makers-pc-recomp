@@ -27,6 +27,26 @@ if(GIT_FOUND)
     endif()
 endif()
 
+# Preserve optimized code while making native sampling profiles attributable
+# to C/C++, runtime, and generated-recomp symbols. Release behavior is
+# unchanged unless the option is explicitly enabled.
+option(MM_PROFILE_BUILD "Add debug symbols and preserve frame pointers for sampling profilers" OFF)
+
+if(MM_PROFILE_BUILD)
+    if(MSVC)
+        add_compile_options(/Zi /Oy-)
+        add_link_options(/DEBUG)
+    elseif(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang" AND
+           CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        add_compile_options(-g -fno-omit-frame-pointer)
+        add_link_options(-g)
+    else()
+        message(WARNING
+            "MM_PROFILE_BUILD is enabled, but this compiler has no configured "
+            "symbol/frame-pointer flags; the build will continue unchanged.")
+    endif()
+endif()
+
 if(WIN32)
     # Same workaround as the reference: opt out of the constexpr std::mutex
     # constructor so the binary doesn't require a bleeding-edge vcredist.

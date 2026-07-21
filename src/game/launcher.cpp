@@ -13,7 +13,9 @@
 #include <algorithm>
 #include <array>
 #include <cfloat>
+#include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -279,10 +281,12 @@ Outcome run(std::u8string game_id, const std::string& version_string,
 
     // Accelerated when available, software otherwise: same portability story
     // as the game (which needs Vulkan anyway), but the splash never hard-fails.
+    bool software_renderer = false;
     SDL_Renderer* renderer = SDL_CreateRenderer(window, -1,
         SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
     if (renderer == nullptr) {
         renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_SOFTWARE);
+        software_renderer = renderer != nullptr;
     }
     if (renderer == nullptr) {
         std::fprintf(stderr, "[launcher] renderer creation failed: %s\n", SDL_GetError());
@@ -291,8 +295,21 @@ Outcome run(std::u8string game_id, const std::string& version_string,
     }
     SDL_RendererInfo renderer_info{};
     if (SDL_GetRendererInfo(renderer, &renderer_info) == 0) {
-        std::fprintf(stderr, "[launcher] SDL renderer: %s\n",
-                     renderer_info.name != nullptr ? renderer_info.name : "unknown");
+        software_renderer =
+            (renderer_info.flags & SDL_RENDERER_SOFTWARE) != 0;
+        std::fprintf(stderr,
+            "[launcher] renderer=%s accelerated=%s software=%s vsync=%s\n",
+            renderer_info.name != nullptr ? renderer_info.name : "unknown",
+            (renderer_info.flags & SDL_RENDERER_ACCELERATED) ? "yes" : "no",
+            (renderer_info.flags & SDL_RENDERER_SOFTWARE) ? "yes" : "no",
+            (renderer_info.flags & SDL_RENDERER_PRESENTVSYNC) ? "yes" : "no");
+    }
+    if (software_renderer && ui_scale > 2) {
+        // Avoid software-blitting an oversized HiDPI launcher surface.
+        ui_scale = 2;
+        SDL_SetWindowSize(window, 640 * ui_scale, 560 * ui_scale);
+        SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED,
+            SDL_WINDOWPOS_CENTERED);
     }
 
     IMGUI_CHECKVERSION();
@@ -358,52 +375,73 @@ Outcome run(std::u8string game_id, const std::string& version_string,
 
     Outcome outcome = Outcome::Quit;
     bool running = true;
-    while (running) {
-        SDL_Event ev;
-        while (SDL_PollEvent(&ev)) {
-            ImGui_ImplSDL2_ProcessEvent(&ev);
-            if (ev.type == SDL_QUIT) {
-                running = false;
-            }
-            if (ev.type == SDL_CONTROLLERDEVICEADDED ||
-                ev.type == SDL_CONTROLLERDEVICEREMOVED) {
-                mm_audio_input::refresh_controllers();
-            }
+    bool first_frame = true;
+    const bool trace_events = std::getenv("MM_LAUNCHER_TRACE") != nullptr;
+    std::uint64_t event_count = 0;
+    auto process_event = [&](SDL_Event& ev) {
+        ++event_count;
+        if (trace_events && ((event_count <= 20) || ((event_count % 100) == 0))) {
+            std::fprintf(stderr, "[launcher] event #%llu type=0x%x\n",
+                static_cast<unsigned long long>(event_count), ev.type);
+        }
+        ImGui_ImplSDL2_ProcessEvent(&ev);
+        if (ev.type == SDL_QUIT) {
+            running = false;
+        }
+        if (ev.type == SDL_CONTROLLERDEVICEADDED ||
+            ev.type == SDL_CONTROLLERDEVICEREMOVED) {
+            mm_audio_input::refresh_controllers();
+        }
 
-            if (capture_active) {
-                bool accepted = false;
-                mm_audio_input::InputBinding binding{};
-                if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0 &&
-                    ev.key.keysym.scancode == SDL_SCANCODE_ESCAPE) {
-                    capture_active = false;
-                    controls_status = "Binding cancelled.";
-                } else if (capture_device == mm_audio_input::ControlDevice::Controller &&
-                           ev.type == SDL_CONTROLLERAXISMOTION &&
-                           ev.caxis.axis < SDL_CONTROLLER_AXIS_MAX) {
-                    const int value = static_cast<int>(ev.caxis.value);
-                    const int magnitude = value < 0 ? -value : value;
-                    if (magnitude < 8192) {
-                        axis_neutral[ev.caxis.axis] = true;
-                    } else if (magnitude >= 16384 && axis_neutral[ev.caxis.axis]) {
-                        accepted = mm_audio_input::binding_from_event(
-                            capture_device, ev, binding);
-                    }
-                } else {
+        if (capture_active) {
+            bool accepted = false;
+            mm_audio_input::InputBinding binding{};
+            if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0 &&
+                ev.key.keysym.scancode == SDL_SCANCODE_ESCAPE) {
+                capture_active = false;
+                controls_status = "Binding cancelled.";
+            } else if (capture_device == mm_audio_input::ControlDevice::Controller &&
+                       ev.type == SDL_CONTROLLERAXISMOTION &&
+                       ev.caxis.axis < SDL_CONTROLLER_AXIS_MAX) {
+                const int value = static_cast<int>(ev.caxis.value);
+                const int magnitude = value < 0 ? -value : value;
+                if (magnitude < 8192) {
+                    axis_neutral[ev.caxis.axis] = true;
+                } else if (magnitude >= 16384 && axis_neutral[ev.caxis.axis]) {
                     accepted = mm_audio_input::binding_from_event(
                         capture_device, ev, binding);
                 }
+            } else {
+                accepted = mm_audio_input::binding_from_event(
+                    capture_device, ev, binding);
+            }
 
-                if (accepted) {
-                    if (mm_audio_input::set_binding(
-                            capture_device, capture_input, capture_slot, binding)) {
-                        save_controls_with_status(controls_status);
-                    } else {
-                        controls_status = "That input cannot be used for this binding.";
-                    }
-                    capture_active = false;
+            if (accepted) {
+                if (mm_audio_input::set_binding(
+                        capture_device, capture_input, capture_slot, binding)) {
+                    save_controls_with_status(controls_status);
+                } else {
+                    controls_status = "That input cannot be used for this binding.";
                 }
+                capture_active = false;
             }
         }
+    };
+    while (running) {
+        SDL_Event ev;
+        if (software_renderer && !first_frame) {
+            // There is no continuous animation. Sleep until input/window
+            // activity instead of repainting the same CPU surface indefinitely.
+            if (SDL_WaitEvent(&ev) == 0) {
+                continue;
+            }
+            process_event(ev);
+        }
+        while (SDL_PollEvent(&ev)) {
+            process_event(ev);
+        }
+        first_frame = false;
+        const Uint64 frame_started = SDL_GetTicks64();
 
         ImGui_ImplSDLRenderer2_NewFrame();
         ImGui_ImplSDL2_NewFrame();
@@ -658,6 +696,16 @@ Outcome run(std::u8string game_id, const std::string& version_string,
         SDL_RenderClear(renderer);
         ImGui_ImplSDLRenderer2_RenderDrawData(ImGui::GetDrawData());
         SDL_RenderPresent(renderer);
+
+        // PRESENTVSYNC is a request and may be ignored. Bound accelerated
+        // backends independently and cap software redraw storms at 10 FPS.
+        const Uint64 minimum_frame_milliseconds =
+            software_renderer ? 100 : 16;
+        const Uint64 elapsed = SDL_GetTicks64() - frame_started;
+        if (elapsed < minimum_frame_milliseconds) {
+            SDL_Delay(static_cast<Uint32>(
+                minimum_frame_milliseconds - elapsed));
+        }
     }
 
     if (nfd_ok) {

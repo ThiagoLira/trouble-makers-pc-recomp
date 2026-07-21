@@ -1,11 +1,11 @@
 // Host helpers for translated-code widescreen hooks.
 
 #include <algorithm>
-#include <atomic>
 #include <cstdint>
 #include <cstring>
 #include <cstdio>
 #include <cstdlib>
+#include <iterator>
 
 #include "recomp.h"
 #include "ultramodern/config.hpp"
@@ -97,6 +97,56 @@ constexpr uint32_t kMarinaActorPosX = 0x800EF598u;
 constexpr uint32_t kGlobalButtonHold = 0x800BE4F8u;
 constexpr uint32_t kGlobalButtonPress = 0x800BE4FCu;
 
+// Actors 0x508 and 0x509 own the thirteen rotating-wall and seven 3D-platform
+// display lists in the Migen's Shrine overlay. Keep corrected copies in unused
+// expansion RDRAM so the overlay's original data remains intact.
+// 0x80455000..0x80456DFF is clear of the expanded actor records ending at
+// 0x80454CE8 and the relocated frame arenas beginning at 0x80460000.
+constexpr uint32_t kRotationWallActorType = 0x508u;
+constexpr uint32_t kRotationPlatformActorType = 0x509u;
+constexpr uint32_t kRotationMaterialDLBase = 0x80455000u;
+constexpr uint32_t kRotationMaterialDLStride = 0x180u;
+constexpr uint32_t kRotationMaterialMarkerOffset = 0x17Cu;
+constexpr uint32_t kRotationMaterialMarker = 0x4D4D5254u; // "MMRT"
+
+struct RotationMaterialSource {
+    uint32_t address;
+    uint16_t bytes;
+    uint8_t texture_count;
+};
+
+constexpr RotationMaterialSource kRotationMaterialSources[] = {
+    // Thirteen animation frames used by the screen-covering rotation wall.
+    { 0x801B6F28u, 0x0F8u, 2 },
+    { 0x801B7020u, 0x0F8u, 2 },
+    { 0x801B7118u, 0x0F8u, 2 },
+    { 0x801B7210u, 0x0F8u, 2 },
+    { 0x801B7308u, 0x0F8u, 2 },
+    { 0x801B7400u, 0x0F8u, 2 },
+    { 0x801B74F8u, 0x0F8u, 2 },
+    { 0x801B75F0u, 0x148u, 3 },
+    { 0x801B7738u, 0x148u, 3 },
+    { 0x801B7880u, 0x148u, 3 },
+    { 0x801B79C8u, 0x148u, 3 },
+    { 0x801B7B10u, 0x148u, 3 },
+    { 0x801B7C58u, 0x148u, 3 },
+
+    // Seven textured 3D-platform variants used elsewhere in the overlay.
+    { 0x801B8808u, 0x148u, 3 },
+    { 0x801B8950u, 0x148u, 3 },
+    { 0x801B8A98u, 0x148u, 3 },
+    { 0x801B8BE0u, 0x148u, 3 },
+    { 0x801B8D28u, 0x148u, 3 },
+    { 0x801B8E70u, 0x148u, 3 },
+    { 0x801B8FB8u, 0x148u, 3 },
+};
+
+static_assert(
+    kRotationMaterialDLBase +
+        std::size(kRotationMaterialSources) * kRotationMaterialDLStride <=
+    0x80456E00u);
+static_assert(0x148u + 8u <= kRotationMaterialMarkerOffset);
+
 bool env_enabled(const char* name) {
     const char* value = std::getenv(name);
     return value != nullptr && value[0] == '1';
@@ -107,8 +157,6 @@ bool valid_rdram_ptr(uint32_t ptr) {
 }
 
 int g_gameplay_wide_active = 0;
-std::atomic<int> g_force_frame_clear{0};
-std::atomic<int> g_rotation_wall_wrap{0};
 
 // These gameplay scenes transform or composite an authored 320x240 canvas
 // rather than drawing a scrollable world. Expanding the projection reveals
@@ -118,9 +166,11 @@ std::atomic<int> g_rotation_wall_wrap{0};
 // remain genuinely expanded.
 bool scene_requires_original(int scene) {
     switch (scene) {
+        case 13: // Seasick Climb: rotating 320x240 room canvas
         case 25: // SASQUATCH beta: fixed vertical boss canvas
         case 27: // Final Battle: fixed boss backdrop
         case 57: // Volcano: fixed authored canvas
+        case 69: // Vertigo: rotating 320x240 room canvas
         case 71: // Clanball Lift: fixed authored canvas
         case 79: // Inner Struggle: 4:3 post-process canvas
         case 85: // MERCO: fixed boss backdrop
@@ -316,6 +366,59 @@ int raw_gameplay_active(uint8_t* rdram) {
     return base_active || dialogue_hold;
 }
 
+bool prepare_rotation_material(
+    uint8_t* rdram, size_t source_index, uint32_t& corrected) {
+    const RotationMaterialSource& material =
+        kRotationMaterialSources[source_index];
+    const uint32_t original = material.address;
+    corrected = kRotationMaterialDLBase +
+        source_index * kRotationMaterialDLStride;
+    const gpr corrected_ptr =
+        static_cast<gpr>(static_cast<int32_t>(corrected));
+    const uint32_t marker = kRotationMaterialMarker ^ original;
+    if ((MEM_W(kRotationMaterialMarkerOffset, corrected_ptr) == marker) &&
+        (MEM_W(0, corrected_ptr) == 0xFCFFFE04u) &&
+        (MEM_W(material.bytes, corrected_ptr) == 0xB8000000u)) {
+        return true;
+    }
+
+    // A failed rebuild must never leave an older valid marker behind.
+    MEM_W(kRotationMaterialMarkerOffset, corrected_ptr) = 0;
+
+    const gpr original_ptr =
+        static_cast<gpr>(static_cast<int32_t>(original));
+    // Begin the private list with a draw-local combiner. Cycle one supplies
+    // TEXEL0 directly; cycle two retains the shared setup's shade modulation.
+    MEM_W(0, corrected_ptr) = 0xFCFFFE04u;
+    MEM_W(4, corrected_ptr) = 0xFF10F3FFu;
+
+    int corrected_tiles = 0;
+    for (uint32_t offset = 0; offset < material.bytes; offset += 8) {
+        const uint32_t w0 = MEM_W(offset, original_ptr);
+        uint32_t w1 = MEM_W(offset + 4, original_ptr);
+
+        // CI8, line=4, TMEM=0, render tile 0. Preserve format, stride,
+        // palette, shifts, and wrap/mirror flags; define only the 32x32 masks
+        // that the vertex coordinates require.
+        if (w0 == 0xF5480800u && w1 == 0x00000000u) {
+            w1 = 0x00014050u;
+            ++corrected_tiles;
+        }
+
+        MEM_W(offset + 8, corrected_ptr) = w0;
+        MEM_W(offset + 12, corrected_ptr) = w1;
+    }
+
+    // Fail closed if an overlay revision changes the list layout. Drawing
+    // the original is preferable to redirecting to a partial correction.
+    if (corrected_tiles != material.texture_count ||
+        MEM_W(material.bytes, corrected_ptr) != 0xB8000000u) {
+        return false;
+    }
+    MEM_W(kRotationMaterialMarkerOffset, corrected_ptr) = marker;
+    return true;
+}
+
 } // namespace
 
 // Camera_UpdateViewBounds is widened at translation time so actors remain
@@ -383,19 +486,55 @@ extern "C" int mm_widescreen_gameplay_active(uint8_t* rdram) {
     return g_gameplay_wide_active;
 }
 
-// RT64 normally preserves the N64 framebuffer until the game's own draws
-// replace it. The two rotating-camera stages use a persistent burgundy canvas;
-// RT64's HD target otherwise feeds old sprite pixels back into that canvas,
-// producing a Solitaire-style trail.
-namespace RT64 {
-int mm_widescreen_force_frame_clear() {
-    return g_force_frame_clear.load(std::memory_order_relaxed);
-}
+// Normalize the material state for actors 0x508 and 0x509 at the semantic draw
+// boundary.
+//
+// Their original Fast3D lists load 32x32 CI8 textures with maskS/maskT=0 while
+// using coordinates far outside the tile, and the shared setup selects
+// TRILERP without defining a second mip tile. RT64 therefore clamps the first
+// texture and resolves the blend toward an undefined tile: platforms smear at
+// their edges and the screen-covering wall becomes transparent or flat. The
+// intended rendering (and the original game's visible output) repeats tile 0.
+//
+// Corrected copies express that intent explicitly: maskS/maskT=5 selects a
+// 32-texel wrap period, and a prepended draw-local combiner passes TEXEL0
+// through cycle one before the existing cycle-two shade modulation. No
+// renderer-wide rule, scene check, texture-address heuristic, or framebuffer
+// clear is involved.
+extern "C" void mm_fix_rotation_material(
+    uint8_t* rdram, recomp_context* ctx) {
+    const gpr actor = static_cast<gpr>(ctx->r20);
+    const uint16_t actor_type = MEM_HU(0xD2, actor);
+    if (actor_type != kRotationWallActorType &&
+        actor_type != kRotationPlatformActorType) {
+        return;
+    }
 
-int mm_widescreen_rotation_wall_wrap() {
-    return g_rotation_wall_wrap.load(std::memory_order_relaxed);
+    const uint32_t source = MEM_W(0x17C, actor);
+    size_t source_index = std::size(kRotationMaterialSources);
+    for (size_t i = 0; i < std::size(kRotationMaterialSources); ++i) {
+        if (source == kRotationMaterialSources[i].address) {
+            source_index = i;
+            break;
+        }
+
+        // The actor already points at its corrected copy on later frames.
+        if (source == kRotationMaterialDLBase +
+                i * kRotationMaterialDLStride) {
+            source_index = i;
+            break;
+        }
+    }
+    if (source_index == std::size(kRotationMaterialSources)) {
+        return;
+    }
+
+    uint32_t corrected = 0;
+    if (!prepare_rotation_material(rdram, source_index, corrected)) {
+        return;
+    }
+    MEM_W(0x17C, actor) = corrected;
 }
-} // namespace RT64
 
 // Flip RT64 between its native 4:3 and expanded projection only when the
 // gameplay/cinema boundary changes. The user's --widescreen preference remains
@@ -408,30 +547,6 @@ extern "C" void mm_widescreen_sync_mode(uint8_t* rdram) {
     const int scene = static_cast<int16_t>(MEM_HU(
         0, static_cast<gpr>(static_cast<int32_t>(kCurrentScene))));
     report_gameplay_ready(rdram, scene);
-    g_rotation_wall_wrap.store(scene == 13 || scene == 69,
-        std::memory_order_relaxed);
-    // With the wall panels rendering (RT64 LOD_FRAC fix), the rotation
-    // stages' own opaque wall covers the playfield every frame, exactly as
-    // on hardware — no clear needed, and a per-frame clear races the wall
-    // draw mid-frame (geometry flickering in and out). Keep a brief seed
-    // pulse at gameplay entry only, so RT64's two double-buffered HD
-    // targets start from a common base instead of diverging (the 30 Hz
-    // beige/burgundy flicker seen in older builds).
-    static int rotation_seed_frames = 0;
-    const int rotation_game_state = MEM_HU(
-        0, static_cast<gpr>(static_cast<int32_t>(kGameState)));
-    int force_clear = 0;
-    if (scene != 13 && scene != 69) {
-        rotation_seed_frames = 0;
-    }
-    else if (rotation_game_state != 6) {
-        rotation_seed_frames = 6;
-    }
-    else if (rotation_seed_frames > 0) {
-        --rotation_seed_frames;
-        force_clear = 1;
-    }
-    g_force_frame_clear.store(force_clear, std::memory_order_relaxed);
     const int raw_active = raw_gameplay_active(rdram);
 
     if (previous_active < 0) {
@@ -517,6 +632,7 @@ extern "C" int mm_debug_warp_prepare(
 // Test-only controller driver. The hook writes both the live and copied input
 // words so it can exercise camera scrolling and actor streaming without X11
 // focus. MM_TEST_MOVE=1 performs the original short right/left taps;
+// MM_TEST_MOVE=walk-right settles, then holds right without double-tapping;
 // MM_TEST_MOVE=jet-right/jet-left settles, double-taps that direction, then
 // holds it long enough to engage Marina's jet and traverse a meaningful part
 // of the stage. jet-bounce alternates long right/left jets so a render-cull
@@ -539,6 +655,7 @@ extern "C" void mm_test_drive_marina(uint8_t* rdram) {
     const bool jet_left = std::strcmp(move_mode, "jet-left") == 0;
     const bool jet_bounce = std::strcmp(move_mode, "jet-bounce") == 0;
     const bool jet = jet_right || jet_hop_right || jet_left || jet_bounce;
+    const bool walk_right = std::strcmp(move_mode, "walk-right") == 0;
     const uint16_t button_right = MEM_HU(0,
         static_cast<gpr>(static_cast<int32_t>(kButtonDRight)));
     const uint16_t button_left = MEM_HU(0,
@@ -576,7 +693,7 @@ extern "C" void mm_test_drive_marina(uint8_t* rdram) {
     // the whole 300-frame cycle can retrigger local tutorial volumes and never
     // exercises the rest of a stage.
     const int phase = jet_bounce ? motion_frame++ % 600
-        : (jet ? motion_frame++ : motion_frame++ % 120);
+        : ((jet || walk_right) ? motion_frame++ : motion_frame++ % 120);
     uint16_t input = 0;
     if (jet_bounce) {
         // R, neutral, long R; settle; L, neutral, long L. The quiet tail
@@ -603,6 +720,14 @@ extern "C" void mm_test_drive_marina(uint8_t* rdram) {
             input |= 0x8000u;
         }
     }
+    else if (walk_right) {
+        // One rising edge after a short settle, then a plain held direction.
+        // Unlike the jet modes, this never double-taps and therefore exercises
+        // ordinary camera scrolling at player speed.
+        if (phase >= 30) {
+            input = button_right;
+        }
+    }
     else if (phase < 15) {
         input = MEM_HU(0,
             static_cast<gpr>(static_cast<int32_t>(kButtonDRight)));
@@ -620,7 +745,7 @@ extern "C" void mm_test_drive_marina(uint8_t* rdram) {
     MEM_H(0, static_cast<gpr>(static_cast<int32_t>(kGlobalButtonPress))) = pressed;
     MEM_H(0, static_cast<gpr>(static_cast<int32_t>(kButtonHoldHistory))) = input;
     MEM_H(0, static_cast<gpr>(static_cast<int32_t>(kButtonPressHistory))) = pressed;
-    if ((motion_frame % (jet ? 15 : 60)) == 0) {
+    if ((motion_frame % ((jet || walk_right) ? 15 : 60)) == 0) {
         const gpr marina = static_cast<gpr>(static_cast<int32_t>(kActors));
         const int clan_slots = MEM_HU(0, static_cast<gpr>(
             static_cast<int32_t>(kClanBlockCount)));
@@ -646,7 +771,8 @@ extern "C" void mm_test_drive_marina(uint8_t* rdram) {
             jet_bounce ? "jet-bounce"
                 : (jet_hop_right ? "jet-hop-right"
                     : (jet_right ? "jet-right"
-                        : (jet_left ? "jet-left" : "patrol"))),
+                        : (jet_left ? "jet-left"
+                            : (walk_right ? "walk-right" : "patrol")))),
             motion_frame, phase,
             input, pressed,
             static_cast<int32_t>(MEM_W(0, static_cast<gpr>(
@@ -665,11 +791,15 @@ extern "C" void mm_test_drive_marina(uint8_t* rdram) {
 }
 
 // Test-only actor census for diagnosing the long tail of per-type 4:3 culls.
-// Log active actors near the camera and every draw-bit transition. In normal
-// builds this is a single getenv check and does not touch emulated memory.
+// Log active actors near the camera and every draw-bit transition. Test flags
+// are immutable for a process, so cache them after the first call; normal
+// gameplay then returns without repeated getenv calls or emulated-memory reads.
 extern "C" void mm_test_trace_actors(uint8_t* rdram) {
-    if (!env_enabled("MM_TEST_ACTOR_TRACE") ||
-        !mm_widescreen_gameplay_active(rdram)) {
+    static const bool trace_details = env_enabled("MM_TEST_ACTOR_TRACE");
+    static const bool trace_summary = env_enabled("MM_TEST_ACTOR_SUMMARY");
+    static const bool trace_original_aspect = env_enabled("MM_TEST_MOVE_4X3");
+    if ((!trace_details && !trace_summary) ||
+        (!trace_original_aspect && !mm_widescreen_gameplay_active(rdram))) {
         return;
     }
 
@@ -683,7 +813,7 @@ extern "C" void mm_test_trace_actors(uint8_t* rdram) {
         0, static_cast<gpr>(static_cast<int32_t>(kCamY)))) >> 16;
     const gpr actors = static_cast<gpr>(static_cast<int32_t>(kActors));
 
-    if ((frame % 15) == 0) {
+    if (trace_details && (frame % 15) == 0) {
         const int left = static_cast<int16_t>(MEM_HU(
             0, static_cast<gpr>(static_cast<int32_t>(kViewLeft))));
         const int right = static_cast<int16_t>(MEM_HU(
@@ -729,6 +859,17 @@ extern "C" void mm_test_trace_actors(uint8_t* rdram) {
             static_cast<gpr>(static_cast<int32_t>(table)));
     };
 
+    struct TypeCount {
+        uint16_t type = 0;
+        int active = 0;
+        int drawable = 0;
+    };
+    TypeCount type_counts[kActorCount]{};
+    int type_count = 0;
+    int active_count = 0;
+    int drawable_count = 0;
+    int nearby_count = 0;
+
     for (int slot = 0; slot < kActorCount; ++slot) {
         const gpr actor = actors + slot * 0x198;
         const uint32_t flags = MEM_W(0x80, actor);
@@ -748,8 +889,26 @@ extern "C" void mm_test_trace_actors(uint8_t* rdram) {
         const bool periodic_nearby = active && (frame % 15) == 0 &&
             x >= -512 && x <= 512 && y >= -512 && y <= 512;
 
-        if (periodic_nearby || draw_changed || active != was_active ||
-            (active && identity_changed)) {
+        if (active) {
+            ++active_count;
+            drawable_count += (flags & 1u) != 0;
+            nearby_count +=
+                x >= -512 && x <= 512 && y >= -512 && y <= 512;
+            int type_index = 0;
+            while (type_index < type_count &&
+                   type_counts[type_index].type != type) {
+                ++type_index;
+            }
+            if (type_index == type_count) {
+                type_counts[type_count++].type = type;
+            }
+            ++type_counts[type_index].active;
+            type_counts[type_index].drawable += (flags & 1u) != 0;
+        }
+
+        if (trace_details &&
+            (periodic_nearby || draw_changed || active != was_active ||
+             (active && identity_changed))) {
             std::fprintf(stderr,
                 "[test-actor] frame=%d slot=%d type=%04x flags=%08x "
                 "draw=%d active=%d screen=%d,%d world~=%d,%d cam=%d,%d "
@@ -767,6 +926,49 @@ extern "C" void mm_test_trace_actors(uint8_t* rdram) {
         }
         previous_flags[slot] = flags;
         previous_types[slot] = type;
+    }
+
+    if (trace_summary && (frame % 60) == 0) {
+        std::sort(type_counts, type_counts + type_count,
+            [](const TypeCount& a, const TypeCount& b) {
+                if (a.active != b.active) {
+                    return a.active > b.active;
+                }
+                return a.type < b.type;
+            });
+
+        int clan_count = 0;
+        const int clan_slots = std::min<int>(MEM_HU(0,
+            static_cast<gpr>(static_cast<int32_t>(kClanBlockCount))), 128);
+        const gpr clan_blocks =
+            static_cast<gpr>(static_cast<int32_t>(kClanBlocks));
+        for (int i = 0; i < clan_slots; ++i) {
+            clan_count += MEM_HU(i * 0x90 + 0x80, clan_blocks) != 0;
+        }
+
+        char types[256]{};
+        size_t used = 0;
+        for (int i = 0; i < std::min(type_count, 8); ++i) {
+            const int written = std::snprintf(types + used,
+                sizeof(types) - used, "%s%04x:%d/%d",
+                i == 0 ? "" : ",", type_counts[i].type,
+                type_counts[i].active, type_counts[i].drawable);
+            if (written < 0 ||
+                static_cast<size_t>(written) >= sizeof(types) - used) {
+                break;
+            }
+            used += static_cast<size_t>(written);
+        }
+
+        const int scene = static_cast<int16_t>(MEM_HU(0,
+            static_cast<gpr>(static_cast<int32_t>(kCurrentScene))));
+        const int stage_time = MEM_HU(0,
+            static_cast<gpr>(static_cast<int32_t>(kStageTime)));
+        std::fprintf(stderr,
+            "[actor-summary] frame=%d scene=%d stage_time=%d cam=%d,%d "
+            "active=%d drawable=%d nearby=%d clan=%d types=%s\n",
+            frame, scene, stage_time, cam_x, cam_y, active_count,
+            drawable_count, nearby_count, clan_count, types);
     }
     ++frame;
 }
@@ -1324,7 +1526,10 @@ extern "C" void mm_ws_repeat_wrapped_terrain(
     }
     ctx->r2 = out;
 
-    if (env_enabled("MM_TEST_ACTOR_TRACE")) {
+    static const bool trace_actors =
+        env_enabled("MM_TEST_ACTOR_TRACE") ||
+        env_enabled("MM_TEST_ACTOR_SUMMARY");
+    if (trace_actors) {
         static int reported_scene = -32768;
         const int scene = static_cast<int16_t>(
             MEM_HU(0, rdram_gpr(kCurrentScene)));

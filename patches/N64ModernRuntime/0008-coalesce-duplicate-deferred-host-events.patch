@@ -1,0 +1,73 @@
+From 5ce5cba87ae80a7e38d6cce07d84908b5282da76 Mon Sep 17 00:00:00 2001
+From: Thiago Lira <thlira15@gmail.com>
+Date: Tue, 21 Jul 2026 03:00:00 -0300
+Subject: [PATCH] Coalesce duplicate deferred host events
+
+Requeue mode retains a hardware event when its emulated destination queue is
+full. Once retained events no longer busy-wake the game thread, an abandoned
+full queue could instead accumulate duplicate timer or device completions and
+make each retry progressively more expensive.
+
+Keep at most one pending copy of the same queue/message/jam signal. Real N64
+event sends are non-blocking and drop while full, so retaining one occurrence
+already provides the runtime's stronger delivery guarantee without unbounded
+memory or retry work.
+---
+ ultramodern/src/mesgqueue.cpp | 21 ++++++++++++++++++---
+ 1 file changed, 18 insertions(+), 3 deletions(-)
+
+diff --git a/ultramodern/src/mesgqueue.cpp b/ultramodern/src/mesgqueue.cpp
+index 0c975bd..5ce5cba 100644
+--- a/ultramodern/src/mesgqueue.cpp
++++ b/ultramodern/src/mesgqueue.cpp
+@@ -49,6 +49,21 @@ static bool try_deliver_external_message(RDRAM_ARG const QueuedMessage& to_send)
+         !to_send.requeue_if_blocked;
+ }
+ 
++static void defer_external_message(const QueuedMessage& to_defer) {
++    // A hardware event send is non-blocking and would be dropped while the
++    // destination queue is full. Requeue mode deliberately retains one signal,
++    // but retaining every duplicate timer/device completion would let a queue
++    // that is never drained grow this list—and its retry cost—without bound.
++    for (const QueuedMessage& deferred : deferred_messages) {
++        if ((deferred.mq == to_defer.mq) &&
++            (deferred.mesg == to_defer.mesg) &&
++            (deferred.jam == to_defer.jam)) {
++            return;
++        }
++    }
++    deferred_messages.push_back(to_defer);
++}
++
+ void dequeue_external_messages(RDRAM_ARG1) {
+     // Retry older blocked deliveries without making them wake sources. Compact
+     // in place so the normal 60 Hz retry path stops allocating after warm-up.
+@@ -66,7 +81,7 @@ void dequeue_external_messages(RDRAM_ARG1) {
+     QueuedMessage to_send;
+     while (external_messages.try_dequeue(to_send)) {
+         if (!try_deliver_external_message(PASS_RDRAM to_send)) {
+-            deferred_messages.push_back(to_send);
++            defer_external_message(to_send);
+         }
+     }
+ }
+@@ -75,7 +90,7 @@ void ultramodern::wait_for_external_message(RDRAM_ARG1) {
+     QueuedMessage to_send;
+     external_messages.wait_dequeue(to_send);
+     if (!try_deliver_external_message(PASS_RDRAM to_send)) {
+-        deferred_messages.push_back(to_send);
++        defer_external_message(to_send);
+     }
+     // Deliver everything else that's pending, not just the first message.
+     // A single wait_dequeue can starve items that sit in another producer
+@@ -91,7 +106,7 @@ void ultramodern::wait_for_external_message_timed(RDRAM_ARG u32 millis) {
+     QueuedMessage to_send;
+     if (external_messages.wait_dequeue_timed(to_send, std::chrono::milliseconds{millis})) {
+         if (!try_deliver_external_message(PASS_RDRAM to_send)) {
+-            deferred_messages.push_back(to_send);
++            defer_external_message(to_send);
+         }
+         // A fresh host event is also the retry signal for older blocked
+         // deliveries, matching the non-timed wait path.
+-- 
+2.54.0

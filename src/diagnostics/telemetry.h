@@ -53,4 +53,11 @@ void set_display_state(std::uint32_t drawable_width,
                        float resolution_scale);
 void set_display_target(std::uint32_t target_rate);
 
+void set_renderer_state(std::uint32_t workload_queue_depth,
+                        std::uint32_t present_queue_depth,
+                        std::uint32_t shader_count,
+                        std::uint64_t resident_textures,
+                        std::uint64_t texture_slots,
+                        std::uint64_t pending_texture_uploads);
+
 } // namespace mm::telemetry
