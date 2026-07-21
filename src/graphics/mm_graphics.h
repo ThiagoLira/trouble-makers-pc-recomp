@@ -28,6 +28,12 @@ namespace mm::graphics {
     // Set before recomp::start(); nullptr disables the overlay pass entirely.
     void set_overlay_draw_callback(OverlayDrawCallback callback);
 
+    // Whether presentation waits for vertical sync (default on). Set before
+    // recomp::start(); the render context applies it to the swap chain during
+    // setup. Off removes the display-sync wait (D3D12 Present(0), Vulkan
+    // immediate mode where the surface supports it).
+    void set_vsync_enabled(bool enabled);
+
     // Registers create_render_context (and the API-name helper) with the
     // ultramodern renderer layer. Idempotent; call once before recomp::start().
     void register_callbacks();

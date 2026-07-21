@@ -6,7 +6,7 @@ find_package(Threads REQUIRED)
 target_link_libraries(mm_diagnostics PUBLIC Threads::Threads)
 
 if(WIN32)
-    target_link_libraries(mm_diagnostics PRIVATE kernel32)
+    target_link_libraries(mm_diagnostics PRIVATE kernel32 psapi)
 endif()
 
 if(BUILD_TESTING)

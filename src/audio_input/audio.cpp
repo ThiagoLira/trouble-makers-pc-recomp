@@ -52,10 +52,16 @@ void rebuild_converter() {
     }
     g_convert_valid = true;
     mm::telemetry::set_audio_rates(g_sample_rate, kOutputSampleRate);
+    // SDL_AudioCVT::len_ratio is scratch state in some SDL builds and has
+    // produced uninitialised garbage in Windows diagnostics.  The rate ratio
+    // is deterministic for this stereo-to-stereo conversion, so report it
+    // directly instead of trusting that implementation detail.
+    const double sample_rate_ratio = static_cast<double>(kOutputSampleRate) /
+                                     static_cast<double>(g_sample_rate);
     mm::telemetry::event("audio",
         "converter input=%uHz output=%uHz conversion-needed=%s len-mult=%d ratio=%.6f",
         g_sample_rate, kOutputSampleRate, ret == 0 ? "no" : "yes",
-        g_convert.len_mult, g_convert.len_ratio);
+        g_convert.len_mult, sample_rate_ratio);
 }
 
 // ultramodern passes sample_count = number of int16 samples (i.e. 2 per stereo

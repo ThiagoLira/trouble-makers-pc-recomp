@@ -17,6 +17,8 @@
 
 #if defined(_WIN32)
 #include <windows.h>
+#include <psapi.h>
+#include <tlhelp32.h>
 #elif defined(__linux__)
 #include <sys/sysinfo.h>
 #include <sys/utsname.h>
@@ -100,6 +102,10 @@ std::atomic<std::uint32_t> g_drawable_height{0};
 std::atomic<std::uint32_t> g_refresh_rate{0};
 std::atomic<std::uint32_t> g_target_rate{60};
 std::atomic<std::uint32_t> g_resolution_scale_milli{1000};
+std::atomic<std::uint32_t> g_render_target_width{0};
+std::atomic<std::uint32_t> g_render_target_height{0};
+std::atomic<std::uint32_t> g_downsample_multiplier{1};
+std::atomic<std::uint32_t> g_msaa_samples{1};
 std::atomic<std::uint64_t> g_workload_queue_depth{0};
 std::atomic<std::uint64_t> g_present_queue_depth{0};
 std::atomic<std::uint64_t> g_shader_count{0};
@@ -125,7 +131,32 @@ struct ProcessResourceSnapshot {
 
 ProcessResourceSnapshot process_resource_snapshot() {
     ProcessResourceSnapshot snapshot{};
-#if defined(__linux__)
+#if defined(_WIN32)
+    PROCESS_MEMORY_COUNTERS counters{};
+    if (GetProcessMemoryInfo(GetCurrentProcess(), &counters,
+                             sizeof(counters)) != FALSE) {
+        snapshot.resident_kib = static_cast<std::uint64_t>(
+            counters.WorkingSetSize / 1024);
+        snapshot.peak_resident_kib = static_cast<std::uint64_t>(
+            counters.PeakWorkingSetSize / 1024);
+    }
+
+    const DWORD process_id = GetCurrentProcessId();
+    const HANDLE thread_snapshot =
+        CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    if (thread_snapshot != INVALID_HANDLE_VALUE) {
+        THREADENTRY32 entry{};
+        entry.dwSize = sizeof(entry);
+        if (Thread32First(thread_snapshot, &entry) != FALSE) {
+            do {
+                if (entry.th32OwnerProcessID == process_id) {
+                    ++snapshot.thread_count;
+                }
+            } while (Thread32Next(thread_snapshot, &entry) != FALSE);
+        }
+        CloseHandle(thread_snapshot);
+    }
+#elif defined(__linux__)
     std::ifstream status("/proc/self/status");
     std::string line;
     while (std::getline(status, line)) {
@@ -249,6 +280,10 @@ void reset_statistics() {
                         &g_texture_slots, &g_pending_texture_uploads}) {
         value->store(0, std::memory_order_relaxed);
     }
+    g_render_target_width.store(0, std::memory_order_relaxed);
+    g_render_target_height.store(0, std::memory_order_relaxed);
+    g_downsample_multiplier.store(1, std::memory_order_relaxed);
+    g_msaa_samples.store(1, std::memory_order_relaxed);
     g_audio_sample_sum.store(0, std::memory_order_relaxed);
     g_audio_queue_min.store(std::numeric_limits<std::uint64_t>::max(),
                             std::memory_order_relaxed);
@@ -281,6 +316,14 @@ void emit_report(double interval_seconds) {
     const std::uint32_t target = g_target_rate.load(std::memory_order_relaxed);
     const double scale = static_cast<double>(
         g_resolution_scale_milli.load(std::memory_order_relaxed)) / 1000.0;
+    const std::uint32_t render_width =
+        g_render_target_width.load(std::memory_order_relaxed);
+    const std::uint32_t render_height =
+        g_render_target_height.load(std::memory_order_relaxed);
+    const std::uint32_t downsample =
+        g_downsample_multiplier.load(std::memory_order_relaxed);
+    const std::uint32_t msaa =
+        g_msaa_samples.load(std::memory_order_relaxed);
     const ProcessResourceSnapshot resources = process_resource_snapshot();
 
     if (phase >= Phase::RuntimeStarting || vi != 0 || dl != 0 || screen != 0) {
@@ -289,6 +332,7 @@ void emit_report(double interval_seconds) {
             "audio-tasks=%.1f/s frame-ms(avg/p95/max)=%.2f/%.2f/%.2f "
             "slow(>20/>33)=%llu/%llu screen-cpu-ms(avg/max)=%.2f/%.2f "
             "dl-cpu-ms(avg/max)=%.2f/%.2f display=%ux%u@%uHz target=%uHz scale=%.2fx "
+            "render-target=%ux%u downsample=%ux msaa=%ux "
             "audio-task-errors=%llu renderer-queues=%llu/%llu shaders=%llu "
             "textures=%llu/%llu uploads=%llu rss-mib=%.1f peak-rss-mib=%.1f "
             "threads=%u",
@@ -302,6 +346,7 @@ void emit_report(double interval_seconds) {
             average_ms(dl_cpu),
             static_cast<double>(dl_cpu.maximum_us) / 1000.0,
             width, height, refresh, target, scale,
+            render_width, render_height, downsample, msaa,
             static_cast<unsigned long long>(audio_failures),
             static_cast<unsigned long long>(
                 g_workload_queue_depth.load(std::memory_order_relaxed)),
@@ -642,6 +687,18 @@ void set_display_state(std::uint32_t drawable_width,
 
 void set_display_target(std::uint32_t target_rate) {
     g_target_rate.store(target_rate, std::memory_order_relaxed);
+}
+
+void set_render_target_state(std::uint32_t width,
+                             std::uint32_t height,
+                             std::uint32_t downsample_multiplier,
+                             std::uint32_t msaa_samples) {
+    g_render_target_width.store(width, std::memory_order_relaxed);
+    g_render_target_height.store(height, std::memory_order_relaxed);
+    g_downsample_multiplier.store(
+        std::max(downsample_multiplier, 1u), std::memory_order_relaxed);
+    g_msaa_samples.store(std::max(msaa_samples, 1u),
+                         std::memory_order_relaxed);
 }
 
 void set_renderer_state(std::uint32_t workload_queue_depth,

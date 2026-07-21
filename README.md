@@ -214,15 +214,28 @@ The first debug warp disables all save-buffer mutations
 until the process exits, while reads continue to use the save loaded at
 startup, so debug progression cannot overwrite the player's save file.
 
-The launcher also exposes MSAA and SSAA. MSAA 4x is the recommended first
-choice: it smooths geometry edges at much lower cost than supersampling. SSAA
-2x renders above the automatic internal resolution and downsamples the result;
-it also smooths shader and texture edges, but uses roughly four times the
-rendering pixels before widescreen expansion. To prevent oversized render
-targets and GPU-memory crashes, MSAA and SSAA are mutually exclusive, SSAA is
-capped at 2x, and MSAA is capped at 4x. Frame interpolation can be combined
-with either antialiasing method. See [Known Issues](KNOWN_ISSUES.md) for the
-current sprite-interpolation and terrain-strip limitations.
+The recommended baseline is native 60 FPS with antialiasing off. At the
+recomp's high internal resolution, MSAA/SSAA often make only a subtle visual
+difference while still consuming GPU time. If the machine has spare headroom,
+raising the interpolated frame-rate target is usually a more noticeable
+upgrade than enabling AA; the launcher's **Higher FPS** preset uses 120 FPS
+with AA off. MSAA remains available for an A/B comparison. SSAA 2x renders at
+twice each dimension (roughly four times the pixels) and is the most expensive
+option. MSAA and SSAA are mutually exclusive, SSAA is capped at 2x, and MSAA
+is capped at 4x. The launcher estimates the active internal target and warns
+when SSAA is combined with high-rate interpolation. See
+[Known Issues](KNOWN_ISSUES.md) for the current sprite-interpolation and
+terrain-strip limitations.
+
+In fullscreen, the game now creates RT64 at the selected monitor's current
+desktop size. The saved resolution applies to windowed mode and is restored
+when fullscreen is disabled; this avoids allocating an oversized transient
+render target during startup.
+
+Vertical sync is on by default and can be disabled from the launcher's
+Advanced tab or with `--no-vsync`, so there is no need to force it off in the
+GPU driver's control panel. Disabling it presents without waiting for the
+display and can tear.
 
 The ROM is hash-validated (US 1.1 only), stored under
 `~/.config/troublemakers-recomp/` along with saves, and the game auto-starts.

@@ -27,6 +27,9 @@ struct DisplaySettings {
     // interpolation); -1 = match the display's refresh; a positive value is
     // an interpolated FPS target (game logic still runs at 60Hz).
     int fps;
+    // Present with vertical sync. Off avoids driver-forced sync waits at the
+    // cost of possible tearing.
+    bool vsync;
     bool debug_menu;
 };
 
