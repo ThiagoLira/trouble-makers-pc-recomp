@@ -2,7 +2,7 @@
 # GNU ld / lld-link / ld64; see src/game/CMakeLists.txt).
 cmake_minimum_required(VERSION 3.24)
 
-project(troublemakers_recomp VERSION 0.3.6 LANGUAGES C CXX)
+project(troublemakers_recomp VERSION 0.3.7 LANGUAGES C CXX)
 include(CTest)
 set(CMAKE_C_STANDARD 17)
 set(CMAKE_CXX_STANDARD 20)
