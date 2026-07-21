@@ -1,0 +1,160 @@
+diff --git a/src/common/rt64_enhancement_configuration.cpp b/src/common/rt64_enhancement_configuration.cpp
+index 6026064..dc340cf 100644
+--- a/src/common/rt64_enhancement_configuration.cpp
++++ b/src/common/rt64_enhancement_configuration.cpp
+@@ -10,6 +10,7 @@ namespace RT64 {
+     EnhancementConfiguration::EnhancementConfiguration() {
+         framebuffer.reinterpretFixULS = true;
+         presentation.mode = Presentation::Mode::SkipBuffering;
++        presentation.viTopCropRows = 0; // [MM] host opts in via MM_VI_TOP_CROP
+         rect.fixRectLR = true;
+         rect.clearWings = false; // [MM] opt-in via host MM_CLEAR_WINGS=1
+         f3dex.forceBranch = false;
+diff --git a/src/common/rt64_enhancement_configuration.h b/src/common/rt64_enhancement_configuration.h
+index dab74d9..eb6c020 100644
+--- a/src/common/rt64_enhancement_configuration.h
++++ b/src/common/rt64_enhancement_configuration.h
+@@ -20,6 +20,11 @@ namespace RT64 {
+             };
+ 
+             Mode mode;
++            // [MM] Extra framebuffer rows to hide at the top of the screen
++            // during presentation, emulating the CRT overscan that consoles
++            // relied on. Mischief Makers keeps RDP-copied palette scratch in
++            // the first visible framebuffer rows.
++            uint32_t viTopCropRows;
+         };
+         
+         struct Rect {
+diff --git a/src/hle/rt64_present_queue.cpp b/src/hle/rt64_present_queue.cpp
+index edc7374..fcfa6e0 100644
+--- a/src/hle/rt64_present_queue.cpp
++++ b/src/hle/rt64_present_queue.cpp
+@@ -524,6 +524,7 @@ namespace RT64 {
+                     renderParams.downsamplingScale = 1;
+                     renderParams.filtering = filtering;
+                     renderParams.vi = &present.screenVI;
++                    renderParams.extraTopCropRows = ext.sharedResources->enhancementConfig.presentation.viTopCropRows;
+ 
+                     const bool useDownsampling = (colorTarget->downsampleMultiplier > 1);
+                     if (useDownsampling) {
+diff --git a/src/hle/rt64_vi.cpp b/src/hle/rt64_vi.cpp
+index 8d66101..0a7c701 100644
+--- a/src/hle/rt64_vi.cpp
++++ b/src/hle/rt64_vi.cpp
+@@ -107,6 +107,20 @@ namespace RT64 {
+         return origin;
+     }
+ 
++    uint32_t VI::fbRowOffset() const {
++        // The number of rows fbAddress() estimated the framebuffer base to be
++        // above VI_ORIGIN. The VI only displays memory starting at VI_ORIGIN;
++        // games can deliberately keep non-visible scratch data (e.g. palettes
++        // copied with the RDP) in the rows above it, so presentation must skip
++        // them or they show up as a garbage strip at the top of the screen.
++        uint8_t siz = fbSiz();
++        if ((siz < G_IM_SIZ_16b) || (width == 0)) {
++            return 0;
++        }
++
++        return (origin - fbAddress()) / (width * (1U << (siz - 1)));
++    }
++
+     hlslpp::uint2 VI::fbSize() const {
+         hlslpp::uint2 size = { width, 0 };
+         
+diff --git a/src/hle/rt64_vi.h b/src/hle/rt64_vi.h
+index 532edef..abb90a1 100644
+--- a/src/hle/rt64_vi.h
++++ b/src/hle/rt64_vi.h
+@@ -143,6 +143,7 @@ namespace RT64 {
+ 
+         uint8_t fbSiz() const;
+         uint32_t fbAddress() const;
++        uint32_t fbRowOffset() const;
+         hlslpp::uint2 fbSize() const;
+         float xScaleFloat() const;
+         float xOffsetFloat() const;
+diff --git a/src/render/rt64_vi_renderer.cpp b/src/render/rt64_vi_renderer.cpp
+index d597d75..89d6822 100644
+--- a/src/render/rt64_vi_renderer.cpp
++++ b/src/render/rt64_vi_renderer.cpp
+@@ -4,6 +4,8 @@
+ 
+ #include "rt64_vi_renderer.h"
+ 
++#include <algorithm>
++
+ #include "shared/rt64_hlsl.h"
+ #include "shared/rt64_video_interface.h"
+ 
+@@ -79,6 +81,20 @@ namespace RT64 {
+         pushConstants.textureResolution = { float(p.textureWidth), float(p.textureHeight) };
+         pushConstants.gamma = p.vi->gamma();
+ 
++        // Skip the framebuffer rows above VI_ORIGIN: the VI never scans them
++        // out, and games keep scratch data there (Mischief Makers copies
++        // palettes into the first framebuffer row with the RDP). The extra
++        // crop rows emulate CRT overscan for scratch that reaches the first
++        // scanned-out rows; shrinking the sampled region keeps the output
++        // anchored at the top instead of shifting the whole picture up.
++        const float sdRowScale = p.resolutionScale.y /
++            float(std::max(p.downsamplingScale, 1U));
++        const float cropRows = float(p.extraTopCropRows);
++        pushConstants.verticalOffset =
++            (float(p.vi->fbRowOffset()) + cropRows) * sdRowScale;
++        pushConstants.videoResolution.y =
++            std::max(float(fbHdRegion.y) - cropRows * sdRowScale, 1.0f);
++
+         p.commandList->setPipeline(shader->pipeline.get());
+         p.commandList->setGraphicsPipelineLayout(shader->pipelineLayout.get());
+         p.commandList->setGraphicsDescriptorSet(descriptorSet->get(), 0);
+diff --git a/src/render/rt64_vi_renderer.h b/src/render/rt64_vi_renderer.h
+index 9e83151..c9d8f29 100644
+--- a/src/render/rt64_vi_renderer.h
++++ b/src/render/rt64_vi_renderer.h
+@@ -28,6 +28,9 @@ namespace RT64 {
+             uint32_t textureHeight = 0;
+             UserConfiguration::Filtering filtering = UserConfiguration::Filtering::Linear;
+             const VI *vi = nullptr;
++            // Extra rows below VI_ORIGIN to hide from the top of the output
++            // (CRT-overscan emulation; see EnhancementConfiguration).
++            uint32_t extraTopCropRows = 0;
+         };
+ 
+         VIRenderer();
+diff --git a/src/shaders/VideoInterfacePS.hlsl b/src/shaders/VideoInterfacePS.hlsl
+index 065a701..e4fab09 100644
+--- a/src/shaders/VideoInterfacePS.hlsl
++++ b/src/shaders/VideoInterfacePS.hlsl
+@@ -11,10 +11,13 @@ SamplerState gSampler : register(s2);
+ // Limit texture sampling to the area the VI can sample of the texture.
+ 
+ float4 SampleInput(float2 uv) {
++    const float2 Offset = float2(0.0f, gConstants.verticalOffset) / gConstants.textureResolution;
+     const float2 LowerRight = gConstants.videoResolution / gConstants.textureResolution;
+     const float2 HalfPixel = float2(0.5f, 0.5f) / gConstants.textureResolution;
+     float2 outsideBorder = step(LowerRight - HalfPixel, uv);
+-    float4 sampledColor = gInput.SampleLevel(gSampler, clamp(uv, HalfPixel, LowerRight - HalfPixel), 0);
++    const float2 SampleMin = Offset + HalfPixel;
++    const float2 SampleMax = min(LowerRight + Offset, float2(1.0f, 1.0f)) - HalfPixel;
++    float4 sampledColor = gInput.SampleLevel(gSampler, clamp(uv + Offset, SampleMin, SampleMax), 0);
+     float4 gammaCorrectedColor = pow(sampledColor, gConstants.gamma);
+     gammaCorrectedColor.rgb *= max(1.0f - outsideBorder.x - outsideBorder.y, 0.0f);
+     gammaCorrectedColor.a = 1.0f;
+diff --git a/src/shared/rt64_video_interface.h b/src/shared/rt64_video_interface.h
+index b51cf09..ccfb396 100644
+--- a/src/shared/rt64_video_interface.h
++++ b/src/shared/rt64_video_interface.h
+@@ -13,6 +13,11 @@ namespace interop {
+         float2 videoResolution;
+         float2 textureResolution;
+         float gamma;
++        // Rows of the framebuffer texture the VI must skip, in texture pixels.
++        // VI::fbAddress() estimates the framebuffer base one or two rows above
++        // VI_ORIGIN; the VI only scans out from VI_ORIGIN, and games can hide
++        // scratch data (e.g. RDP-copied palettes) in the rows above it.
++        float verticalOffset;
+     };
+ #ifdef HLSL_CPU
+ };

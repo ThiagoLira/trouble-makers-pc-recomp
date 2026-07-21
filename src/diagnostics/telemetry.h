@@ -51,6 +51,10 @@ void set_display_state(std::uint32_t drawable_width,
                        std::uint32_t drawable_height,
                        std::uint32_t refresh_rate,
                        float resolution_scale);
+void set_render_target_state(std::uint32_t width,
+                             std::uint32_t height,
+                             std::uint32_t downsample_multiplier,
+                             std::uint32_t msaa_samples);
 void set_display_target(std::uint32_t target_rate);
 
 void set_renderer_state(std::uint32_t workload_queue_depth,

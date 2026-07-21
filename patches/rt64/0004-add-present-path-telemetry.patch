@@ -1,0 +1,543 @@
+diff --git a/src/hle/rt64_present_queue.cpp b/src/hle/rt64_present_queue.cpp
+index 8579695..edc7374 100644
+--- a/src/hle/rt64_present_queue.cpp
++++ b/src/hle/rt64_present_queue.cpp
+@@ -10,6 +10,67 @@
+ #include "rt64_workload_queue.h"
+ 
+ namespace RT64 {
++    namespace {
++        void telemetryUpdateMaximum(std::atomic<uint64_t> &target,
++                                    uint64_t value) {
++            uint64_t current = target.load(std::memory_order_relaxed);
++            while ((current < value) &&
++                   !target.compare_exchange_weak(current, value,
++                       std::memory_order_relaxed,
++                       std::memory_order_relaxed)) {}
++        }
++
++        void telemetryRecordTiming(PresentQueueTimingCounters &timing,
++                                   int64_t microseconds) {
++            const uint64_t safeMicroseconds =
++                static_cast<uint64_t>(std::max<int64_t>(microseconds, 0));
++            timing.count.fetch_add(1, std::memory_order_relaxed);
++            timing.sumMicroseconds.fetch_add(
++                safeMicroseconds, std::memory_order_relaxed);
++            telemetryUpdateMaximum(timing.maximumMicroseconds,
++                                   safeMicroseconds);
++        }
++
++        PresentQueueTimingSnapshot telemetryTakeTiming(
++                PresentQueueTimingCounters &timing) {
++            PresentQueueTimingSnapshot result;
++            result.count = timing.count.exchange(0, std::memory_order_relaxed);
++            result.sumMicroseconds = timing.sumMicroseconds.exchange(
++                0, std::memory_order_relaxed);
++            result.maximumMicroseconds = timing.maximumMicroseconds.exchange(
++                0, std::memory_order_relaxed);
++            return result;
++        }
++
++        void telemetryResetTiming(PresentQueueTimingCounters &timing) {
++            timing.count.store(0, std::memory_order_relaxed);
++            timing.sumMicroseconds.store(0, std::memory_order_relaxed);
++            timing.maximumMicroseconds.store(0, std::memory_order_relaxed);
++        }
++
++        uint64_t telemetryPercentile(
++                const std::array<uint64_t,
++                    PresentQueueTelemetryCounters::IntervalHistogramBucketCount> &histogram,
++                uint64_t count, uint64_t percentile) {
++            if (count == 0) {
++                return 0;
++            }
++
++            const uint64_t wanted = (count * percentile + 99) / 100;
++            uint64_t cumulative = 0;
++            for (size_t i = 0; i < histogram.size(); i++) {
++                cumulative += histogram[i];
++                if (cumulative >= wanted) {
++                    return (i + 1) *
++                        PresentQueueTelemetryCounters::IntervalHistogramBucketMicroseconds;
++                }
++            }
++
++            return histogram.size() *
++                PresentQueueTelemetryCounters::IntervalHistogramBucketMicroseconds;
++        }
++    }
++
+     // PresentQueue
+ 
+     PresentQueue::PresentQueue() {
+@@ -33,6 +94,112 @@ namespace RT64 {
+         writeCursor = 0;
+         barrierCursor = 0;
+         presentId = 0;
++        presentTimestamp = Timestamp();
++        telemetryPresentTimestamp = Timestamp();
++        resetTelemetry();
++    }
++
++    void PresentQueue::resetTelemetry() {
++        for (std::atomic<uint64_t> *counter : {
++                &telemetry.presentedFrames, &telemetry.baseFrames,
++                &telemetry.interpolatedFrames,
++                &telemetry.skippedInterpolatedFrames,
++                &telemetry.queueSkippedPresents,
++                &telemetry.interpolationBatches,
++                &telemetry.nonInterpolatedBatches,
++                &telemetry.failedPresents, &telemetry.intervalCount,
++                &telemetry.intervalSumMicroseconds,
++                &telemetry.intervalMaximumMicroseconds,
++                &telemetry.lateIntervals, &telemetry.missedDeadlines}) {
++            counter->store(0, std::memory_order_relaxed);
++        }
++        for (auto &bucket : telemetry.intervalHistogram) {
++            bucket.store(0, std::memory_order_relaxed);
++        }
++        telemetryResetTiming(telemetry.acquireWait);
++        telemetryResetTiming(telemetry.interpolationWait);
++        telemetryResetTiming(telemetry.gpuWait);
++        telemetryResetTiming(telemetry.pacingSleep);
++        telemetryResetTiming(telemetry.sleepOvershoot);
++        telemetryResetTiming(telemetry.swapChainWait);
++        telemetryResetTiming(telemetry.presentCall);
++        telemetry.effectiveTargetRate.store(0, std::memory_order_relaxed);
++        telemetry.originalRate.store(0, std::memory_order_relaxed);
++        telemetry.renderTargetWidth.store(0, std::memory_order_relaxed);
++        telemetry.renderTargetHeight.store(0, std::memory_order_relaxed);
++        telemetry.downsampleMultiplier.store(1, std::memory_order_relaxed);
++        telemetry.msaaSamples.store(1, std::memory_order_relaxed);
++    }
++
++    PresentQueueTelemetrySnapshot PresentQueue::takeTelemetrySnapshot() {
++        PresentQueueTelemetrySnapshot result;
++        result.presentedFrames = telemetry.presentedFrames.exchange(
++            0, std::memory_order_relaxed);
++        result.baseFrames = telemetry.baseFrames.exchange(
++            0, std::memory_order_relaxed);
++        result.interpolatedFrames = telemetry.interpolatedFrames.exchange(
++            0, std::memory_order_relaxed);
++        result.skippedInterpolatedFrames =
++            telemetry.skippedInterpolatedFrames.exchange(
++                0, std::memory_order_relaxed);
++        result.queueSkippedPresents = telemetry.queueSkippedPresents.exchange(
++            0, std::memory_order_relaxed);
++        result.interpolationBatches = telemetry.interpolationBatches.exchange(
++            0, std::memory_order_relaxed);
++        result.nonInterpolatedBatches =
++            telemetry.nonInterpolatedBatches.exchange(
++                0, std::memory_order_relaxed);
++        result.failedPresents = telemetry.failedPresents.exchange(
++            0, std::memory_order_relaxed);
++        result.intervalCount = telemetry.intervalCount.exchange(
++            0, std::memory_order_relaxed);
++        result.intervalSumMicroseconds =
++            telemetry.intervalSumMicroseconds.exchange(
++                0, std::memory_order_relaxed);
++        result.intervalMaximumMicroseconds =
++            telemetry.intervalMaximumMicroseconds.exchange(
++                0, std::memory_order_relaxed);
++        result.lateIntervals = telemetry.lateIntervals.exchange(
++            0, std::memory_order_relaxed);
++        result.missedDeadlines = telemetry.missedDeadlines.exchange(
++            0, std::memory_order_relaxed);
++
++        std::array<uint64_t,
++            PresentQueueTelemetryCounters::IntervalHistogramBucketCount> histogram{};
++        uint64_t histogramCount = 0;
++        for (size_t i = 0; i < histogram.size(); i++) {
++            histogram[i] = telemetry.intervalHistogram[i].exchange(
++                0, std::memory_order_relaxed);
++            histogramCount += histogram[i];
++        }
++        result.intervalP95Microseconds = telemetryPercentile(
++            histogram, histogramCount, 95);
++        result.intervalP99Microseconds = telemetryPercentile(
++            histogram, histogramCount, 99);
++
++        result.acquireWait = telemetryTakeTiming(telemetry.acquireWait);
++        result.interpolationWait = telemetryTakeTiming(
++            telemetry.interpolationWait);
++        result.gpuWait = telemetryTakeTiming(telemetry.gpuWait);
++        result.pacingSleep = telemetryTakeTiming(telemetry.pacingSleep);
++        result.sleepOvershoot = telemetryTakeTiming(telemetry.sleepOvershoot);
++        result.swapChainWait = telemetryTakeTiming(telemetry.swapChainWait);
++        result.presentCall = telemetryTakeTiming(telemetry.presentCall);
++        result.effectiveTargetRate = telemetry.effectiveTargetRate.load(
++            std::memory_order_relaxed);
++        result.originalRate = telemetry.originalRate.load(
++            std::memory_order_relaxed);
++        result.renderTargetWidth = telemetry.renderTargetWidth.load(
++            std::memory_order_relaxed);
++        result.renderTargetHeight = telemetry.renderTargetHeight.load(
++            std::memory_order_relaxed);
++        result.downsampleMultiplier = telemetry.downsampleMultiplier.load(
++            std::memory_order_relaxed);
++        result.msaaSamples = telemetry.msaaSamples.load(
++            std::memory_order_relaxed);
++        result.presentWaitEnabled = presentWaitEnabled.load(
++            std::memory_order_relaxed);
++        return result;
+     }
+ 
+     void PresentQueue::advanceToNextPresent() {
+@@ -111,6 +278,15 @@ namespace RT64 {
+             viOriginalRate = ext.sharedResources->viOriginalRate;
+             targetRate = ext.sharedResources->targetRate;
+         }
++        const uint32_t effectiveTargetRate =
++            (targetRate > viOriginalRate) ? targetRate : viOriginalRate;
++        telemetry.effectiveTargetRate.store(
++            effectiveTargetRate, std::memory_order_relaxed);
++        telemetry.originalRate.store(viOriginalRate,
++                                     std::memory_order_relaxed);
++        telemetry.msaaSamples.store(
++            std::max(targetManager.multisampling.sampleCount, 1U),
++            std::memory_order_relaxed);
+ 
+         RenderTarget *colorTarget = nullptr;
+         int32_t framesToPresent = 1;
+@@ -264,15 +440,29 @@ namespace RT64 {
+             }
+         }
+         
++        const int32_t requestedFramesToPresent = framesToPresent;
++        if (requestedFramesToPresent > 1) {
++            telemetry.interpolationBatches.fetch_add(
++                1, std::memory_order_relaxed);
++        } else if ((effectiveTargetRate > 0) &&
++                   (effectiveTargetRate > viOriginalRate)) {
++            telemetry.nonInterpolatedBatches.fetch_add(
++                1, std::memory_order_relaxed);
++        }
++
+         for (int32_t i = 0; i < framesToPresent; i++) {
+             uint32_t frameCountersNextPresented = 0;
+             if ((framesToPresent > 1) && (usingMSAA || (i > 0))) {
+                 // Stall until the interpolated color target is available.
+                 const uint32_t targetIndex = usingMSAA ? i : (i - 1);
++                const Timestamp interpolationWaitStarted = Timer::current();
+                 std::unique_lock<std::mutex> interpolatedLock(ext.sharedResources->interpolatedMutex);
+                 ext.sharedResources->interpolatedCondition.wait(interpolatedLock, [&]() {
+                     return (frameCounters.available > targetIndex) || ((frameCounters.available == targetIndex) && frameCounters.skipped);
+                 });
++                telemetryRecordTiming(telemetry.interpolationWait,
++                    Timer::deltaMicroseconds(
++                        interpolationWaitStarted, Timer::current()));
+ 
+                 // Do not present any more frames after this one after reaching the last available frame if the workload was skipped.
+                 if ((frameCounters.available == targetIndex) && frameCounters.skipped) {
+@@ -298,7 +488,14 @@ namespace RT64 {
+             uint32_t swapChainIndex = 0;
+             const bool presentFrame = (i < framesToPresent) && swapChainValid;
+             if (presentFrame) {
++                const Timestamp acquireStarted = Timer::current();
+                 swapChainValid = ext.swapChain->acquireTexture(acquiredSemaphore.get(), &swapChainIndex);
++                telemetryRecordTiming(telemetry.acquireWait,
++                    Timer::deltaMicroseconds(acquireStarted, Timer::current()));
++                if (!swapChainValid) {
++                    telemetry.failedPresents.fetch_add(
++                        1, std::memory_order_relaxed);
++                }
+             }
+ 
+             if (presentFrame && swapChainValid) {
+@@ -311,6 +508,13 @@ namespace RT64 {
+                 
+                 VIRenderer::RenderParams renderParams;
+                 if (colorTarget != nullptr) {
++                    telemetry.renderTargetWidth.store(
++                        colorTarget->width, std::memory_order_relaxed);
++                    telemetry.renderTargetHeight.store(
++                        colorTarget->height, std::memory_order_relaxed);
++                    telemetry.downsampleMultiplier.store(
++                        std::max(colorTarget->downsampleMultiplier, 1U),
++                        std::memory_order_relaxed);
+                     renderParams.device = ext.device;
+                     renderParams.commandList = commandList;
+                     renderParams.swapChain = ext.swapChain;
+@@ -362,7 +566,11 @@ namespace RT64 {
+                     RenderCommandSemaphore *waitSemaphore = acquiredSemaphore.get();
+                     RenderCommandSemaphore *signalSemaphore = drawSemaphore.get();
+                     ext.presentGraphicsWorker->commandQueue->executeCommandLists(&commandList, 1, &waitSemaphore, 1, &signalSemaphore, 1, ext.presentGraphicsWorker->commandFence.get());
++                    const Timestamp gpuWaitStarted = Timer::current();
+                     ext.presentGraphicsWorker->wait();
++                    telemetryRecordTiming(telemetry.gpuWait,
++                        Timer::deltaMicroseconds(
++                            gpuWaitStarted, Timer::current()));
+                 }
+             }
+ 
+@@ -388,19 +596,102 @@ namespace RT64 {
+             if (presentFrame && swapChainValid) {
+                 // Wait until the approximate time the next present should be at the current intended rate.
+                 if ((presentTimestamp != Timestamp()) && (targetRate > 0) && (targetRate > viOriginalRate)) {
+-                    Timer::preciseSleepUntil(presentTimestamp + std::chrono::nanoseconds(1'000'000'000 / targetRate));
++                    const Timestamp sleepStarted = Timer::current();
++                    const Timestamp sleepTarget = presentTimestamp +
++                        std::chrono::nanoseconds(1'000'000'000 / targetRate);
++                    Timer::preciseSleepUntil(sleepTarget);
++                    const Timestamp sleepFinished = Timer::current();
++                    telemetryRecordTiming(telemetry.pacingSleep,
++                        Timer::deltaMicroseconds(
++                            sleepStarted, sleepFinished));
++                    telemetryRecordTiming(telemetry.sleepOvershoot,
++                        Timer::deltaMicroseconds(
++                            sleepTarget, sleepFinished));
+                 }
+ 
+-                if (presentWaitEnabled) {
++                if (presentWaitEnabled.load(std::memory_order_relaxed)) {
++                    const Timestamp swapWaitStarted = Timer::current();
+                     ext.swapChain->wait();
++                    telemetryRecordTiming(telemetry.swapChainWait,
++                        Timer::deltaMicroseconds(
++                            swapWaitStarted, Timer::current()));
+                 }
+ 
+                 RenderCommandSemaphore *waitSemaphore = drawSemaphore.get();
+-                presentTimestamp = Timer::current();
+-                swapChainValid = ext.swapChain->present(swapChainIndex, &waitSemaphore, 1);
++                const Timestamp presentStarted = Timer::current();
++                presentTimestamp = presentStarted;
++                const bool presentSucceeded = ext.swapChain->present(
++                    swapChainIndex, &waitSemaphore, 1);
++                telemetryRecordTiming(telemetry.presentCall,
++                    Timer::deltaMicroseconds(
++                        presentStarted, Timer::current()));
++                swapChainValid = presentSucceeded;
++                if (presentSucceeded) {
++                    telemetry.presentedFrames.fetch_add(
++                        1, std::memory_order_relaxed);
++                    if (i == 0) {
++                        telemetry.baseFrames.fetch_add(
++                            1, std::memory_order_relaxed);
++                    } else {
++                        telemetry.interpolatedFrames.fetch_add(
++                            1, std::memory_order_relaxed);
++                    }
++
++                    if (telemetryPresentTimestamp != Timestamp()) {
++                        const uint64_t intervalMicroseconds =
++                            static_cast<uint64_t>(std::max<int64_t>(
++                                Timer::deltaMicroseconds(
++                                    telemetryPresentTimestamp,
++                                    presentStarted), 0));
++                        telemetry.intervalCount.fetch_add(
++                            1, std::memory_order_relaxed);
++                        telemetry.intervalSumMicroseconds.fetch_add(
++                            intervalMicroseconds, std::memory_order_relaxed);
++                        telemetryUpdateMaximum(
++                            telemetry.intervalMaximumMicroseconds,
++                            intervalMicroseconds);
++                        const size_t bucket = std::min<size_t>(
++                            intervalMicroseconds /
++                                PresentQueueTelemetryCounters::IntervalHistogramBucketMicroseconds,
++                            PresentQueueTelemetryCounters::IntervalHistogramBucketCount - 1);
++                        telemetry.intervalHistogram[bucket].fetch_add(
++                            1, std::memory_order_relaxed);
++
++                        if (effectiveTargetRate > 0) {
++                            const uint64_t budgetMicroseconds =
++                                1'000'000ULL / effectiveTargetRate;
++                            if (intervalMicroseconds >
++                                budgetMicroseconds + budgetMicroseconds / 5) {
++                                telemetry.lateIntervals.fetch_add(
++                                    1, std::memory_order_relaxed);
++                            }
++                            if (intervalMicroseconds >
++                                budgetMicroseconds + budgetMicroseconds / 2) {
++                                const uint64_t elapsedPeriods =
++                                    (intervalMicroseconds +
++                                     budgetMicroseconds / 2) /
++                                    budgetMicroseconds;
++                                telemetry.missedDeadlines.fetch_add(
++                                    std::max<uint64_t>(elapsedPeriods, 1) - 1,
++                                    std::memory_order_relaxed);
++                            }
++                        }
++                    }
++                    telemetryPresentTimestamp = presentStarted;
++                } else {
++                    telemetry.failedPresents.fetch_add(
++                        1, std::memory_order_relaxed);
++                }
+                 presentProfiler.logAndRestart();
+             }
+         }
++
++        if (requestedFramesToPresent > framesToPresent) {
++            telemetry.skippedInterpolatedFrames.fetch_add(
++                static_cast<uint64_t>(
++                    requestedFramesToPresent - framesToPresent),
++                std::memory_order_relaxed);
++        }
+     }
+ 
+     void PresentQueue::skipInterpolation() {
+@@ -483,10 +774,15 @@ namespace RT64 {
+                     ext.presentGraphicsWorker->commandList->begin();
+                     ext.presentGraphicsWorker->commandList->end();
+                     ext.presentGraphicsWorker->execute();
++                    const Timestamp resizeGpuWaitStarted = Timer::current();
+                     ext.presentGraphicsWorker->wait();
++                    telemetryRecordTiming(telemetry.gpuWait,
++                        Timer::deltaMicroseconds(
++                            resizeGpuWaitStarted, Timer::current()));
+                     swapChainValid = ext.swapChain->resize();
+                     swapChainFramebuffers.clear();
+                     presentWaitEnabled = detectPresentWait();
++                    telemetryPresentTimestamp = Timestamp();
+ 
+                     if (swapChainValid) {
+                         ext.sharedResources->setSwapChainSize(ext.swapChain->getWidth(), ext.swapChain->getHeight());
+@@ -520,6 +816,8 @@ namespace RT64 {
+                 }
+ 
+                 if (skipPresent) {
++                    telemetry.queueSkippedPresents.fetch_add(
++                        1, std::memory_order_relaxed);
+                     skipInterpolation();
+                     notifyPresentId(present);
+                 }
+@@ -555,4 +853,4 @@ namespace RT64 {
+             ext.presentGraphicsWorker->wait();
+         }
+     }
+-};
+\ No newline at end of file
++};
+diff --git a/src/hle/rt64_present_queue.h b/src/hle/rt64_present_queue.h
+index 7bec992..c4277bf 100644
+--- a/src/hle/rt64_present_queue.h
++++ b/src/hle/rt64_present_queue.h
+@@ -4,6 +4,11 @@
+ 
+ #pragma once
+ 
++#include <array>
++#include <atomic>
++#include <cstddef>
++#include <cstdint>
++
+ #include "common/rt64_profiling_timer.h"
+ #include "gui/rt64_inspector.h"
+ #include "render/rt64_vi_renderer.h"
+@@ -17,6 +22,87 @@
+ namespace RT64 {
+     struct WorkloadQueue;
+ 
++    // [MM] Low-overhead counters for the real presentation thread. Host-side
++    // screen-update timing only observes VI submissions and cannot diagnose a
++    // blocked swap chain, interpolation starvation, or GPU fence waits.
++    struct PresentQueueTimingSnapshot {
++        uint64_t count = 0;
++        uint64_t sumMicroseconds = 0;
++        uint64_t maximumMicroseconds = 0;
++    };
++
++    struct PresentQueueTelemetrySnapshot {
++        uint64_t presentedFrames = 0;
++        uint64_t baseFrames = 0;
++        uint64_t interpolatedFrames = 0;
++        uint64_t skippedInterpolatedFrames = 0;
++        uint64_t queueSkippedPresents = 0;
++        uint64_t interpolationBatches = 0;
++        uint64_t nonInterpolatedBatches = 0;
++        uint64_t failedPresents = 0;
++        uint64_t intervalCount = 0;
++        uint64_t intervalSumMicroseconds = 0;
++        uint64_t intervalP95Microseconds = 0;
++        uint64_t intervalP99Microseconds = 0;
++        uint64_t intervalMaximumMicroseconds = 0;
++        uint64_t lateIntervals = 0;
++        uint64_t missedDeadlines = 0;
++        PresentQueueTimingSnapshot acquireWait;
++        PresentQueueTimingSnapshot interpolationWait;
++        PresentQueueTimingSnapshot gpuWait;
++        PresentQueueTimingSnapshot pacingSleep;
++        PresentQueueTimingSnapshot sleepOvershoot;
++        PresentQueueTimingSnapshot swapChainWait;
++        PresentQueueTimingSnapshot presentCall;
++        uint32_t effectiveTargetRate = 0;
++        uint32_t originalRate = 0;
++        uint32_t renderTargetWidth = 0;
++        uint32_t renderTargetHeight = 0;
++        uint32_t downsampleMultiplier = 1;
++        uint32_t msaaSamples = 1;
++        bool presentWaitEnabled = false;
++    };
++
++    struct PresentQueueTimingCounters {
++        std::atomic<uint64_t> count{0};
++        std::atomic<uint64_t> sumMicroseconds{0};
++        std::atomic<uint64_t> maximumMicroseconds{0};
++    };
++
++    struct PresentQueueTelemetryCounters {
++        static constexpr size_t IntervalHistogramBucketCount = 256;
++        static constexpr uint64_t IntervalHistogramBucketMicroseconds = 250;
++
++        std::atomic<uint64_t> presentedFrames{0};
++        std::atomic<uint64_t> baseFrames{0};
++        std::atomic<uint64_t> interpolatedFrames{0};
++        std::atomic<uint64_t> skippedInterpolatedFrames{0};
++        std::atomic<uint64_t> queueSkippedPresents{0};
++        std::atomic<uint64_t> interpolationBatches{0};
++        std::atomic<uint64_t> nonInterpolatedBatches{0};
++        std::atomic<uint64_t> failedPresents{0};
++        std::atomic<uint64_t> intervalCount{0};
++        std::atomic<uint64_t> intervalSumMicroseconds{0};
++        std::atomic<uint64_t> intervalMaximumMicroseconds{0};
++        std::atomic<uint64_t> lateIntervals{0};
++        std::atomic<uint64_t> missedDeadlines{0};
++        std::array<std::atomic<uint64_t>,
++                   IntervalHistogramBucketCount> intervalHistogram{};
++        PresentQueueTimingCounters acquireWait;
++        PresentQueueTimingCounters interpolationWait;
++        PresentQueueTimingCounters gpuWait;
++        PresentQueueTimingCounters pacingSleep;
++        PresentQueueTimingCounters sleepOvershoot;
++        PresentQueueTimingCounters swapChainWait;
++        PresentQueueTimingCounters presentCall;
++        std::atomic<uint32_t> effectiveTargetRate{0};
++        std::atomic<uint32_t> originalRate{0};
++        std::atomic<uint32_t> renderTargetWidth{0};
++        std::atomic<uint32_t> renderTargetHeight{0};
++        std::atomic<uint32_t> downsampleMultiplier{1};
++        std::atomic<uint32_t> msaaSamples{1};
++    };
++
+     struct PresentQueue {
+         struct External {
+             ApplicationWindow *appWindow = nullptr;
+@@ -55,8 +141,10 @@ namespace RT64 {
+         std::unique_ptr<Inspector> inspector;
+         ProfilingTimer presentProfiler = ProfilingTimer(120);
+         Timestamp presentTimestamp;
++        Timestamp telemetryPresentTimestamp;
++        PresentQueueTelemetryCounters telemetry;
+         VIHistory viHistory;
+-        bool presentWaitEnabled = false;
++        std::atomic<bool> presentWaitEnabled{false};
+ 
+         PresentQueue();
+         ~PresentQueue();
+@@ -67,11 +155,13 @@ namespace RT64 {
+         void waitForIdle();
+         void waitForPresentId(uint64_t waitId);
+         void setup(const External &ext);
++        PresentQueueTelemetrySnapshot takeTelemetrySnapshot();
+         void threadPresent(const Present &present, bool &swapChainValid);
+         void skipInterpolation();
+         void notifyPresentId(const Present &present);
+         bool detectPresentWait();
+         void threadAdvanceBarrier();
+         void threadLoop();
++        void resetTelemetry();
+     };
+-};
+\ No newline at end of file
++};

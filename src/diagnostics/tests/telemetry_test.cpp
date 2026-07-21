@@ -27,6 +27,7 @@ int main() {
     set_audio_rates(32000, 48000);
     record_audio_buffer(600, 1400, 48000, 800, 20000, 0, 0, 1600, false);
     set_display_state(1920, 1080, 144, 4.0f);
+    set_render_target_state(2560, 1920, 2, 1);
     set_display_target(120);
     record_scene(6, 3, 12);
     std::this_thread::sleep_for(std::chrono::milliseconds(40));

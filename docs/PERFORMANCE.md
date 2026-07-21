@@ -59,11 +59,17 @@ rendered build.
 The current runtime emits a low-overhead `[perf]` snapshot every five seconds
 without an environment flag. It reports frame cadence and tails, display-list
 and screen-update CPU time, RT64 queue depths, compiled specialized shaders,
-texture-cache occupancy/upload backlog, and Linux process RSS/peak RSS/thread
-count. The hot paths only update atomics; formatting and file output happen on
-the telemetry thread. This measures host submission and queueing, not GPU
-execution. [Vulkan timestamp queries](https://registry.khronos.org/vulkan/specs/latest/html/vkspec.html#queries-timestamps)
-or a GPU vendor profiler are required for GPU time.
+texture-cache occupancy/upload backlog, the actual render-target size and AA
+mode, and process RSS/peak RSS/thread count on Linux and Windows. A companion
+`[present]` record comes from RT64's real presentation thread. It reports
+native/interpolated/skipped frames, measured present cadence and p95/p99 tail,
+late and missed deadlines, queue skips/failures, and the CPU time blocked in
+swap-chain acquisition, interpolation availability, the GPU fence, present
+wait, pacing sleep/overshoot, and the platform `Present` call. The hot paths
+only update relaxed atomics; formatting and file output happen outside the
+presentation thread. GPU-fence wait time can expose a GPU bottleneck but is
+not a full GPU workload duration; Vulkan/D3D timestamp queries or a vendor
+profiler are still required for exact GPU time.
 
 The snapshots are retained in `logs/latest.log` and `logs/previous.log` below
 the app config folder. After reproducing a user-only slowdown for at least 15
@@ -312,14 +318,62 @@ line, and whether software Vulkan was reported. In each `[perf]` record,
 normally track the game cadence, and `shaders=0` is expected when Blackwell's
 ubershader-only workaround is active. `textures=resident/slots` and `uploads=`
 expose texture-cache growth or a stuck upload producer; `rss-mib`,
-`peak-rss-mib`, and `threads` expose process-level growth on Linux. Large
-`dl-cpu-ms` points to host display-list processing instead.
+`peak-rss-mib`, and `threads` expose process-level growth on Linux and Windows.
+Large `dl-cpu-ms` points to host display-list processing instead. In the
+`[present]` line, compare `rate` with `target`, then inspect `late/missed`,
+interpolated/skipped frames, and the per-stage wait maxima. A large `gpu` wait
+implicates unfinished rendering; `acquire`, `swap`, or `present` implicates the
+swap-chain/display path; interpolation wait and skipped counts implicate frame
+generation; pacing overshoot implicates host scheduling.
 
 The current-main local startup check selected the NVIDIA GeForce RTX 5090 on
 Wayland, emitted no swapchain/import errors, sustained 60 display lists per
 second, kept both queue depths at zero, and kept `shaders=0` under the
 Blackwell workaround. After the first interval, display-list CPU averages were
 2.49--3.37 ms with 5.86--6.93 ms maxima in that attract-mode segment.
+
+### Windows v0.3.6 affected-machine report
+
+The July 21 Windows report is valuable precisely because it does **not**
+support several tempting explanations. With native 60 FPS and 4x MSAA, the
+reported Stage 2 session held 60.0 VI, screen, display-list, and audio tasks per
+second. Frame p95 stayed at 18 ms, display-list CPU generally stayed near
+2.7--3.3 ms, both renderer queues stayed empty, and pending texture uploads
+were always zero. The audio queue never emptied after warm-up and reported no
+queue errors. PCM clipping indicates saturated samples, not an audio-buffer
+underrun, so the clipping counts do not explain a video hitch. Likewise,
+`textures=resident/slots` fluctuating under a bounded 478-slot allocation is
+cache reuse, not proof that textures were synchronously loaded at each hitch.
+
+There were sparse 20--20.5 ms frame intervals, including a small cluster late
+in the run, but v0.3.6 measured the 60 Hz host call into `updateScreen`, not the
+actual D3D12 presentation thread. It therefore could not distinguish a GPU
+fence wait, frame-latency wait, `Present` delay, or missed interpolated frame.
+It also printed zero RSS/thread data on Windows. The new `[present]` counters
+and Windows process metrics close those blind spots; a future affected log can
+attribute the hitch instead of inferring it from unrelated audio amplitudes or
+texture counts.
+
+The report also exposed two concrete configuration/diagnostic problems:
+
+- A saved 3840x2160 fullscreen size was used to create RT64 on a 1920x1080
+  desktop. RT64 initially reported 9x scale, then resized to 5x. With 2x SSAA,
+  the old `scale=` field omitted the extra supersampling multiplier, hiding an
+  even larger transient allocation. Fullscreen creation now uses the selected
+  monitor's current mode before RT64 starts, while preserving the saved size
+  for windowed mode. The log now reports RT64's actual render-target dimensions
+  and downsample/MSAA state.
+- SDL's `SDL_AudioCVT::len_ratio` produced an uninitialised, enormous value in
+  one Windows log. Diagnostics now print the deterministic output/input sample
+  rate ratio instead. This was a logging defect, not evidence of a resampler
+  timing failure.
+
+The user's A/B result is also actionable: 4x MSAA/native 60 felt substantially
+better than 2x SSAA/high-rate interpolation, while AA itself made little visible
+difference. The default remains native 60 with AA off. When hardware headroom
+exists, spend it on frame interpolation before AA; the safe higher-FPS launcher
+preset targets 120 FPS with AA off rather than automatically requesting 240.
+SSAA plus interpolation is explicitly flagged as a very-high-cost combination.
 
 ### Historical pre-rebase long-session soak
 

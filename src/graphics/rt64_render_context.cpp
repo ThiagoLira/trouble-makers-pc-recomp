@@ -39,9 +39,71 @@ namespace mm::graphics {
 namespace {
 
 std::atomic<OverlayDrawCallback> g_overlay_draw_callback{nullptr};
+std::atomic<bool> g_vsync_enabled{true};
 
 int ring_queue_depth(int thread_cursor, int write_cursor, int queue_size) {
     return (write_cursor - thread_cursor + queue_size) % queue_size;
+}
+
+double timing_average_ms(const RT64::PresentQueueTimingSnapshot& timing) {
+    return timing.count == 0 ? 0.0
+        : static_cast<double>(timing.sumMicroseconds) /
+          static_cast<double>(timing.count) / 1000.0;
+}
+
+void log_present_telemetry(
+        const RT64::PresentQueueTelemetrySnapshot& present) {
+    if (present.presentedFrames == 0 && present.failedPresents == 0 &&
+        present.queueSkippedPresents == 0) {
+        return;
+    }
+
+    const double interval_average_ms = present.intervalCount == 0 ? 0.0
+        : static_cast<double>(present.intervalSumMicroseconds) /
+          static_cast<double>(present.intervalCount) / 1000.0;
+    const double measured_rate = present.intervalSumMicroseconds == 0 ? 0.0
+        : static_cast<double>(present.intervalCount) * 1'000'000.0 /
+          static_cast<double>(present.intervalSumMicroseconds);
+    mm::telemetry::event("present",
+        "rate=%.1f/s target=%uHz source=%uHz "
+        "interval-ms(avg/p95/p99/max)=%.2f/%.2f/%.2f/%.2f "
+        "late/missed=%llu/%llu frames(base/interpolated/skipped)=%llu/%llu/%llu "
+        "batches(interpolated/non-interpolated)=%llu/%llu queue-skips=%llu failures=%llu "
+        "wait-ms(avg/max acquire/interpolation/gpu/swap/present)="
+        "%.2f/%.2f %.2f/%.2f %.2f/%.2f %.2f/%.2f %.2f/%.2f "
+        "pacing-ms(sleep/overshoot)=%.2f/%.2f %.2f/%.2f present-wait=%s "
+        "render-target=%ux%u downsample=%ux msaa=%ux",
+        measured_rate, present.effectiveTargetRate, present.originalRate,
+        interval_average_ms,
+        present.intervalP95Microseconds / 1000.0,
+        present.intervalP99Microseconds / 1000.0,
+        present.intervalMaximumMicroseconds / 1000.0,
+        static_cast<unsigned long long>(present.lateIntervals),
+        static_cast<unsigned long long>(present.missedDeadlines),
+        static_cast<unsigned long long>(present.baseFrames),
+        static_cast<unsigned long long>(present.interpolatedFrames),
+        static_cast<unsigned long long>(present.skippedInterpolatedFrames),
+        static_cast<unsigned long long>(present.interpolationBatches),
+        static_cast<unsigned long long>(present.nonInterpolatedBatches),
+        static_cast<unsigned long long>(present.queueSkippedPresents),
+        static_cast<unsigned long long>(present.failedPresents),
+        timing_average_ms(present.acquireWait),
+        present.acquireWait.maximumMicroseconds / 1000.0,
+        timing_average_ms(present.interpolationWait),
+        present.interpolationWait.maximumMicroseconds / 1000.0,
+        timing_average_ms(present.gpuWait),
+        present.gpuWait.maximumMicroseconds / 1000.0,
+        timing_average_ms(present.swapChainWait),
+        present.swapChainWait.maximumMicroseconds / 1000.0,
+        timing_average_ms(present.presentCall),
+        present.presentCall.maximumMicroseconds / 1000.0,
+        timing_average_ms(present.pacingSleep),
+        present.pacingSleep.maximumMicroseconds / 1000.0,
+        timing_average_ms(present.sleepOvershoot),
+        present.sleepOvershoot.maximumMicroseconds / 1000.0,
+        present.presentWaitEnabled ? "yes" : "no",
+        present.renderTargetWidth, present.renderTargetHeight,
+        present.downsampleMultiplier, present.msaaSamples);
 }
 
 // N64 bus addresses carry segment bits in the top byte; RT64 wants the
@@ -225,6 +287,20 @@ public:
         app_ = std::make_unique<RT64::Application>(core, app_config);
 
         apply_config(*app_, ultramodern::renderer::get_graphics_config());
+
+        // The game stashes RDP-copied palette scratch in the framebuffer rows
+        // a CRT never showed: one row above VI_ORIGIN plus the first scanned
+        // out row or two (issue #37). The patched RT64 presenter skips the
+        // pre-origin row unconditionally; this hides the remaining scratch
+        // rows the way CRT overscan did. MM_VI_TOP_CROP overrides (0 shows
+        // every scanned-out row again).
+        uint32_t top_crop_rows = 2;
+        if (const char* crop_env = std::getenv("MM_VI_TOP_CROP")) {
+            const long value = std::strtol(crop_env, nullptr, 10);
+            top_crop_rows = static_cast<uint32_t>(std::clamp(value, 0L, 16L));
+        }
+        app_->enhancementConfig.presentation.viTopCropRows = top_crop_rows;
+
         const uint32_t requested_msaa = app_->userConfig.msaaSampleCount();
         const int requested_ssaa = app_->userConfig.downsampleMultiplier;
         app_->userConfig.developerMode = developer_mode;
@@ -259,6 +335,20 @@ public:
             active_msaa == requested_msaa ? "" : " (hardware fallback)",
             requested_ssaa,
             app_->device->getCapabilities().sampleLocations ? "yes" : "no");
+
+        // The swap chain is created with vsync on. Apply the user's choice
+        // before the first workload reaches the present queue: D3D12 switches
+        // to Present(0) immediately, Vulkan flags the swap chain for
+        // recreation in immediate mode (a no-op if the surface only supports
+        // FIFO, in which case isVsyncEnabled stays yes).
+        const bool vsync = g_vsync_enabled.load(std::memory_order_acquire);
+        if (!vsync && app_->swapChain != nullptr) {
+            app_->swapChain->setVsyncEnabled(false);
+        }
+        mm::telemetry::event("gfx", "vsync requested=%s swap-chain=%s",
+            vsync ? "on" : "off",
+            app_->swapChain != nullptr &&
+                app_->swapChain->isVsyncEnabled() ? "yes" : "no");
         mm::telemetry::set_phase(mm::telemetry::Phase::RendererReady,
                                  "RT64 setup completed");
 
@@ -438,37 +528,93 @@ public:
                 texture_slots, pending_texture_uploads);
         }
 
+        if ((screen_count % 300) == 0) {
+            const RT64::PresentQueueTelemetrySnapshot present =
+                app_->presentQueue->takeTelemetrySnapshot();
+            mm::telemetry::set_render_target_state(
+                present.renderTargetWidth, present.renderTargetHeight,
+                present.downsampleMultiplier, present.msaaSamples);
+            log_present_telemetry(present);
+        }
+
         if (screen_count == 1 || screen_count % 300 == 0) {
             std::uint32_t width = 0;
             std::uint32_t height = 0;
             std::uint32_t refresh = 0;
-            float scale = 1.0f;
+            float scale_x = 1.0f;
+            float scale_y = 1.0f;
+            std::uint32_t downsample = 1;
             {
                 const std::scoped_lock lock(
                     app_->sharedQueueResources->configurationMutex);
                 width = app_->sharedQueueResources->swapChainWidth;
                 height = app_->sharedQueueResources->swapChainHeight;
                 refresh = app_->sharedQueueResources->swapChainRate;
-                constexpr float kN64Lines = 240.0f;
-                if (app_->userConfig.resolution ==
-                    RT64::UserConfiguration::Resolution::Manual) {
-                    scale = static_cast<float>(
-                        app_->userConfig.resolutionMultiplier);
-                } else if (height > 0) {
-                    scale = std::max(std::ceil(height / kN64Lines), 1.0f);
+                scale_x = app_->sharedQueueResources->resolutionScale.x;
+                scale_y = app_->sharedQueueResources->resolutionScale.y;
+                downsample = static_cast<std::uint32_t>(std::max(
+                    app_->sharedQueueResources->userConfig.downsampleMultiplier,
+                    1));
+
+                // Some Wayland swap chains report 0x0 until their first
+                // resize. The SDL client size is already final and is a safe
+                // startup fallback for diagnostics and scale planning.
+                if ((width == 0 || height == 0) &&
+                    app_->appWindow->sdlWindow != nullptr) {
+                    int window_width = 0;
+                    int window_height = 0;
+                    SDL_GetWindowSize(app_->appWindow->sdlWindow,
+                                      &window_width, &window_height);
+                    width = static_cast<std::uint32_t>(
+                        std::max(window_width, 0));
+                    height = static_cast<std::uint32_t>(
+                        std::max(window_height, 0));
+                }
+
+                // Before the first workload, RT64 has not populated its
+                // shared resolution vector yet. Derive the exact planned
+                // window-integer scale so startup diagnostics do not report a
+                // fictitious 1x target (or omit SSAA as the old log did).
+                if (screen_count == 1 && height > 0 &&
+                    app_->sharedQueueResources->userConfig.resolution ==
+                        RT64::UserConfiguration::Resolution::WindowIntegerScale) {
+                    constexpr float kN64Lines = 240.0f;
+                    scale_y = std::max(std::ceil(height / kN64Lines), 1.0f) *
+                              downsample;
+                    scale_x = scale_y;
+                    if (app_->sharedQueueResources->userConfig.aspectRatio ==
+                            RT64::UserConfiguration::AspectRatio::Expand &&
+                        width > 0) {
+                        constexpr float kOriginalAspect = 4.0f / 3.0f;
+                        const float output_aspect =
+                            static_cast<float>(width) /
+                            static_cast<float>(height);
+                        scale_x *= std::max(
+                            output_aspect / kOriginalAspect, 1.0f);
+                    }
                 }
             }
-            mm::telemetry::set_display_state(width, height, refresh, scale);
+            mm::telemetry::set_display_state(width, height, refresh, scale_y);
             if (screen_count == 1) {
+                constexpr float kReferenceWidth = 320.0f;
+                constexpr float kReferenceHeight = 240.0f;
                 mm::telemetry::event("display",
-                    "RT64 drawable=%ux%u refresh=%uHz resolution-scale=%.2fx",
-                    width, height, refresh, scale);
+                    "RT64 drawable=%ux%u refresh=%uHz resolution-scale=%.2fx%.2f "
+                    "reference-target=%ux%u ssaa=%ux",
+                    width, height, refresh, scale_x, scale_y,
+                    static_cast<std::uint32_t>(std::lround(
+                        kReferenceWidth * scale_x)),
+                    static_cast<std::uint32_t>(std::lround(
+                        kReferenceHeight * scale_y)),
+                    downsample);
             }
         }
     }
 
     void shutdown() override {
         if (app_ != nullptr) {
+            log_present_telemetry(
+                app_->presentQueue->takeTelemetrySnapshot());
             mm::telemetry::set_phase(mm::telemetry::Phase::ShuttingDown,
                                      "RT64 shutdown requested");
             mm::telemetry::event("gfx", "RT64 shutdown beginning");
@@ -511,6 +657,10 @@ private:
 };
 
 } // namespace
+
+void set_vsync_enabled(bool enabled) {
+    g_vsync_enabled.store(enabled, std::memory_order_release);
+}
 
 void set_overlay_draw_callback(OverlayDrawCallback callback) {
     g_overlay_draw_callback.store(callback, std::memory_order_release);

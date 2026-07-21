@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <array>
 #include <cfloat>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -262,10 +263,13 @@ Outcome run(std::u8string game_id, const std::string& version_string,
     // already applies the user's display scale to an SDL window; deriving a
     // second scale from the physical desktop height makes a 1440p/150% setup
     // effectively 3x, which overflows the launcher and breaks hit testing.
+    SDL_DisplayMode desktop{};
+    const bool have_desktop =
+        SDL_GetCurrentDisplayMode(0, &desktop) == 0 &&
+        desktop.w > 0 && desktop.h > 0;
     int ui_scale = 1;
 #if !defined(_WIN32)
-    SDL_DisplayMode desktop{};
-    if (SDL_GetDesktopDisplayMode(0, &desktop) == 0 && desktop.h > 0) {
+    if (have_desktop) {
         ui_scale = std::clamp(desktop.h / 720, 1, 4);
     }
 #endif
@@ -505,8 +509,16 @@ Outcome run(std::u8string game_id, const std::string& version_string,
 
         // --- Display -------------------------------------------------------
         ImGui::SeparatorText("Display");
-        const char* preview = preset_index >= 0 ? kPresets[preset_index].label : custom_label;
+        char fullscreen_label[64] = {};
+        if (settings.fullscreen && have_desktop) {
+            std::snprintf(fullscreen_label, sizeof fullscreen_label,
+                          "Desktop (%d x %d)", desktop.w, desktop.h);
+        }
+        const char* preview = settings.fullscreen && have_desktop
+            ? fullscreen_label
+            : (preset_index >= 0 ? kPresets[preset_index].label : custom_label);
         ImGui::SetNextItemWidth(220.0f);
+        ImGui::BeginDisabled(settings.fullscreen);
         if (ImGui::BeginCombo("Resolution", preview)) {
             if (preset_index < 0 && ImGui::Selectable(custom_label, true)) {
                 // keep the custom size
@@ -520,8 +532,13 @@ Outcome run(std::u8string game_id, const std::string& version_string,
             }
             ImGui::EndCombo();
         }
+        ImGui::EndDisabled();
         ImGui::SameLine(0.0f, 24.0f);
         ImGui::Checkbox("Fullscreen", &settings.fullscreen);
+        if (settings.fullscreen && have_desktop) {
+            ImGui::TextDisabled(
+                "Fullscreen uses the desktop mode; the saved size is restored in windowed mode.");
+        }
         ImGui::Checkbox("Widescreen", &settings.widescreen);
         ImGui::SameLine();
         ImGui::TextDisabled("(?)");
@@ -548,7 +565,8 @@ Outcome run(std::u8string game_id, const std::string& version_string,
             ImGui::EndCombo();
         }
         if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Smooths polygon edges. Selecting MSAA disables SSAA.");
+            ImGui::SetTooltip("Optionally smooths polygon edges, but the difference can be subtle\n"
+                              "at the game's already-high internal resolution. Selecting MSAA disables SSAA.");
         }
 
         char ssaa_preview[16] = "Off";
@@ -571,7 +589,37 @@ Outcome run(std::u8string game_id, const std::string& version_string,
         }
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("Renders at 2x each dimension (4x as many pixels) and downsamples.\n"
+                              "This is substantially heavier than MSAA, especially above 60 fps.\n"
                               "Selecting SSAA disables MSAA.");
+        }
+
+        ImGui::TextUnformatted("Quick presets");
+        if (ImGui::Button("Recommended (AA off)")) {
+            settings.fps = 0;
+            settings.msaa = 0;
+            settings.ssaa = 1;
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Native 60 fps with antialiasing disabled.");
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Higher FPS (AA off)")) {
+            settings.fps = 120;
+            settings.msaa = 0;
+            settings.ssaa = 1;
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Targets 120 fps with interpolation (clamped to the display). Prefer\n"
+                              "this visible motion upgrade over AA when there is spare performance.");
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Try 4x MSAA")) {
+            settings.fps = 0;
+            settings.msaa = 4;
+            settings.ssaa = 1;
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Native 60 fps with 4x MSAA for an A/B image-quality check.");
         }
 
         // --- Advanced ------------------------------------------------------
@@ -599,6 +647,67 @@ Outcome run(std::u8string game_id, const std::string& version_string,
             ImGui::SetTooltip("Interpolates smoother motion above the game's 60Hz using RT64.\n"
                               "The game's logic still runs at 60Hz; the extra frames are\n"
                               "synthesized. Capped to your monitor's refresh rate.");
+        }
+
+        ImGui::Checkbox("VSync", &settings.vsync);
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+            ImGui::SetTooltip(
+                "Waits for the display's vertical sync before presenting (default).\n"
+                "Turn off to skip that wait without touching driver settings.\n"
+                "Presentation can tear; frame pacing above 60 fps may be less even.");
+        }
+
+        const int output_width = settings.fullscreen && have_desktop
+            ? desktop.w : settings.window_w;
+        const int output_height = settings.fullscreen && have_desktop
+            ? desktop.h : settings.window_h;
+        int effective_rate = 60;
+        if (settings.fps < 0) {
+            effective_rate = have_desktop && desktop.refresh_rate > 0
+                ? desktop.refresh_rate : 60;
+        } else if (settings.fps > 0) {
+            effective_rate = settings.fps;
+            if (have_desktop && desktop.refresh_rate > 0) {
+                effective_rate = std::min(effective_rate, desktop.refresh_rate);
+            }
+        }
+        const int output_scale = std::max((output_height + 239) / 240, 1);
+        const int internal_scale = output_scale * std::max(settings.ssaa, 1);
+        const double aspect_expansion = settings.widescreen && output_height > 0
+            ? std::max((static_cast<double>(output_width) / output_height) /
+                       (4.0 / 3.0), 1.0)
+            : 1.0;
+        const int estimated_internal_width = static_cast<int>(std::lround(
+            320.0 * internal_scale * aspect_expansion));
+        const int estimated_internal_height = 240 * internal_scale;
+        const double frame_multiplier = std::max(effective_rate / 60.0, 1.0);
+        const double aa_multiplier = settings.ssaa > 1
+            ? static_cast<double>(settings.ssaa * settings.ssaa)
+            : static_cast<double>(std::max(settings.msaa, 1));
+        const double estimated_sample_load = frame_multiplier * aa_multiplier;
+
+        ImGui::TextDisabled(
+            "Estimated internal target: %d x %d, %d fps target, ~%.1fx raster samples",
+            estimated_internal_width, estimated_internal_height,
+            effective_rate, estimated_sample_load);
+        ImGui::TextDisabled(
+            "For a noticeable upgrade, increase frame rate before enabling AA.");
+        if (settings.ssaa > 1 && effective_rate > 60) {
+            ImGui::PushStyleColor(ImGuiCol_Text,
+                ImVec4(1.00f, 0.48f, 0.32f, 1.0f));
+            ImGui::TextWrapped(
+                "Very high cost: SSAA and frame interpolation multiply each other. "
+                "Use Recommended (AA off) or reduce the frame-rate target if pacing degrades.");
+            ImGui::PopStyleColor();
+        } else if (estimated_sample_load >= 8.0) {
+            ImGui::PushStyleColor(ImGuiCol_Text,
+                ImVec4(1.00f, 0.72f, 0.30f, 1.0f));
+            ImGui::TextWrapped(
+                "High renderer load. Test native 60 or reduce antialiasing if frame pacing degrades.");
+            ImGui::PopStyleColor();
+        } else if (settings.msaa > 0 || settings.ssaa > 1) {
+            ImGui::TextDisabled(
+                "AA is optional and often subtle here. Compare it with AA off before keeping the cost.");
         }
 
         ImGui::Checkbox("Enable debug menu", &settings.debug_menu);

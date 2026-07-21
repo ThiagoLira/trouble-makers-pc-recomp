@@ -118,6 +118,10 @@ static bool g_debug_menu = false;
 // RT64 synthesizes the extra display frames by matching and interpolating
 // draw calls between consecutive game frames.
 static int g_fps = 0;
+// Present with vertical sync (default). Off skips the display-sync wait for
+// users whose drivers otherwise force it (requested for the NVIDIA control
+// panel workaround); it can tear, so it stays opt-out.
+static bool g_vsync = true;
 // Remembered ROM path (UTF-8), so the launcher can offer "Start Game"
 // immediately on the next run. Empty until a ROM validates.
 static std::string g_rom_path;
@@ -129,11 +133,11 @@ static void log_display_config(const char* state) {
     mm::telemetry::set_display_target(target_rate);
     mm::telemetry::event("config",
         "%s window=%dx%d fullscreen=%s widescreen=%s msaa=%d ssaa=%d "
-        "fps-mode=%s fps-value=%d debug-menu=%s",
+        "fps-mode=%s fps-value=%d vsync=%s debug-menu=%s",
         state, g_window_w, g_window_h, g_fullscreen ? "yes" : "no",
         g_widescreen ? "yes" : "no", g_msaa, g_ssaa,
         g_fps < 0 ? "display" : (g_fps > 60 ? "manual" : "native"),
-        g_fps, g_debug_menu ? "yes" : "no");
+        g_fps, g_vsync ? "on" : "off", g_debug_menu ? "yes" : "no");
 }
 
 // Keep renderer allocations inside combinations RT64 can recover from on
@@ -220,6 +224,7 @@ static void load_display_config() {
         else if (k == "msaa" && (value == 0 || value == 2 || value == 4 || value == 8)) g_msaa = value;
         else if (k == "debug_menu") g_debug_menu = value != 0;
         else if (k == "fps" && value >= -1 && value <= 1000) g_fps = value;
+        else if (k == "vsync") g_vsync = value != 0;
     }
 }
 
@@ -233,6 +238,7 @@ static void save_display_config() {
       << "\nwidescreen=" << (g_widescreen ? 1 : 0)
       << "\nssaa=" << g_ssaa << "\nmsaa=" << g_msaa
       << "\nfps=" << g_fps
+      << "\nvsync=" << (g_vsync ? 1 : 0)
       << "\ndebug_menu=" << (g_debug_menu ? 1 : 0) << "\n";
     if (!g_rom_path.empty()) {
         f << "rom=" << g_rom_path << "\n";
@@ -264,14 +270,59 @@ ultramodern::renderer::WindowHandle create_window(ultramodern::gfx_callbacks_t::
     // game on one monitor so external captures — incl. fullscreen — land on
     // the intended screen instead of a compositor-chosen one).
     int pos_x = SDL_WINDOWPOS_CENTERED, pos_y = SDL_WINDOWPOS_CENTERED;
+    int target_display = 0;
     if (const char* di = getenv("MM_DISPLAY")) {
-        int idx = std::atoi(di);
-        pos_x = SDL_WINDOWPOS_CENTERED_DISPLAY(idx);
-        pos_y = SDL_WINDOWPOS_CENTERED_DISPLAY(idx);
+        const int idx = std::atoi(di);
+        if (idx >= 0 && idx < SDL_GetNumVideoDisplays()) {
+            target_display = idx;
+            pos_x = SDL_WINDOWPOS_CENTERED_DISPLAY(idx);
+            pos_y = SDL_WINDOWPOS_CENTERED_DISPLAY(idx);
+        } else {
+            mm::telemetry::event("display",
+                "ignoring invalid MM_DISPLAY=%d (display-count=%d)",
+                idx, SDL_GetNumVideoDisplays());
+        }
     }
     if (const char* wp = getenv("MM_WIN_POS")) {
         int px, py;
-        if (std::sscanf(wp, "%d,%d", &px, &py) == 2) { pos_x = px; pos_y = py; }
+        if (std::sscanf(wp, "%d,%d", &px, &py) == 2) {
+            pos_x = px;
+            pos_y = py;
+            // Resolve a fixed debug position to its monitor so fullscreen's
+            // initial client size still matches the monitor RT64 will use.
+            const int display_count = SDL_GetNumVideoDisplays();
+            for (int i = 0; i < display_count; ++i) {
+                SDL_Rect bounds{};
+                if (SDL_GetDisplayBounds(i, &bounds) == 0 &&
+                    px >= bounds.x && px < bounds.x + bounds.w &&
+                    py >= bounds.y && py < bounds.y + bounds.h) {
+                    target_display = i;
+                    break;
+                }
+            }
+        }
+    }
+
+    // A saved windowed size is not a fullscreen render size.  Creating a
+    // 3840x2160 client on a 1920x1080 desktop made RT64 allocate a transient
+    // 9x (18x with 2x SSAA) render target before the first resize arrived.
+    // Start at the selected monitor's current mode so the first swap chain and
+    // all first-frame render targets have their final dimensions.
+    int create_width = g_window_w;
+    int create_height = g_window_h;
+    SDL_DisplayMode initial_mode{};
+    const bool have_initial_mode = g_fullscreen &&
+        SDL_GetCurrentDisplayMode(target_display, &initial_mode) == 0 &&
+        initial_mode.w > 0 && initial_mode.h > 0;
+    if (have_initial_mode) {
+        create_width = initial_mode.w;
+        create_height = initial_mode.h;
+        if (create_width != g_window_w || create_height != g_window_h) {
+            mm::telemetry::event("display",
+                "fullscreen initial-size override requested=%dx%d desktop=%dx%d display=%d",
+                g_window_w, g_window_h, create_width, create_height,
+                target_display);
+        }
     }
     Uint32 window_flags = SDL_WINDOW_RESIZABLE;
 #if defined(__linux__)
@@ -283,7 +334,7 @@ ultramodern::renderer::WindowHandle create_window(ultramodern::gfx_callbacks_t::
     SDL_Window* win = SDL_CreateWindow(
         "Trouble Makers",
         pos_x, pos_y,
-        g_window_w, g_window_h, window_flags);
+        create_width, create_height, window_flags);
     if (win == nullptr) {
         std::fprintf(stderr, "Failed to create window: %s\n", SDL_GetError());
     } else {
@@ -316,7 +367,7 @@ ultramodern::renderer::WindowHandle create_window(ultramodern::gfx_callbacks_t::
     // RT64 second mutates the same window twice and can leave its swap chain
     // and saved placement inconsistent. RT64's SDL window wrapper does not
     // implement fullscreen on Linux, so SDL remains the owner there.
-    if (g_fullscreen) {
+    if (g_fullscreen && win != nullptr) {
 #if !defined(_WIN32)
         SDL_SetWindowFullscreen(win, SDL_WINDOW_FULLSCREEN_DESKTOP);
 #endif
@@ -471,6 +522,9 @@ static void print_usage(const char* argv0) {
         "  --fps native|display|N  RT64 frame interpolation: native 60Hz,\n"
         "                      match the display, or an interpolated target\n"
         "                      like 240 (game logic still runs at 60Hz)\n"
+        "  --no-vsync          present without waiting for vertical sync (may\n"
+        "                      tear; avoids driver-forced sync waits)\n"
+        "  --vsync             re-enable vertical sync (the default)\n"
         "  --widescreen        expand the rendered field to the window aspect\n"
         "                      (opt-in: can reveal off-stage areas in a 2D game)\n"
         "  --no-widescreen     force the original 4:3 presentation\n"
@@ -557,6 +611,10 @@ int main(int argc, char** argv) {
             g_widescreen = true;
         } else if (arg == "--no-widescreen") {
             g_widescreen = false;
+        } else if (arg == "--vsync") {
+            g_vsync = true;
+        } else if (arg == "--no-vsync") {
+            g_vsync = false;
         } else if (arg == "--debug-menu") {
             g_debug_menu = true;
         } else if (arg == "--no-debug-menu") {
@@ -647,7 +705,7 @@ int main(int argc, char** argv) {
         // returns StartGame the auto-start in vi_callback takes over.
         mm::launcher::DisplaySettings ds{
             g_window_w, g_window_h, g_fullscreen, g_widescreen,
-            g_msaa, g_ssaa, g_fps, g_debug_menu};
+            g_msaa, g_ssaa, g_fps, g_vsync, g_debug_menu};
         fs::path rom_path = fs::path(
             std::u8string(g_rom_path.begin(), g_rom_path.end()));
         mm::telemetry::set_phase(mm::telemetry::Phase::Launcher,
@@ -660,6 +718,7 @@ int main(int argc, char** argv) {
         g_msaa = ds.msaa;
         g_ssaa = ds.ssaa;
         g_fps = ds.fps;
+        g_vsync = ds.vsync;
         g_debug_menu = ds.debug_menu;
         sanitize_display_config();
         g_rom_path = reinterpret_cast<const char*>(rom_path.u8string().c_str());
@@ -687,6 +746,7 @@ int main(int argc, char** argv) {
 #ifdef MM_HAS_GRAPHICS
     mm::graphics::set_overlay_draw_callback(
         g_debug_menu ? mm::debug_menu::draw_overlay : nullptr);
+    mm::graphics::set_vsync_enabled(g_vsync);
 #endif
 
     // Tell translated-code hooks to populate the extra tile columns and omit
