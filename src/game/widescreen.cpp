@@ -72,6 +72,7 @@ constexpr uint32_t kMapBankDest = 0x80380000u;
 constexpr uint32_t kPoolBase = 0x80380600u;
 
 constexpr uint32_t kCurrentScene = 0x800BE5D0u;
+constexpr uint32_t kGamePaused = 0x800BE4E8u;
 constexpr uint32_t kCannotPause = 0x800BE4ECu;
 constexpr uint32_t kGameState = 0x800BE4F0u;
 constexpr uint32_t kStageCinemaState = 0x800D28E8u;
@@ -543,9 +544,14 @@ extern "C" void mm_widescreen_sync_mode(uint8_t* rdram) {
     static int previous_active = -1;
     static int candidate_active = -1;
     static int candidate_frames = 0;
+    static bool was_paused = false;
     bool mode_changed = false;
     const int scene = static_cast<int16_t>(MEM_HU(
         0, static_cast<gpr>(static_cast<int32_t>(kCurrentScene))));
+    const int game_state = MEM_HU(
+        0, static_cast<gpr>(static_cast<int32_t>(kGameState)));
+    const bool paused = game_state == 6 && MEM_HU(
+        0, static_cast<gpr>(static_cast<int32_t>(kGamePaused))) != 0;
     report_gameplay_ready(rdram, scene);
     const int raw_active = raw_gameplay_active(rdram);
 
@@ -554,6 +560,35 @@ extern "C" void mm_widescreen_sync_mode(uint8_t* rdram) {
         candidate_active = raw_active;
         candidate_frames = 0;
         mode_changed = true;
+    }
+    else if (paused) {
+        // The pause transition is a four-sided iris built for the original
+        // 320x240 canvas. Leaving RT64 expanded makes the iris cover only the
+        // center while live gameplay remains visible in both widescreen
+        // wings. Enter Original on the same tick that gGamePaused is set so
+        // those wings are black before the first closing-iris frame is drawn.
+        if (previous_active != 0) {
+            previous_active = 0;
+            mode_changed = true;
+        }
+        candidate_active = 0;
+        candidate_frames = 0;
+    }
+    else if (was_paused && env_enabled("MM_WIDESCREEN_ACTIVE") &&
+             game_state == 6 && !scene_requires_original(scene) &&
+             MEM_HU(0, static_cast<gpr>(
+                 static_cast<int32_t>(kCannotPause))) == 0) {
+        // func_800208D4 clears gGamePaused only after the opening iris has
+        // completely restored the gameplay canvas. RT64 must be expanded on
+        // the following tick, before that tick's first visible gameplay
+        // frame, rather than waiting for the frozen stage timer and the
+        // generic 30-frame cinematic hysteresis to recover.
+        if (previous_active != 1) {
+            previous_active = 1;
+            mode_changed = true;
+        }
+        candidate_active = 1;
+        candidate_frames = 0;
     }
     else if (raw_active == previous_active) {
         candidate_active = raw_active;
@@ -583,6 +618,7 @@ extern "C" void mm_widescreen_sync_mode(uint8_t* rdram) {
             mode_changed = true;
         }
     }
+    was_paused = paused;
     g_gameplay_wide_active = previous_active;
 
     // Reassert the presentation on stable frames too. Runtime display changes
@@ -597,8 +633,10 @@ extern "C" void mm_widescreen_sync_mode(uint8_t* rdram) {
         ultramodern::renderer::set_graphics_config(config);
     }
     if (mode_changed) {
-        std::fprintf(stderr, "[widescreen] mode=%s\n",
-            previous_active ? "gameplay-expand" : "cinematic-4:3");
+        const char* mode = previous_active
+            ? "gameplay-expand"
+            : (paused ? "pause-4:3" : "cinematic-4:3");
+        std::fprintf(stderr, "[widescreen] mode=%s\n", mode);
     }
 }
 

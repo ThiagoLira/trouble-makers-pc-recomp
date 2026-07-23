@@ -443,7 +443,7 @@ create_render_context(uint8_t* /*rdram*/, ultramodern::renderer::WindowHandle /*
 static bool g_rom_selected = false;
 static const std::u8string kGameId = u8"troublemakers.n64.us.1";
 #ifndef MM_PROJECT_VERSION
-#define MM_PROJECT_VERSION "0.3.8"
+#define MM_PROJECT_VERSION "0.5.0"
 #endif
 static constexpr const char* kProjectVersion = MM_PROJECT_VERSION;
 
