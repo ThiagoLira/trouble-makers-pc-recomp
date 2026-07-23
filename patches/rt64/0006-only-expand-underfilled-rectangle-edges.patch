@@ -1,0 +1,27 @@
+diff --git a/src/render/rt64_framebuffer_renderer.cpp b/src/render/rt64_framebuffer_renderer.cpp
+index 14b5315..62d3cbe 100644
+--- a/src/render/rt64_framebuffer_renderer.cpp
++++ b/src/render/rt64_framebuffer_renderer.cpp
+@@ -128,8 +128,12 @@ namespace RT64 {
+         // with one less coordinate than what's required to fill out the screen because other rectangle methods
+         // under different modes require adding an extra coordinate. Since this behavior often breaks detection
+         // for widescreen hacks, an enhancement option to fix them is available given they're within the tolerance
+-        // of one pixel from the scissor coordinates.
++        // of one pixel from the scissor coordinates. Only grow an underfilled
++        // edge: shrinking a rectangle that legitimately crosses the scissor
++        // can open a one-pixel seam when that scissor is widened later.
+         if (fixLR) {
+-            if ((abs(scissorRect.lrx - rect.lrx) <= 4) && (rect.ulx < scissorRect.lrx)) {
++            if ((rect.lrx < scissorRect.lrx) &&
++                ((scissorRect.lrx - rect.lrx) <= 4) &&
++                (rect.ulx < scissorRect.lrx)) {
+                 rect.lrx = scissorRect.lrx;
+             }
+@@ -137,3 +141,5 @@ namespace RT64 {
+-            if ((abs(scissorRect.lry - rect.lry) <= 4) && (rect.uly < scissorRect.lry)) {
++            if ((rect.lry < scissorRect.lry) &&
++                ((scissorRect.lry - rect.lry) <= 4) &&
++                (rect.uly < scissorRect.lry)) {
+                 rect.lry = scissorRect.lry;
+             }
+         }
