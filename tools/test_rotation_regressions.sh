@@ -99,7 +99,11 @@ for aspect in "${aspects[@]}"; do
                     log="$run_dir/stage-$(printf '%02d' "$stage").log"
                     grep -q "\[widescreen\] gameplay-ready scene=$scene" "$log" || run_ok=0
                     last_mode=$(grep '\[widescreen\] mode=' "$log" | tail -1)
-                    [[ $last_mode == *mode=cinematic-4:3 ]] || run_ok=0
+                    expected_mode=cinematic-4:3
+                    if [[ $aspect == wide ]]; then
+                        expected_mode=gameplay-expand
+                    fi
+                    [[ $last_mode == *mode="$expected_mode" ]] || run_ok=0
                     if grep -Eqi 'segmentation fault|assertion.*failed|fatal error|aborted|RT64 setup failed' "$log"; then
                         run_ok=0
                     fi
