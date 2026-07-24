@@ -164,11 +164,10 @@ in at the wing edges.
 Opening/in-stage cinematics automatically switch back to centered 4:3 and
 return to widescreen only after player control is stable. NPC conversations
 during gameplay remain widescreen. A small fallback set stays centered 4:3
-because those scenes author a fixed 320x240 canvas (scenes 13, 25, 27, 57, 69,
-71, 79, and 85). This includes Vertigo and Seasick Climb: their rotating walls
-and 3D platforms retain the correct textures and fully overwrite the canvas
-without framebuffer trails, while ordinary scrolling stages remain genuinely
-expanded.
+because those scenes author a fixed 320x240 canvas (scenes 25, 27, 57, 71, 79,
+and 85). Vertigo and Seasick Climb now expand their rotating rooms cleanly;
+both retain the corrected wall and 3D-platform materials without framebuffer
+trails.
 See the live [scene 22 capture](screenshots/widescreen-scene-22.png), the
 [forest artifact comparison](screenshots/widescreen-forest-fix.png), and the
 labeled [coverage](screenshots/widescreen-coverage-scenes.png) and

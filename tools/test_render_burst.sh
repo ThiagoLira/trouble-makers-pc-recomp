@@ -39,9 +39,6 @@ test_move=${MM_TEST_MOVE:-1}
 stream_trace=${MM_TEST_STREAM_TRACE:-0}
 stream_camera=${MM_TEST_STREAM_CAMERA:-}
 test_move_4x3=$((1 - widescreen))
-case $stage in
-    13|21) test_move_4x3=1 ;;
-esac
 
 if [[ -n $capture_camera_x && ! $capture_camera_x =~ ^-?[0-9]+$ ]]; then
     echo "MM_CAPTURE_CAMERA_X must be an integer: $capture_camera_x" >&2
@@ -181,7 +178,7 @@ trap cleanup EXIT INT TERM
 
 is_fixed_4x3_stage() {
     case $1 in
-        11|13|21|27|47|52|56|57) return 0 ;;
+        11|27|47|52|56|57) return 0 ;;
         *) return 1 ;;
     esac
 }

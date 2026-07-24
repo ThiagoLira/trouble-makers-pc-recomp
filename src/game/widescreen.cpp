@@ -167,11 +167,9 @@ int g_gameplay_wide_active = 0;
 // remain genuinely expanded.
 bool scene_requires_original(int scene) {
     switch (scene) {
-        case 13: // Seasick Climb: rotating 320x240 room canvas
         case 25: // SASQUATCH beta: fixed vertical boss canvas
         case 27: // Final Battle: fixed boss backdrop
         case 57: // Volcano: fixed authored canvas
-        case 69: // Vertigo: rotating 320x240 room canvas
         case 71: // Clanball Lift: fixed authored canvas
         case 79: // Inner Struggle: 4:3 post-process canvas
         case 85: // MERCO: fixed boss backdrop
@@ -179,6 +177,10 @@ bool scene_requires_original(int scene) {
         default:
             return false;
     }
+}
+
+bool lunar_ending_requires_original(int scene, int cinema_state) {
+    return scene == 9 && cinema_state >= 21 && cinema_state <= 25;
 }
 
 // Emit a renderer-independent test marker after the stage timer has advanced
@@ -263,7 +265,8 @@ int raw_gameplay_active(uint8_t* rdram) {
         cinema_candidate = -1;
         cinema_candidate_frames = 0;
     }
-    if (game_state != 6 || scene_requires_original(scene)) {
+    if (game_state != 6 || scene_requires_original(scene) ||
+        lunar_ending_requires_original(scene, cinema_state)) {
         previous_stage_time = stage_time;
         frames_since_stage_time_changed = 1000;
         gameplay_cinema_state = -1;
@@ -422,10 +425,11 @@ bool prepare_rotation_material(
 
 } // namespace
 
-// Camera_UpdateViewBounds is widened at translation time so actors remain
-// drawable in the expanded wings. The original player collision routine also
-// reads that shared rectangle as its horizontal hard wall, though, so feeding
-// it the widened values lets Marina walk beyond a stage's authored floor.
+// Camera_UpdateViewBounds is widened by translated return hooks during
+// expanded gameplay so actors remain drawable in the wings. The original
+// player collision routine also reads that shared rectangle as its horizontal
+// hard wall, though, so feeding it the widened values lets Marina walk beyond
+// a stage's authored floor.
 //
 // Restore the vanilla +/-0x90 wall only when the value has the exact shape
 // produced by our +/-0x180 camera patch. Stage overlays sometimes author these
@@ -475,6 +479,63 @@ extern "C" int32_t mm_ws_player_right_bound(
     return static_cast<int32_t>(
         (static_cast<uint32_t>(vanilla_whole & 0xFFFF) << 16) |
         (static_cast<uint32_t>(current_bound) & 0xFFFFu));
+}
+
+// Apply the expanded cull rectangle at Camera_UpdateViewBounds' translated
+// return boundary, after the original routine has computed its authored
+// values. Keeping the ROM instructions vanilla is important: these globals
+// are shared by rendering, Marina's hard walls, and stage-scripted exits.
+//
+// Path 0 is the function's early return; its delay slot has not stored r4
+// yet. Path 1 is the ordinary return. Path 2 follows func_800463C0's explicit
+// left-edge reset and must preserve that wrapper's no-stage-clamp behavior.
+extern "C" void mm_ws_camera_bounds(
+    uint8_t* rdram, recomp_context* ctx, int path) {
+    const int stage_id = MEM_HU(
+        0, static_cast<gpr>(static_cast<int32_t>(kCurrentStageId)));
+    const int camera = static_cast<int16_t>(MEM_HU(
+        0, static_cast<gpr>(static_cast<int32_t>(kCamX))));
+
+    bool expand = stage_id < 0x68 && g_gameplay_wide_active != 0;
+    const int scene = static_cast<int16_t>(MEM_HU(
+        0, static_cast<gpr>(static_cast<int32_t>(kCurrentScene))));
+    const int cinema = MEM_HU(
+        0, static_cast<gpr>(static_cast<int32_t>(kStageCinemaState)));
+
+    // Lunar's defeat changes 20 -> 21 before the escape is staged. Its
+    // original right wall must remain fixed at the authored arena edge; a
+    // widened/moving wall lets Marina and the camera fly indefinitely.
+    if (lunar_ending_requires_original(scene, cinema)) {
+        expand = false;
+    }
+
+    const int half_width = expand ? 0x180 : 0x90;
+    if (path == 2) {
+        MEM_H(0, static_cast<gpr>(static_cast<int32_t>(kViewLeft))) =
+            camera - half_width;
+        return;
+    }
+
+    // Camera_UpdateViewBounds deliberately leaves all four values untouched
+    // for non-stage IDs. Preserve that behavior on its two return paths.
+    if (stage_id >= 0x68) {
+        return;
+    }
+
+    const int stage_left = static_cast<int16_t>(MEM_HU(
+        0, static_cast<gpr>(static_cast<int32_t>(kStageLeft))));
+    const int stage_right = static_cast<int16_t>(MEM_HU(
+        0, static_cast<gpr>(static_cast<int32_t>(kStageRight))));
+    const int left = std::min(camera - half_width, stage_left);
+    const int right = std::max(camera + half_width, stage_right);
+    MEM_H(0, static_cast<gpr>(static_cast<int32_t>(kViewLeft))) = left;
+    if (path == 0) {
+        // The following MIPS delay-slot store publishes r4 as the right edge.
+        ctx->r4 = static_cast<gpr>(static_cast<int32_t>(right));
+    }
+    else {
+        MEM_H(0, static_cast<gpr>(static_cast<int32_t>(kViewRight))) = right;
+    }
 }
 
 // Widescreen is intentionally a gameplay-only feature. Cinematics frequently

@@ -100,10 +100,10 @@ recopying stable data, while combiner/EndDL checks and marker invalidation make
 a damaged or failed rebuild safe. The correction lives inside its private
 display list, so it does not consume the game's per-frame display-list arena.
 
-The two scenes are also in `scene_requires_original()`. Even when the player
-selects widescreen, they remain centered 4:3 because their wall actors and
-camera composition author exactly a 320x240 rotating canvas. Ordinary stages
-still expand. This is an aspect-policy boundary, not a stretch or blur fill.
+Vertigo (scene 69) and Seasick Climb (scene 13) are no longer in
+`scene_requires_original()`. Sustained walking captures show their wall actors
+fully covering the wider projection without trails, dropout, or exposed voids,
+so both rotating rooms now honor the widescreen preference.
 
 With the opaque wall material restored, the wall naturally overwrites prior
 pixels. The final code contains no scene-colored full-frame clear, entry seed
@@ -163,7 +163,8 @@ stage/aspect/rate runs. The controller settles and then holds right without a
 double-tap. Each run must:
 
 - reach the exact runtime scene and authoritative gameplay-ready state;
-- report `cinematic-4:3` presentation for these fixed canvases;
+- report `gameplay-expand` for both widescreen runs and `cinematic-4:3` for
+  both explicit-4:3 runs;
 - finish without a fatal/assert/crash signature;
 - remain below the neutral-flat-pixel threshold that detects the large gray
   slab (the broken reference scored about `0.118`; corrected references are
@@ -178,8 +179,8 @@ platforms with no trails, missing geometry, or color dropout.
 The harness writes `results.tsv`, per-frame PNGs, `capture-index.tsv`, and a
 contact sheet per configuration. Build artifacts are intentionally ignored by
 Git. The exact former failure at Seasick motion frame 675 is textured in
-`build/visual-tests/final-material-seasick-wide-60`; a 64-frame Vertigo run is
-clean in `build/visual-tests/final-material-vertigo-wide-60`.
+`build/visual-tests/final-material-seasick-wide-60`; Vertigo's expanded
+walking capture is covered by the same dense matrix.
 
 Dense sheets over 32 frames use eight columns. During final testing, a UI image
 viewer mis-rendered a 1616x6870 four-column sheet as repeated horizontal image
@@ -211,7 +212,6 @@ aspect-transition, or left-edge regression.
 - Apply every runtime patch with `git am` and every RT64 patch with `git apply`
   from the pinned clean bases before accepting the series.
 - Inspect contact sheets, not only the first spawn frame.
-- Test a normal expanded stage after the fixed-canvas stages to prove aspect
-  mode returns to expanded gameplay.
+- Test both rotating stages in expanded and explicit-4:3 presentation.
 - Test 4:3 left-edge walking separately; its signed texture-rectangle fix is
   independent of this material correction.
