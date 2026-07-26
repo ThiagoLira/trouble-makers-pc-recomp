@@ -1,14 +1,13 @@
-// mm_runtime_probe — Phase 1 stretch target.
+// mm_runtime_probe — structural whole-archive link target.
 //
 // Purpose: link the whole translated game (mm_recompiled) against the runtime
 // (librecomp + ultramodern) as far as the linker will take it, then surface the
-// *unresolved* symbol set. That set is the Phase 2 work plan (graphics/audio/RSP
-// via RT64 + RSPRecomp, game entry, overlay registration, controller/save glue).
+// unresolved symbol set before the real host components are linked.
 //
 // This main() intentionally does almost nothing: the goal is link-time
 // discovery, not a running game. If this builds and links, the runtime is
 // structurally complete enough to host the game; if it fails to link, the
-// linker's undefined-reference list is the deliverable (see PHASE1_NOTES.md).
+// linker's undefined-reference list is the deliverable (see docs/README.md).
 #include <cstdio>
 
 int main(int /*argc*/, char** /*argv*/) {

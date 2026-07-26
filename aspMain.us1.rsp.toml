@@ -2,8 +2,8 @@
 #
 # The game ships the standard Nintendo "aspMain" audio RSP ucode. Its text blob
 # lives in the US 1.1 ROM at offset 0xBCAB0 (size 0xE20 == 3616 bytes), proven
-# by byte-exact match of the decomp's assets/rsp/aspMain.textbin.bin against
-# baserom.us1.z64 (see PHASE2_NOTES_w2.md for the full evidence table).
+# by byte-exact match of the extracted aspMain text against the US 1.1 ROM
+# (see docs/README.md, "RSP programs and task routing").
 #
 # aspMain has no overlay slots (unlike naudio); it is a single flat IMEM image,
 # so this config needs only the text descriptor + the standard IMEM base address.
@@ -20,7 +20,7 @@ text_size = 0xE20
 # every absolute address 0x80 too low, so the dispatch `jr` and the handlers'
 # `j 0x1118` "continue" jump land in the wrong code (the DMA helper tail), the
 # entry `jal 0x1150` (the ucode's own first-chunk prefetch) is misrouted, and the
-# command stream never advances — see PHASE4_NOTES_a.md.
+# command stream never advances — see docs/README.md, "The aspMain link address".
 text_address = 0x04001080
 rom_file_path = "input/troublemakers.us1.z64"
 output_file_path = "src/rsp/generated/aspMain.cpp"
@@ -35,11 +35,9 @@ output_function_name = "aspMain"
 # them). Supplying wrong targets is worse than omitting them: any target that
 # doesn't coincide with a real instruction vram emits a `goto L_XXXX` with no
 # matching label and breaks the build. The reference (Zelda64Recomp) lists 24
-# targets, but those are for the 0x1000-byte MM aspMain; this game's aspMain is
-# 0xE20 bytes (vram span 0x1000-0x1E20), so several of MM's targets (0x1F80,
-# 0x1EF8, 0x1E7C, ...) fall outside the text and must NOT be reused. Deriving
-# the correct set for *this* binary is a Phase-3 runtime-correctness follow-up
-# (run the ucode, dump the jump-table targets, add them here).
+# targets, but those are for a different 0x1000-byte aspMain; this game's
+# ucode is 0xE20 bytes, so several of those targets fall outside its text and
+# must not be reused. The exact US 1.1 target set is documented below.
 
 # Jump-table targets. The only indirect dispatch in this ucode is `jr $2` at the
 # command loop (IMEM 0x1108); its 16 targets are exactly the dispatch table at

@@ -1,4 +1,4 @@
-// src/game/main.cpp — Phase 2 worker w1 (game core).
+// Host entry point and runtime wiring.
 //
 // Host entry point for Trouble Makers (Mischief Makers recompilation). Wires the translated
 // game (mm_recompiled) to the librecomp/ultramodern runtime via
@@ -17,7 +17,8 @@
 //   events/error/threads -> optional, stay stubbed
 //
 // Remaining stub groups live in mm::stub::* namespaces so the graphics
-// component can drop in without touching anything else. See PHASE2_NOTES_w1.md.
+// component can drop in without touching anything else. Architecture and ROM
+// contracts are documented in docs/README.md.
 
 #include <cstdint>
 #include <cstdio>
@@ -60,7 +61,7 @@ extern "C" void recomp_entrypoint(uint8_t* rdram, recomp_context* ctx);
 extern gpr get_entrypoint_address();
 extern const char* get_rom_name();
 
-// Phase 2 overlay registration + host function entries
+// Overlay registration and host function entries.
 // (register_overlays.cpp, same target).
 namespace troublemakers {
 void register_overlays();
@@ -246,7 +247,7 @@ static void save_display_config() {
 }
 
 namespace mm::stub::gfx {
-// SEAM (graphics worker owns the real window). For bring-up we create a real
+// SEAM (graphics component owns the real window). For bring-up we create a real
 // SDL window so the stretch run gets as far as window creation.
 ultramodern::gfx_callbacks_t::gfx_data_t create_gfx() {
     // Windows-only hint, added in SDL 2.24 — absent from older SDL2 headers
@@ -494,7 +495,7 @@ static std::vector<recomp::GameEntry> supported_games() {
             .internal_name = "MISCHIEF MAKERS",
             .game_id = kGameId,
             .mod_game_id = "troublemakers",
-            .save_type = mm_audio_input::save_type(), // Eep4k; evidence in PHASE2_NOTES_w4.md
+            .save_type = mm_audio_input::save_type(), // Eep4k; see docs/README.md
             .is_enabled = true,
             .decompression_routine = nullptr,
             .has_compressed_code = false,
@@ -830,7 +831,7 @@ int main(int argc, char** argv) {
         // instead accumulates one undeliverable token per frame in the
         // external-message queue, which livelocks the idle thread and starves
         // delivery of the one-shot DP-complete message: the game froze after
-        // exactly three frames. See PHASE4_NOTES_a.md (driver appendix).
+        // exactly three frames. See docs/README.md, "Per-frame ordering".
         .message_queue_control = { .requeue_sp = false },
     };
 

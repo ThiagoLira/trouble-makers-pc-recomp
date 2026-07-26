@@ -1,12 +1,12 @@
-// mm_audio_input — Phase 2 audio + input + save glue for Trouble Makers:
-// static recomp. Backs ultramodern's abstract `audio_callbacks_t` and
+// Audio, input, and save glue for the static recomp. Backs ultramodern's
+// abstract `audio_callbacks_t` and
 // `input::callbacks_t` with SDL2, and exposes the game's EEPROM save type for
 // the GameEntry that src/game/ registers with librecomp.
 //
-// This header is the contract worker w1 (src/game/, main()) adopts: call
+// Host contract: call
 // `mm_audio_input::init()` once after SDL2 is brought up, then plug the
 // returned callback structs into `recomp::Configuration` before
-// `recomp::start()`. See PHASE2_NOTES_w4.md for the exact call sequence.
+// `recomp::start()`. See docs/README.md for the hardware contracts.
 #pragma once
 
 #include <array>
@@ -122,7 +122,7 @@ ultramodern::input::callbacks_t input_callbacks();
 void set_input_blocked(bool blocked);
 
 // The game's save type. The US 1.1 ROM uses 4Kbit EEPROM — see
-// PHASE2_NOTES_w4.md for the evidence (osEepromProbe/LongRead/LongWrite calls
+// docs/README.md for the evidence (osEepromProbe/LongRead/LongWrite calls
 // in RecompiledFuncs, max block address 0x2C < 64-block 4K limit). Set this
 // on the GameEntry::save_type field when registering the game.
 recomp::SaveType save_type();

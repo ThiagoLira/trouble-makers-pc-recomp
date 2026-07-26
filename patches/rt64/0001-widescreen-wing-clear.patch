@@ -22,7 +22,7 @@ index ffabdbf..dab74d9 100644
 +            // outside the game's 4:3 drawn region) to a solid color at the start
 +            // of each framebuffer's render pass, so AspectRatio::Expand doesn't
 +            // leave stale framebuffer content frozen in the wings. See
-+            // PHASE6_NOTES_b.md. Gated from the host via MM_CLEAR_WINGS=1.
++            // docs/README.md. Gated from the host via MM_CLEAR_WINGS=1.
 +            bool clearWings;
          };
  
@@ -115,7 +115,7 @@ index c4cf1bf..eef8d11 100644
 +        // content across frames. Clear those two wing rects here, before the
 +        // scene draws, so 3D geometry (whose projection IS widened by the
 +        // aspect-ratio scale) redraws fresh into the wings while 2D stays put.
-+        // See PHASE6_NOTES_b.md. Gated by enhancementConfig.rect.clearWings.
++        // See docs/README.md. Gated by enhancementConfig.rect.clearWings.
 +        if (framebuffer.clearWings && (colorTarget != nullptr) &&
 +            (colorTarget->width > 0) && (colorTarget->height > 0)) {
 +            // Bound the bookkeeping to the current submission. Render-target

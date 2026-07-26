@@ -1,8 +1,8 @@
-// src/game/os_stubs.cpp — Phase 2 worker w1 (game core).
+// Host implementations of the translated program's two missing OS wrappers.
 //
 // Real host-side implementations of the two libultra OS-function wrappers that
 // librecomp does NOT provide and that the translated game references (see
-// PHASE1_NOTES.md "Genuine link-time gaps: exactly 2"). These are linked into
+// docs/README.md, "Compatibility catalogue"). These are linked into
 // the troublemakers executable (never hand-edited into RecompiledFuncs/).
 //
 // Standard wrapper signature (recomp.h): extern "C" void name(uint8_t* rdram,

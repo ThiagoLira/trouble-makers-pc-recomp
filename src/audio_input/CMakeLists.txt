@@ -1,8 +1,8 @@
-# mm_audio_input — Phase 2 audio + input + save glue (worker w4).
+# SDL audio, input, and save-configuration glue.
 #
 # Backs ultramodern's audio_callbacks_t and input::callbacks_t with SDL2 and
 # exposes the game's EEPROM save type. This is a STATIC lib: it leaves
-# ultramodern/librecomp symbols undefined (resolved when w1's main links the
+# ultramodern/librecomp symbols undefined (resolved when the executable links the
 # runtime), so building the .a alone never fails the gate on missing symbols.
 #
 # SDL2 is found and put on the global include path by the root CMakeLists

@@ -1,21 +1,20 @@
 // Public API of the mm_rsp static library (RSP microcode recompilation).
 //
-// Worker w2 owns the game's statically-recompiled RSP ucode (the aspMain audio
-// microcode) and the recomp::rsp::callbacks_t that dispatches RSP tasks to it.
-// Worker w1 (src/game/) builds the host main(); it fills the
-// recomp::Configuration it hands to recomp::start() with the callbacks produced
-// here.
+// Public API for the game's statically recompiled aspMain audio ucode and the
+// recomp::rsp::callbacks_t that dispatches audio RSP tasks to it. The host
+// executable places these callbacks in the recomp::Configuration passed to
+// recomp::start().
 //
-// Contract for w1:
+// Host contract:
 //   #include "mm_rsp.hpp"   // this dir is on mm_rsp's PUBLIC include path
 //   ...
 //   recomp::Configuration cfg{};
 //   cfg.rsp_callbacks = mm_rsp::make_callbacks();
-//   ... (renderer/audio/input/... callbacks from the other workers)
+//   ... (renderer/audio/input callbacks)
 //   recomp::start(cfg);
 //
 // Graphics RSP tasks (gspFast3D) are deliberately NOT recompiled here — RT64
-// interprets the display list via renderer_callbacks. See PHASE2_NOTES_w2.md.
+// interprets the display list via renderer_callbacks. See docs/README.md.
 #pragma once
 
 #include "librecomp/rsp.hpp"
@@ -27,7 +26,7 @@ namespace mm_rsp {
 recomp::rsp::callbacks_t make_callbacks();
 
 // Convenience: install the callbacks via recomp::rsp::set_callbacks() and prime
-// the RSP lookup-table constants. Use this only if w1 calls set_callbacks
+// the RSP lookup-table constants. Use this only if the host calls set_callbacks
 // directly instead of going through Configuration; the Configuration path is
 // preferred.
 void register_callbacks();

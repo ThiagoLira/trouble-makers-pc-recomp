@@ -341,15 +341,11 @@ Source layout: `src/game/` (host entry, overlay registration, OS shims),
 save config), `patches/` (runtime patches pending upstream), `tools/` (the
 recompiler submodule + agent-workflow scripts).
 
-The complete engineering history — twelve root-caused bugs from "parks before
-boot" to "playable", every mission brief, and the debugging recipes — lives in
-[`docs/`](docs/). It is written to
-onboard an AI agent (or you) in one sitting. Headless dev harness:
-`MM_HEADLESS_GFX=1` runs the full game loop with no GPU.
-
-For optimized native sampling, long-session telemetry interpretation, measured
-slowdown causes, and the current optimization backlog, see
-[`docs/PERFORMANCE.md`](docs/PERFORMANCE.md).
+The consolidated [US 1.1 ROM and engine technical reference](docs/README.md)
+covers the program image, overlays, RSP microcode, frame scheduler, audio,
+EEPROM, stage state, camera and actor culling, tile-layer formulas, widescreen
+compatibility work, profiling results, and regression harnesses. The headless
+dev harness (`MM_HEADLESS_GFX=1`) runs the full game loop with no GPU.
 
 ## Licensing
 

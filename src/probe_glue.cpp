@@ -1,7 +1,7 @@
 // mm_runtime_probe — link glue for the 2 libultra OS-function wrappers that
 // librecomp does not yet implement. These are host-side stubs for the probe
-// only (RecompiledFuncs is never hand-edited). Phase 2 should implement them
-// properly inside librecomp (alongside ultra_stubs.cpp / ultra_translation.cpp):
+// only (RecompiledFuncs is never hand-edited). The production host provides
+// the real implementations in src/game/os_stubs.cpp:
 //   - rmonPrintf_recomp : N64 rmon (runtime monitor / debug) printf. No-op here.
 //   - __osGetCause_recomp : read MIPS CP0 Cause register (exception code + IP
 //     interrupt-pending bits). Returns 0 (no exception, no pending IRQ) — a

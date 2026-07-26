@@ -1,4 +1,4 @@
-# src/game/CMakeLists.txt — Phase 2 worker w1 (game core).
+# Host executable build.
 #
 # Builds `troublemakers`, the host executable that wires the translated game
 # (mm_recompiled) to the librecomp/ultramodern runtime and launches it.
@@ -7,7 +7,7 @@
 # the N64ModernRuntime subdirectory, and add_subdirectory()s this directory
 # when this file exists. So this file only declares the troublemakers target.
 #
-# Link strategy mirrors the proven-working mm_runtime_probe (PHASE1_NOTES.md):
+# Link strategy mirrors the proven-working mm_runtime_probe (docs/README.md):
 # mm_recompiled is whole-archive linked because the recompiled game is
 # data-driven (recomp_overlays.inl's FuncEntry tables hold function pointers
 # that no normal call graph reaches) — without --whole-archive the linker

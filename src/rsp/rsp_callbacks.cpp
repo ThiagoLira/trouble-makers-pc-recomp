@@ -4,9 +4,10 @@
 // ucode `aspMain` (recompiled into generated/aspMain.cpp). Graphics RSP tasks
 // run the gspFast3D (Fast3D) ucode, which is NOT statically recompiled — RT64
 // interprets the display list via renderer_callbacks, exactly as Zelda64Recomp
-// does for F3DEX. RSPRecomp's own source notes it targets "non-graphics"
-// microcodes (it hardcodes DPC_STATUS reads to 0), so recompiling gspFast3D is
-// neither needed nor viable. See PHASE2_NOTES_w2.md.
+// does for its graphics ucode. RSPRecomp's own source notes it targets
+// "non-graphics" microcodes (it hardcodes DPC_STATUS reads to 0), so recompiling
+// gspFast3D is neither needed nor viable. See docs/README.md, "RSP programs and
+// task routing".
 #include "mm_rsp.hpp"
 
 #include <cstdio>
@@ -20,7 +21,7 @@ extern RspUcodeFunc aspMain;
 // TEMP DIAGNOSTIC (final verification): confirm every audio task exits with
 // Broke. The ucode fetches its own command stream — its entry `jal 0x1150`
 // IS the first-chunk prefetch, correctly resolved now that text_address is
-// 0x04001080 (see aspMain.us1.rsp.toml and PHASE4_NOTES_a.md).
+// 0x04001080 (see aspMain.us1.rsp.toml and docs/README.md).
 static RspExitReason aspMain_task(uint8_t* rdram, uint32_t ucode_addr) {
     RspExitReason r = aspMain(rdram, ucode_addr);
     const bool completed = r == RspExitReason::Broke;

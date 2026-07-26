@@ -4,7 +4,7 @@
 // a dedicated saving thread). The host's only responsibilities are:
 //   1. declare the save type on the GameEntry registered via recomp::register_game
 //   2. call recomp::register_config_path with a writable folder
-// This file provides the surface for both. See PHASE2_NOTES_w4.md.
+// This file provides the surface for both. See docs/README.md.
 #include <filesystem>
 
 #include "librecomp/game.hpp"

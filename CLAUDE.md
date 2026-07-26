@@ -1,7 +1,7 @@
 # CLAUDE.md
 
 Guidance for AI agents (and humans) working in this repository. Read this
-first; the deep engineering history lives in [`docs/`](docs/).
+first; the consolidated ROM and engine reference is [`docs/README.md`](docs/README.md).
 
 ## What this project is
 
@@ -43,8 +43,8 @@ supply their own legally dumped Mischief Makers (US 1.1) ROM.
 - `patches/` — runtime patches pending upstream (`N64ModernRuntime/`, `rt64/`)
 - `tools/N64Recomp/` — the recompiler (submodule)
 - `symbols/troublemakers.us1.toml` — checked-in function/overlay metadata
-- `docs/` — full engineering history: phase notes, mission prompts, debugging
-  recipes. Start with `docs/README.md`.
+- `docs/README.md` — US 1.1 ROM/engine internals, recomp compatibility
+  rationale, and debugging/validation recipes.
 - `input/troublemakers.us1.z64` — builder-supplied ROM (gitignored)
 - `RecompiledFuncs/`, `src/rsp/generated/` — generated C (gitignored)
 - `lib/rt64`, `lib/N64ModernRuntime` — see gotchas below
@@ -103,9 +103,9 @@ cmake --build build --target troublemakers -j
 
 Natively **60 fps**; uses **gspFast3D** (not F3DEX) + **aspMain** audio ucode
 (RSPRecomp'd, IMEM base **0x04001080**, not 0x1000); saves to **4Kbit
-EEPROM**; pokes exactly one hardware register raw (**AI_LEN**, host-mirrored —
-see `docs/PHASE5_NOTES_c.md`). Widescreen is opt-in and still experimental;
-read `docs/PHASE7_NOTES_widescreen.md` §2 and §4 before touching tile draws.
+EEPROM**; and pokes exactly one hardware register raw (**AI_LEN**,
+host-mirrored). Read `docs/README.md` before changing overlays, task/event
+semantics, tile draws, actor culls, or widescreen presentation.
 
 ## CI & releases
 

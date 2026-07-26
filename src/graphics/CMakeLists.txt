@@ -1,14 +1,13 @@
-# src/graphics — RT64-backed RDP renderer glue (worker w3).
+# RT64-backed RDP renderer glue.
 #
 # Builds `mm_graphics`, a static library implementing
 # ultramodern::renderer::RendererContext on top of RT64. The host app
 # (src/game) plugs mm::graphics::register_callbacks() into the runtime's
 # renderer callbacks before recomp::start(); the runtime then drives the
-# F3DEX display-list / screen-update lifecycle through this interface.
+# Fast3D display-list / screen-update lifecycle through this interface.
 #
 # RT64 is a heavy dependency (HLSL->SPIR-V shader compilation via the bundled
-# DXC, full Vulkan RHI). To keep `cmake -B build_w3` from ever breaking the
-# tree for sibling workers, the whole component is gated behind
+# DXC, full Vulkan RHI). The whole component is gated behind
 # MM_BUILD_GRAPHICS. It defaults ON when RT64's sources are present and SDL2
 # is available, and degrades to a clear message + no target otherwise.
 
@@ -30,7 +29,7 @@ if(NOT EXISTS ${CMAKE_SOURCE_DIR}/lib/rt64/CMakeLists.txt)
 endif()
 
 # SDL2 is required by RT64 (and by ultramodern). The root CMakeLists already
-# finds it before adding any Phase 2 component, but be explicit so this
+# finds it before adding any runtime component, but be explicit so this
 # component is self-describing when built standalone.
 if(NOT TARGET SDL2::SDL2)
     find_package(SDL2 QUIET)

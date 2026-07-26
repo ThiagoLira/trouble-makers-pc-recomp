@@ -70,17 +70,16 @@ set(RUNTIME_INCLUDES
 # ----------------------------------------------------------------------------
 # mm_recompiled — the whole translated game as host-native objects.
 #
-# Phase 1 success gate: this static library must compile every file under
-# RecompiledFuncs/ with zero errors. The generated C is regeneration output;
-# fixes belong in the recompiler config or these headers, never hand-edits to
-# RecompiledFuncs/*. See PHASE1_NOTES.md.
+# This static library must compile every file under RecompiledFuncs/. The
+# generated C is regeneration output; fixes belong in the recompiler config or
+# host headers, never hand-edits to RecompiledFuncs/. See docs/README.md.
 #
 # Layout of RecompiledFuncs/ (emitted by tools/N64Recomp):
 #   funcs_NN.c       91 translation units, each #include "recomp.h" + "funcs.h"
 #   funcs.h          declarations for every recompiled function (extern "C")
 #   lookup.cpp       get_entrypoint_address() + get_rom_name() (librecomp glue)
 #   recomp_overlays.inl  section/overlay lookup tables (NOT compiled here —
-#                       #included by a runtime register_overlays() TU in Phase 2)
+#                       #included by the runtime register_overlays() TU)
 # ----------------------------------------------------------------------------
 add_library(mm_recompiled STATIC)
 
@@ -139,10 +138,9 @@ file(GLOB FUNC_CXX_SOURCES ${CMAKE_SOURCE_DIR}/RecompiledFuncs/*.cpp)
 target_sources(mm_recompiled PRIVATE ${FUNC_C_SOURCES} ${FUNC_CXX_SOURCES})
 
 # ----------------------------------------------------------------------------
-# Phase 2 components — one directory per worker, each with its own
-# CMakeLists.txt. Hooks are guarded on existence so the plain mm_recompiled
-# gate build keeps working while components are absent. Workers: do NOT edit
-# this file — your directory is already included below.
+# Runtime components, each with its own CMakeLists.txt. Hooks are guarded on
+# existence so a translated-library-only build keeps working when optional
+# components are absent.
 # ----------------------------------------------------------------------------
 option(MM_BUILD_PROBE "Link mm_recompiled against librecomp/ultramodern to enumerate unresolved symbols" OFF)
 
@@ -209,9 +207,9 @@ foreach(_c ${MM_PHASE2_COMPONENTS})
 endforeach()
 
 # ----------------------------------------------------------------------------
-# Stretch: mm_runtime_probe — link the game against the runtime to surface the
-# Phase 2 undefined-symbol work plan. Off by default so the Phase 1 gate build
-# stays self-contained (no SDL2/RT64 coupling). Enable with -DMM_BUILD_PROBE=ON.
+# mm_runtime_probe — link the game against the runtime to surface missing
+# wrappers. Off by default so a translated-library-only build stays
+# self-contained (no SDL2/RT64 coupling). Enable with -DMM_BUILD_PROBE=ON.
 # ----------------------------------------------------------------------------
 if(MM_BUILD_PROBE)
     add_executable(mm_runtime_probe
@@ -224,7 +222,7 @@ if(MM_BUILD_PROBE)
     # linked. With the 2 stubs in probe_glue.cpp every game/runtime reference
     # resolves, so this links cleanly under --no-undefined. (The original
     # undefined set — rmonPrintf_recomp, __osGetCause_recomp — is documented in
-    # PHASE1_NOTES.md as the only genuine link-time gaps; the larger Phase 2
+    # docs/README.md as the only genuine link-time gaps; the larger runtime
     # graphics/audio/RSP/entry work uses abstract interfaces that need runtime
     # *registration*, not link-time symbols, so it does not surface here.)
     target_link_libraries(mm_runtime_probe PRIVATE

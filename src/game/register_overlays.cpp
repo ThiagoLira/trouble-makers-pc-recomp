@@ -1,4 +1,4 @@
-// src/game/register_overlays.cpp — Phase 2 worker w1 (game core).
+// Register the translated program's sections and host function entries.
 //
 // Registers the recompiled game's overlay/section table with librecomp so the
 // runtime can resolve N64 overlay loads (load_overlays/unload_overlays) to the
@@ -149,12 +149,11 @@ void on_game_init(uint8_t* rdram, recomp_context* /*ctx*/) {
         }
     }).detach();
 
-    // Widescreen view-cull widening is baked into the translation as
-    // instruction patches (see troublemakers.us1.toml [patches]): the game's
-    // per-frame cull rect is now camX +/- 0x120 instead of +/- 0x90. A
-    // previous host-thread mirror of these bounds raced the game's rewrite
-    // and made wing sprites flicker; the translation-time patch is
-    // deterministic. History: PHASE6_NOTES_a.md.
+    // Widescreen view-cull widening is applied by same-thread translated
+    // return hooks (see troublemakers.us1.toml [patches]): expanded gameplay
+    // uses camX +/- 0x180 while 4:3/cinematics retain +/- 0x90. A former host
+    // timer raced the game's per-frame rewrite; the return-boundary hook is
+    // deterministic. See docs/README.md, "Camera rectangle".
 }
 
 } // namespace troublemakers

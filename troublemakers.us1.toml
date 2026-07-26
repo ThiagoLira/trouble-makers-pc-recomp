@@ -25,7 +25,7 @@ instruction = [
     # the draw loop to 20 columns starting 5 left (cols -5..14) with an 80-byte
     # (20-slot) row stride and the two 4:3 left-edge assumptions removed; the
     # entry hook below rebuilds D_80180D90 at stride 20 with all 20 real
-    # columns. Fill path + every word here ROM-verified (Phase 8 forensics).
+    # columns. Fill path and every word here were verified against the ROM.
     { func = "func_80082820", vram = 0x800829D0, value = 0x2414000F }, # col limit s4 10 -> 15
     { func = "func_80082820", vram = 0x80082A08, value = 0x240CFFFB }, # col start t4 0 -> -5
     { func = "func_80082820", vram = 0x80082A20, value = 0x24F900C0 }, # left-edge skip 0x20 -> 0xC0
@@ -212,7 +212,7 @@ instruction = [
 # modes), validated per-tile against the loaded texture bank. The hooks also
 # remap the display-list arena argument ($a0) to enlarged scratch arenas —
 # the originals hold exactly 70 tiles and the widened loops can emit 140
-# (see PHASE7_NOTES_widescreen.md, "display-list arena overflow").
+# (see docs/README.md, "Display-list capacity").
 hook = [
     # The game draws 14px/18px black strips at x=0 and x=302 around its
     # original 4:3 safe area. They become seams in an expanded framebuffer.
