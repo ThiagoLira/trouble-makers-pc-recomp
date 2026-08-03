@@ -1,14 +1,6 @@
-// src/game/launcher.cpp — pre-game splash screen (ROM select + display options).
-//
-// See launcher.h. The flow and wording mirror the Zelda64Recomp launcher
-// (reference/Zelda64Recomp/src/ui/ui_launcher.cpp): a "Select ROM" button
-// that opens a native file dialog (nativefiledialog-extended, same library
-// the reference uses), validation through recomp::select_rom with the same
-// per-error messages, and a Start button that only enables once the ROM
-// validated. Instead of the reference's RmlUi stack (a full HTML/CSS engine
-// rendered through RT64), we draw with Dear ImGui on an SDL_Renderer: both
-// are already vendored and compiled inside lib/rt64, and SDL_Renderer has a
-// software fallback, so the splash runs anywhere the game itself can.
+// Controller-first pre-game launcher. The full-screen composition follows the
+// navigation model used by current N64 recompilation projects while retaining
+// this project's game-specific display, input, and support options.
 
 #include <algorithm>
 #include <array>
@@ -27,12 +19,14 @@
 #include "imgui_impl_sdl2_custom.h"                // SDL2 platform backend compiled into rt64
 #include "backends/imgui_impl_sdlrenderer2.h"      // renderer backend compiled into the troublemakers exe
 #include "nfd.h"
+#include "stb/stb_image.h"
 
 #include "librecomp/game.hpp"
 
 #include "launcher.h"
 #include "mm_audio_input.hpp"
 #include "session_log.h"
+#include "steam_deck.h"
 
 namespace {
 
@@ -76,27 +70,322 @@ const char* rom_error_message(recomp::RomValidationError err) {
     }
 }
 
-// Muted burgundy accent (Marina's colors) over the stock dark style.
-void apply_style() {
+constexpr const char* kSplashAsset =
+    "assets/launcher/splash-background.jpg";
+constexpr const char* kTitleLogoAsset =
+    "assets/launcher/title-logo.png";
+
+enum class LauncherPage {
+    Main,
+    Graphics,
+    Controls,
+    Support,
+};
+
+struct SplashTexture {
+    SDL_Texture* texture = nullptr;
+    int width = 0;
+    int height = 0;
+};
+
+// RT64 intentionally compiles a custom ImGui SDL backend with controller
+// support removed (it avoids conflicts with the controller path used by the
+// renderer). The launcher is a separate, controller-first UI, so translate
+// SDL controller events into ImGui's navigation keys here. Without this
+// bridge NavEnableGamepad is set, but A/B/D-pad/stick input is never delivered
+// to ImGui at all.
+void update_gamepad_available(ImGuiIO& io) {
+    bool available = false;
+    for (int index = 0; index < SDL_NumJoysticks(); ++index) {
+        if (SDL_IsGameController(index)) {
+            available = true;
+            break;
+        }
+    }
+
+    if (available) {
+        io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
+    } else {
+        io.BackendFlags &= ~ImGuiBackendFlags_HasGamepad;
+    }
+}
+
+void process_gamepad_navigation_event(ImGuiIO& io, const SDL_Event& event) {
+    if (event.type == SDL_CONTROLLERBUTTONDOWN ||
+        event.type == SDL_CONTROLLERBUTTONUP) {
+        ImGuiKey key = ImGuiKey_None;
+        switch (event.cbutton.button) {
+            case SDL_CONTROLLER_BUTTON_A:
+                key = ImGuiKey_GamepadFaceDown;
+                break;
+            case SDL_CONTROLLER_BUTTON_B:
+                key = ImGuiKey_GamepadFaceRight;
+                break;
+            case SDL_CONTROLLER_BUTTON_X:
+                key = ImGuiKey_GamepadFaceLeft;
+                break;
+            case SDL_CONTROLLER_BUTTON_Y:
+                key = ImGuiKey_GamepadFaceUp;
+                break;
+            case SDL_CONTROLLER_BUTTON_DPAD_LEFT:
+                key = ImGuiKey_GamepadDpadLeft;
+                break;
+            case SDL_CONTROLLER_BUTTON_DPAD_RIGHT:
+                key = ImGuiKey_GamepadDpadRight;
+                break;
+            case SDL_CONTROLLER_BUTTON_DPAD_UP:
+                key = ImGuiKey_GamepadDpadUp;
+                break;
+            case SDL_CONTROLLER_BUTTON_DPAD_DOWN:
+                key = ImGuiKey_GamepadDpadDown;
+                break;
+            case SDL_CONTROLLER_BUTTON_LEFTSHOULDER:
+                key = ImGuiKey_GamepadL1;
+                break;
+            case SDL_CONTROLLER_BUTTON_RIGHTSHOULDER:
+                key = ImGuiKey_GamepadR1;
+                break;
+            case SDL_CONTROLLER_BUTTON_LEFTSTICK:
+                key = ImGuiKey_GamepadL3;
+                break;
+            case SDL_CONTROLLER_BUTTON_RIGHTSTICK:
+                key = ImGuiKey_GamepadR3;
+                break;
+            case SDL_CONTROLLER_BUTTON_START:
+                key = ImGuiKey_GamepadStart;
+                break;
+            case SDL_CONTROLLER_BUTTON_BACK:
+                key = ImGuiKey_GamepadBack;
+                break;
+            default:
+                break;
+        }
+
+        if (key != ImGuiKey_None) {
+            io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
+            io.AddKeyEvent(key, event.type == SDL_CONTROLLERBUTTONDOWN);
+        }
+        return;
+    }
+
+    if (event.type != SDL_CONTROLLERAXISMOTION) {
+        return;
+    }
+
+    constexpr float dead_zone = 8000.0f;
+    constexpr float positive_range = 32767.0f - dead_zone;
+    constexpr float negative_range = 32768.0f - dead_zone;
+    const float value = static_cast<float>(event.caxis.value);
+    const auto positive = [value](float threshold, float range) {
+        return std::clamp((value - threshold) / range, 0.0f, 1.0f);
+    };
+    const auto negative = [value](float threshold, float range) {
+        return std::clamp((-value - threshold) / range, 0.0f, 1.0f);
+    };
+    const auto analog = [&io](ImGuiKey key, float strength) {
+        io.AddKeyAnalogEvent(key, strength > 0.0f, strength);
+    };
+
+    io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
+    switch (event.caxis.axis) {
+        case SDL_CONTROLLER_AXIS_LEFTX:
+            analog(ImGuiKey_GamepadLStickLeft,
+                   negative(dead_zone, negative_range));
+            analog(ImGuiKey_GamepadLStickRight,
+                   positive(dead_zone, positive_range));
+            break;
+        case SDL_CONTROLLER_AXIS_LEFTY:
+            analog(ImGuiKey_GamepadLStickUp,
+                   negative(dead_zone, negative_range));
+            analog(ImGuiKey_GamepadLStickDown,
+                   positive(dead_zone, positive_range));
+            break;
+        case SDL_CONTROLLER_AXIS_RIGHTX:
+            analog(ImGuiKey_GamepadRStickLeft,
+                   negative(dead_zone, negative_range));
+            analog(ImGuiKey_GamepadRStickRight,
+                   positive(dead_zone, positive_range));
+            break;
+        case SDL_CONTROLLER_AXIS_RIGHTY:
+            analog(ImGuiKey_GamepadRStickUp,
+                   negative(dead_zone, negative_range));
+            analog(ImGuiKey_GamepadRStickDown,
+                   positive(dead_zone, positive_range));
+            break;
+        case SDL_CONTROLLER_AXIS_TRIGGERLEFT:
+            analog(ImGuiKey_GamepadL2,
+                   positive(0.0f, 32767.0f));
+            break;
+        case SDL_CONTROLLER_AXIS_TRIGGERRIGHT:
+            analog(ImGuiKey_GamepadR2,
+                   positive(0.0f, 32767.0f));
+            break;
+        default:
+            break;
+    }
+}
+
+std::filesystem::path launcher_asset_path(const char* relative_path) {
+    if (char* base_path = SDL_GetBasePath()) {
+        const std::filesystem::path beside_executable =
+            std::filesystem::path(base_path) / relative_path;
+        SDL_free(base_path);
+        std::error_code ec;
+        if (std::filesystem::exists(beside_executable, ec)) {
+            return beside_executable;
+        }
+    }
+
+    // Useful for development builds launched from the repository root.
+    return std::filesystem::path(relative_path);
+}
+
+SplashTexture load_launcher_texture(SDL_Renderer* renderer,
+                                    const char* relative_path,
+                                    const char* description) {
+    SplashTexture result{};
+    const std::filesystem::path path = launcher_asset_path(relative_path);
+    const std::string path_utf8 = path_to_utf8(path);
+    int channels = 0;
+    stbi_uc* pixels = stbi_load(
+        path_utf8.c_str(), &result.width, &result.height, &channels, 4);
+    if (pixels == nullptr) {
+        std::fprintf(stderr, "[launcher] %s unavailable (%s): %s\n",
+            description, path_utf8.c_str(), stbi_failure_reason());
+        result.width = 0;
+        result.height = 0;
+        return result;
+    }
+
+    result.texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32,
+        SDL_TEXTUREACCESS_STATIC, result.width, result.height);
+    if (result.texture != nullptr) {
+        SDL_UpdateTexture(result.texture, nullptr, pixels, result.width * 4);
+        SDL_SetTextureBlendMode(result.texture, SDL_BLENDMODE_BLEND);
+        std::fprintf(stderr, "[launcher] %s: %s (%dx%d)\n",
+            description, path_utf8.c_str(), result.width, result.height);
+    } else {
+        std::fprintf(stderr, "[launcher] %s texture creation failed: %s\n",
+            description, SDL_GetError());
+        result.width = 0;
+        result.height = 0;
+    }
+    stbi_image_free(pixels);
+    return result;
+}
+
+ImVec2 draw_title_logo(const SplashTexture& logo,
+                       float safe_x,
+                       float screen_scale,
+                       const ImVec2& display_size) {
+    const float area_width = std::min(
+        650.0f * screen_scale, display_size.x * 0.54f);
+    const float top = 40.0f * screen_scale;
+
+    if (logo.texture == nullptr || logo.width <= 0 || logo.height <= 0) {
+        const char* fallback = "TROUBLE MAKERS";
+        ImFont* font = ImGui::GetFont();
+        const float font_size = 52.0f * screen_scale;
+        const ImVec2 text_size = font->CalcTextSizeA(
+            font_size, FLT_MAX, 0.0f, fallback);
+        const ImVec2 local_pos(
+            safe_x + (area_width - text_size.x) * 0.5f,
+            top);
+        const ImVec2 window_pos = ImGui::GetWindowPos();
+        ImGui::GetWindowDrawList()->AddText(
+            font, font_size,
+            ImVec2(window_pos.x + local_pos.x, window_pos.y + local_pos.y),
+            IM_COL32(255, 197, 47, 255), fallback);
+        return ImVec2(safe_x + area_width * 0.5f,
+                      top + text_size.y);
+    }
+
+    const float max_height = 252.0f * screen_scale;
+    const float image_scale = std::min(
+        area_width / static_cast<float>(logo.width),
+        max_height / static_cast<float>(logo.height));
+    const ImVec2 size(
+        static_cast<float>(logo.width) * image_scale,
+        static_cast<float>(logo.height) * image_scale);
+    const ImVec2 local_pos(
+        safe_x + (area_width - size.x) * 0.5f,
+        top);
+    const ImVec2 window_pos = ImGui::GetWindowPos();
+    ImGui::GetWindowDrawList()->AddImage(
+        reinterpret_cast<ImTextureID>(logo.texture),
+        ImVec2(window_pos.x + local_pos.x, window_pos.y + local_pos.y),
+        ImVec2(window_pos.x + local_pos.x + size.x,
+               window_pos.y + local_pos.y + size.y));
+    return ImVec2(safe_x + area_width * 0.5f, top + size.y);
+}
+
+void draw_splash_background(const SplashTexture& splash,
+                            const ImVec2& display_size) {
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    const ImVec2 origin = ImGui::GetWindowPos();
+    const ImVec2 edge(origin.x + display_size.x, origin.y + display_size.y);
+
+    if (splash.texture != nullptr && splash.width > 0 && splash.height > 0) {
+        const float image_aspect =
+            static_cast<float>(splash.width) / static_cast<float>(splash.height);
+        const float display_aspect = display_size.x / std::max(display_size.y, 1.0f);
+        ImVec2 uv0(0.0f, 0.0f);
+        ImVec2 uv1(1.0f, 1.0f);
+        if (image_aspect > display_aspect) {
+            const float visible = display_aspect / image_aspect;
+            uv0.x = (1.0f - visible) * 0.5f;
+            uv1.x = 1.0f - uv0.x;
+        } else {
+            const float visible = image_aspect / display_aspect;
+            uv0.y = (1.0f - visible) * 0.5f;
+            uv1.y = 1.0f - uv0.y;
+        }
+        draw->AddImage(reinterpret_cast<ImTextureID>(splash.texture),
+            origin, edge, uv0, uv1);
+    } else {
+        draw->AddRectFilledMultiColor(origin, edge,
+            IM_COL32(37, 13, 43, 255), IM_COL32(8, 12, 25, 255),
+            IM_COL32(3, 5, 12, 255), IM_COL32(18, 7, 27, 255));
+    }
+
+    // Keep the art readable on the left and guarantee high-contrast controls
+    // on the right, regardless of the replacement image's color palette.
+    draw->AddRectFilled(origin, edge, IM_COL32(5, 6, 12, 62));
+    draw->AddRectFilledMultiColor(origin, edge,
+        IM_COL32(3, 4, 10, 25), IM_COL32(3, 4, 10, 226),
+        IM_COL32(3, 4, 10, 246), IM_COL32(3, 4, 10, 80));
+    const ImVec2 lower(origin.x, origin.y + display_size.y * 0.62f);
+    draw->AddRectFilledMultiColor(lower, edge,
+        IM_COL32(3, 4, 10, 0), IM_COL32(3, 4, 10, 0),
+        IM_COL32(3, 4, 10, 205), IM_COL32(3, 4, 10, 205));
+}
+
+// High-contrast burgundy and gold, derived from Marina's in-game palette.
+void apply_style(float scale) {
     ImGui::StyleColorsDark();
     ImGuiStyle& style = ImGui::GetStyle();
     style.WindowRounding = 0.0f;
-    style.FrameRounding = 4.0f;
-    style.GrabRounding = 4.0f;
-    style.PopupRounding = 4.0f;
-    style.FramePadding = ImVec2(10.0f, 6.0f);
-    style.ItemSpacing = ImVec2(10.0f, 10.0f);
-    style.WindowPadding = ImVec2(28.0f, 24.0f);
+    style.ChildRounding = 12.0f;
+    style.FrameRounding = 7.0f;
+    style.GrabRounding = 7.0f;
+    style.PopupRounding = 7.0f;
+    style.FramePadding = ImVec2(14.0f, 9.0f);
+    style.ItemSpacing = ImVec2(12.0f, 12.0f);
+    style.WindowPadding = ImVec2(30.0f, 26.0f);
+    style.ScrollbarSize = 22.0f;
+    style.FrameBorderSize = 1.0f;
+    style.ScaleAllSizes(scale);
 
-    const ImVec4 bg(0.075f, 0.070f, 0.085f, 1.00f);
-    const ImVec4 frame(0.16f, 0.15f, 0.18f, 1.00f);
-    const ImVec4 accent(0.55f, 0.16f, 0.22f, 1.00f);
-    const ImVec4 accent_hi(0.70f, 0.22f, 0.30f, 1.00f);
+    const ImVec4 frame(0.11f, 0.105f, 0.15f, 0.94f);
+    const ImVec4 accent(0.60f, 0.12f, 0.26f, 1.00f);
+    const ImVec4 accent_hi(0.86f, 0.20f, 0.38f, 1.00f);
+    const ImVec4 gold(1.00f, 0.73f, 0.25f, 1.00f);
     ImVec4* c = style.Colors;
-    c[ImGuiCol_WindowBg] = bg;
-    c[ImGuiCol_PopupBg] = ImVec4(0.10f, 0.095f, 0.11f, 1.00f);
+    c[ImGuiCol_WindowBg] = ImVec4(0.03f, 0.03f, 0.06f, 0.0f);
+    c[ImGuiCol_ChildBg] = ImVec4(0.035f, 0.035f, 0.065f, 0.94f);
+    c[ImGuiCol_PopupBg] = ImVec4(0.055f, 0.05f, 0.085f, 0.99f);
     c[ImGuiCol_FrameBg] = frame;
-    c[ImGuiCol_FrameBgHovered] = ImVec4(0.22f, 0.20f, 0.24f, 1.00f);
+    c[ImGuiCol_FrameBgHovered] = ImVec4(0.23f, 0.13f, 0.23f, 0.98f);
     c[ImGuiCol_FrameBgActive] = accent;
     c[ImGuiCol_Button] = frame;
     c[ImGuiCol_ButtonHovered] = accent;
@@ -104,11 +393,12 @@ void apply_style() {
     c[ImGuiCol_Header] = accent;
     c[ImGuiCol_HeaderHovered] = accent_hi;
     c[ImGuiCol_HeaderActive] = accent_hi;
-    c[ImGuiCol_CheckMark] = accent_hi;
+    c[ImGuiCol_CheckMark] = gold;
     c[ImGuiCol_SliderGrab] = accent;
     c[ImGuiCol_SliderGrabActive] = accent_hi;
-    c[ImGuiCol_NavHighlight] = accent_hi;
-    c[ImGuiCol_Separator] = ImVec4(0.30f, 0.28f, 0.32f, 1.00f);
+    c[ImGuiCol_NavHighlight] = gold;
+    c[ImGuiCol_Border] = ImVec4(0.55f, 0.36f, 0.48f, 0.55f);
+    c[ImGuiCol_Separator] = ImVec4(0.55f, 0.36f, 0.48f, 0.55f);
 }
 
 void save_controls_with_status(std::string& status) {
@@ -138,7 +428,7 @@ void draw_controls_tab(mm_audio_input::ControlDevice& selected_device,
         selected_device = ControlDevice::Keyboard;
     }
     ImGui::SameLine();
-    ImGui::TextDisabled("Click a binding, then press an input");
+    ImGui::TextDisabled("Select a binding, then press an input");
 
     const ImGuiTableFlags flags = ImGuiTableFlags_BordersInner |
         ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY |
@@ -244,40 +534,247 @@ void draw_support_tab(std::string& status) {
     }
 }
 
+void draw_graphics_page(mm::launcher::DisplaySettings& settings,
+                        bool have_desktop,
+                        const SDL_DisplayMode& desktop,
+                        int& preset_index,
+                        const char* custom_label) {
+    const float field_width = std::min(360.0f, ImGui::GetContentRegionAvail().x * 0.52f);
+
+    ImGui::SeparatorText("DISPLAY");
+    char fullscreen_label[64] = {};
+    if (settings.fullscreen && have_desktop) {
+        std::snprintf(fullscreen_label, sizeof fullscreen_label,
+            "Desktop (%d x %d)", desktop.w, desktop.h);
+    }
+    const char* preview = settings.fullscreen && have_desktop
+        ? fullscreen_label
+        : (preset_index >= 0 ? kPresets[preset_index].label : custom_label);
+    ImGui::SetNextItemWidth(field_width);
+    ImGui::BeginDisabled(settings.fullscreen);
+    if (ImGui::BeginCombo("Resolution", preview)) {
+        if (preset_index < 0 && ImGui::Selectable(custom_label, true)) {
+            // Preserve a custom command-line size until a preset is selected.
+        }
+        for (int i = 0; i < static_cast<int>(std::size(kPresets)); ++i) {
+            if (ImGui::Selectable(kPresets[i].label, i == preset_index)) {
+                preset_index = i;
+                settings.window_w = kPresets[i].w;
+                settings.window_h = kPresets[i].h;
+            }
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::EndDisabled();
+
+    ImGui::Checkbox("Fullscreen", &settings.fullscreen);
+    if (settings.fullscreen && have_desktop) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("Uses the desktop mode");
+    }
+    ImGui::Checkbox("Widescreen", &settings.widescreen);
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+        ImGui::SetTooltip("Expands the rendered field to the window aspect.\n"
+                          "Can reveal off-stage areas in this 2D game.");
+    }
+
+    ImGui::SeparatorText("IMAGE QUALITY");
+    const char* msaa_preview = settings.msaa == 2 ? "2x"
+                             : settings.msaa == 4 ? "4x" : "Off";
+    ImGui::SetNextItemWidth(field_width);
+    if (ImGui::BeginCombo("MSAA", msaa_preview)) {
+        constexpr int values[] = {0, 2, 4};
+        constexpr const char* labels[] = {"Off", "2x", "4x"};
+        for (int i = 0; i < static_cast<int>(std::size(values)); ++i) {
+            if (ImGui::Selectable(labels[i], settings.msaa == values[i])) {
+                settings.msaa = values[i];
+                if (settings.msaa > 0) {
+                    settings.ssaa = 1;
+                }
+            }
+        }
+        ImGui::EndCombo();
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Smooths polygon edges. Selecting MSAA disables SSAA.");
+    }
+
+    char ssaa_preview[16] = "Off";
+    if (settings.ssaa > 1) {
+        std::snprintf(ssaa_preview, sizeof ssaa_preview, "%dx", settings.ssaa);
+    }
+    ImGui::SetNextItemWidth(field_width);
+    if (ImGui::BeginCombo("SSAA", ssaa_preview)) {
+        constexpr int values[] = {1, 2};
+        constexpr const char* labels[] = {"Off", "2x"};
+        for (int i = 0; i < static_cast<int>(std::size(values)); ++i) {
+            if (ImGui::Selectable(labels[i], settings.ssaa == values[i])) {
+                settings.ssaa = values[i];
+                if (settings.ssaa > 1) {
+                    settings.msaa = 0;
+                }
+            }
+        }
+        ImGui::EndCombo();
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Renders at 2x each dimension and downsamples.\n"
+                          "This is much heavier than MSAA. Selecting SSAA disables MSAA.");
+    }
+
+    ImGui::TextUnformatted("Quick presets");
+    const float spacing = ImGui::GetStyle().ItemSpacing.x;
+    const float preset_width = std::max(
+        120.0f, (ImGui::GetContentRegionAvail().x - spacing * 2.0f) / 3.0f);
+    if (ImGui::Button("Recommended", ImVec2(preset_width, 0.0f))) {
+        settings.fps = 0;
+        settings.msaa = 0;
+        settings.ssaa = 1;
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Native 60 fps with antialiasing disabled.");
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Higher FPS", ImVec2(preset_width, 0.0f))) {
+        settings.fps = 120;
+        settings.msaa = 0;
+        settings.ssaa = 1;
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Targets 120 fps, clamped to the display refresh rate.");
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Try 4x MSAA", ImVec2(preset_width, 0.0f))) {
+        settings.fps = 0;
+        settings.msaa = 4;
+        settings.ssaa = 1;
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Native 60 fps with 4x MSAA for comparison.");
+    }
+
+    ImGui::SeparatorText("ADVANCED");
+    char fps_preview[24];
+    if (settings.fps == 0) {
+        std::snprintf(fps_preview, sizeof fps_preview, "Native (60)");
+    } else if (settings.fps < 0) {
+        std::snprintf(fps_preview, sizeof fps_preview, "Match display");
+    } else {
+        std::snprintf(fps_preview, sizeof fps_preview, "%d fps", settings.fps);
+    }
+    ImGui::SetNextItemWidth(field_width);
+    if (ImGui::BeginCombo("Frame rate", fps_preview)) {
+        constexpr int values[] = {0, 120, 144, 240, -1};
+        constexpr const char* labels[] = {
+            "Native (60)", "120 fps", "144 fps", "240 fps", "Match display"};
+        for (int i = 0; i < static_cast<int>(std::size(values)); ++i) {
+            if (ImGui::Selectable(labels[i], settings.fps == values[i])) {
+                settings.fps = values[i];
+            }
+        }
+        ImGui::EndCombo();
+    }
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+        ImGui::SetTooltip("RT64 interpolates the extra frames; game logic remains at 60 Hz.\n"
+                          "The target is capped to the monitor refresh rate.");
+    }
+
+    ImGui::Checkbox("VSync", &settings.vsync);
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+        ImGui::SetTooltip("Synchronizes presentation to the display. Disabling it can tear.");
+    }
+
+    const int output_width = settings.fullscreen && have_desktop
+        ? desktop.w : settings.window_w;
+    const int output_height = settings.fullscreen && have_desktop
+        ? desktop.h : settings.window_h;
+    int effective_rate = 60;
+    if (settings.fps < 0) {
+        effective_rate = have_desktop && desktop.refresh_rate > 0
+            ? desktop.refresh_rate : 60;
+    } else if (settings.fps > 0) {
+        effective_rate = settings.fps;
+        if (have_desktop && desktop.refresh_rate > 0) {
+            effective_rate = std::min(effective_rate, desktop.refresh_rate);
+        }
+    }
+    const int output_scale = std::max((output_height + 239) / 240, 1);
+    const int internal_scale = output_scale * std::max(settings.ssaa, 1);
+    const double aspect_expansion = settings.widescreen && output_height > 0
+        ? std::max((static_cast<double>(output_width) / output_height) /
+                   (4.0 / 3.0), 1.0)
+        : 1.0;
+    const int estimated_internal_width = static_cast<int>(std::lround(
+        320.0 * internal_scale * aspect_expansion));
+    const int estimated_internal_height = 240 * internal_scale;
+    const double frame_multiplier = std::max(effective_rate / 60.0, 1.0);
+    const double aa_multiplier = settings.ssaa > 1
+        ? static_cast<double>(settings.ssaa * settings.ssaa)
+        : static_cast<double>(std::max(settings.msaa, 1));
+    const double estimated_sample_load = frame_multiplier * aa_multiplier;
+
+    ImGui::TextDisabled("Estimated target: %d x %d · %d fps · ~%.1fx raster samples",
+        estimated_internal_width, estimated_internal_height,
+        effective_rate, estimated_sample_load);
+    if (settings.ssaa > 1 && effective_rate > 60) {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.00f, 0.48f, 0.32f, 1.0f));
+        ImGui::TextWrapped("Very high cost: SSAA and interpolation multiply each other. "
+                           "Reduce one if frame pacing degrades.");
+        ImGui::PopStyleColor();
+    } else if (estimated_sample_load >= 8.0) {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.00f, 0.72f, 0.30f, 1.0f));
+        ImGui::TextWrapped("High renderer load. Reduce antialiasing or the frame-rate "
+                           "target if pacing degrades.");
+        ImGui::PopStyleColor();
+    } else if (settings.msaa > 0 || settings.ssaa > 1) {
+        ImGui::TextDisabled("AA is optional and often subtle at this internal resolution.");
+    }
+
+    ImGui::Checkbox("Enable debug menu", &settings.debug_menu);
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+        ImGui::SetTooltip("F1 or controller L+R+Start opens the in-game overlay.\n"
+                          "Using a debug warp blocks save writes until exit.");
+    }
+}
+
 } // namespace
 
 namespace mm::launcher {
 
 Outcome run(std::u8string game_id, const std::string& version_string,
             DisplaySettings& settings, std::filesystem::path& rom_path) {
-    if (SDL_InitSubSystem(SDL_INIT_VIDEO) != 0) {
-        std::fprintf(stderr, "[launcher] SDL video init failed: %s\n", SDL_GetError());
+    if (SDL_InitSubSystem(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) != 0) {
+        std::fprintf(stderr, "[launcher] SDL init failed: %s\n", SDL_GetError());
         return Outcome::Quit;
     }
+    SDL_GameControllerEventState(SDL_ENABLE);
     std::fprintf(stderr, "[launcher] SDL video driver: %s\n",
                  SDL_GetCurrentVideoDriver() != nullptr
                     ? SDL_GetCurrentVideoDriver() : "unknown");
 
-    // Scale the launcher on platforms where SDL reports physical desktop
-    // pixels without the window system scaling the window for us. Windows
-    // already applies the user's display scale to an SDL window; deriving a
-    // second scale from the physical desktop height makes a 1440p/150% setup
-    // effectively 3x, which overflows the launcher and breaks hit testing.
     SDL_DisplayMode desktop{};
     const bool have_desktop =
         SDL_GetCurrentDisplayMode(0, &desktop) == 0 &&
         desktop.w > 0 && desktop.h > 0;
-    int ui_scale = 1;
-#if !defined(_WIN32)
-    if (have_desktop) {
-        ui_scale = std::clamp(desktop.h / 720, 1, 4);
-    }
-#endif
+
+    // 1280x800 is the launcher's reference canvas and the Steam Deck's native
+    // display. Small displays get a borderless desktop window; larger desktop
+    // displays get a centered, resizable 16:10 window.
+    const bool compact_display =
+        have_desktop && desktop.w <= 1280 && desktop.h <= 800;
+    const bool deck_desktop_controls = mm::platform::is_steam_deck() &&
+        std::getenv("SteamGameId") == nullptr &&
+        std::getenv("SteamAppId") == nullptr;
+    const int launcher_w = have_desktop ? std::min(desktop.w, 1280) : 1280;
+    const int launcher_h = have_desktop ? std::min(desktop.h, 800) : 800;
+    const Uint32 window_flags = SDL_WINDOW_ALLOW_HIGHDPI |
+        SDL_WINDOW_RESIZABLE |
+        (compact_display ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
 
     SDL_Window* window = SDL_CreateWindow(
         "Trouble Makers",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-        640 * ui_scale, 560 * ui_scale, SDL_WINDOW_ALLOW_HIGHDPI);
+        launcher_w, launcher_h, window_flags);
     if (window == nullptr) {
         std::fprintf(stderr, "[launcher] window creation failed: %s\n", SDL_GetError());
         return Outcome::Quit;
@@ -308,30 +805,26 @@ Outcome run(std::u8string game_id, const std::string& version_string,
             (renderer_info.flags & SDL_RENDERER_SOFTWARE) ? "yes" : "no",
             (renderer_info.flags & SDL_RENDERER_PRESENTVSYNC) ? "yes" : "no");
     }
-    if (software_renderer && ui_scale > 2) {
-        // Avoid software-blitting an oversized HiDPI launcher surface.
-        ui_scale = 2;
-        SDL_SetWindowSize(window, 640 * ui_scale, 560 * ui_scale);
-        SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED,
-            SDL_WINDOWPOS_CENTERED);
-    }
-
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.IniFilename = nullptr; // no imgui.ini litter
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-    apply_style();
-    if (ui_scale > 1) {
-        ImGui::GetStyle().ScaleAllSizes(static_cast<float>(ui_scale));
-        // Rebuild the default font at the scaled size instead of
-        // FontGlobalScale, which just stretches the 13px atlas blurry.
-        ImFontConfig font_cfg{};
-        font_cfg.SizePixels = 13.0f * ui_scale;
-        io.Fonts->AddFontDefault(&font_cfg);
-    }
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard |
+                      ImGuiConfigFlags_NavEnableGamepad;
+    update_gamepad_available(io);
+    const float interface_scale = std::clamp(
+        static_cast<float>(launcher_h) / 800.0f, 0.80f, 1.0f);
+    apply_style(interface_scale);
+    ImFontConfig font_cfg{};
+    font_cfg.SizePixels = 20.0f * interface_scale;
+    io.Fonts->AddFontDefault(&font_cfg);
     ImGui_ImplSDL2_InitForSDLRenderer(window, renderer);
     ImGui_ImplSDLRenderer2_Init(renderer);
+
+    SplashTexture splash = load_launcher_texture(
+        renderer, kSplashAsset, "splash image");
+    SplashTexture title_logo = load_launcher_texture(
+        renderer, kTitleLogoAsset, "title logo");
 
     const bool nfd_ok = (NFD_Init() == NFD_OKAY);
 
@@ -376,6 +869,9 @@ Outcome run(std::u8string game_id, const std::string& version_string,
     std::array<bool, SDL_CONTROLLER_AXIS_MAX> axis_neutral{};
     std::string controls_status;
     std::string support_status;
+    LauncherPage page = LauncherPage::Main;
+    bool request_focus = true;
+    bool back_requested = false;
 
     Outcome outcome = Outcome::Quit;
     bool running = true;
@@ -389,12 +885,21 @@ Outcome run(std::u8string game_id, const std::string& version_string,
                 static_cast<unsigned long long>(event_count), ev.type);
         }
         ImGui_ImplSDL2_ProcessEvent(&ev);
+        process_gamepad_navigation_event(io, ev);
         if (ev.type == SDL_QUIT) {
             running = false;
         }
         if (ev.type == SDL_CONTROLLERDEVICEADDED ||
             ev.type == SDL_CONTROLLERDEVICEREMOVED) {
             mm_audio_input::refresh_controllers();
+            update_gamepad_available(io);
+        }
+        if (!capture_active && page != LauncherPage::Main &&
+            ((ev.type == SDL_KEYDOWN && ev.key.repeat == 0 &&
+              ev.key.keysym.scancode == SDL_SCANCODE_ESCAPE) ||
+             (ev.type == SDL_CONTROLLERBUTTONDOWN &&
+              ev.cbutton.button == SDL_CONTROLLER_BUTTON_B))) {
+            back_requested = true;
         }
 
         if (capture_active) {
@@ -431,6 +936,34 @@ Outcome run(std::u8string game_id, const std::string& version_string,
             }
         }
     };
+    auto select_rom = [&]() {
+        if (!nfd_ok) {
+            rom_error = "No native file dialog is available. Pass the ROM path "
+                        "on the command line instead (see --help).";
+            return;
+        }
+
+        // No filename filter: dumps commonly use .z64, .n64, or .v64 and are
+        // often misnamed. Validation below is authoritative.
+        nfdnchar_t* picked = nullptr;
+        const nfdresult_t result = NFD_OpenDialogN(&picked, nullptr, 0, nullptr);
+        if (result == NFD_OKAY) {
+            const std::filesystem::path picked_path{picked};
+            NFD_FreePathN(picked);
+            const recomp::RomValidationError error =
+                recomp::select_rom(picked_path, game_id);
+            if (error == recomp::RomValidationError::Good) {
+                rom_valid = true;
+                rom_error.clear();
+                rom_path = picked_path;
+                rom_display = path_to_utf8(picked_path.filename());
+            } else {
+                rom_error = rom_error_message(error);
+            }
+        } else if (result == NFD_ERROR) {
+            rom_error = std::string("File dialog error: ") + NFD_GetError();
+        }
+    };
     while (running) {
         SDL_Event ev;
         if (software_renderer && !first_frame) {
@@ -451,338 +984,213 @@ Outcome run(std::u8string game_id, const std::string& version_string,
         ImGui_ImplSDL2_NewFrame();
         ImGui::NewFrame();
 
+        if (back_requested) {
+            page = LauncherPage::Main;
+            back_requested = false;
+            request_focus = true;
+        }
+
         ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
         ImGui::SetNextWindowSize(io.DisplaySize);
         ImGui::Begin("##launcher", nullptr,
-                     ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
-                     ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus);
+            ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+            ImGuiWindowFlags_NoSavedSettings |
+            ImGuiWindowFlags_NoBringToFrontOnFocus |
+            ImGuiWindowFlags_NoBackground);
+        draw_splash_background(splash, io.DisplaySize);
 
-        // --- Title block ---------------------------------------------------
-        ImGui::SetWindowFontScale(2.0f);
-        ImGui::TextUnformatted("Trouble Makers");
-        ImGui::SetWindowFontScale(1.0f);
-        ImGui::TextDisabled("N64 recompilation  ·  v%s", version_string.c_str());
-        ImGui::Dummy(ImVec2(0.0f, 8.0f));
+        const float screen_scale = std::clamp(
+            io.DisplaySize.y / 800.0f, 0.72f, 1.35f);
+        const float safe_x = 54.0f * screen_scale;
+        const float safe_y = 48.0f * screen_scale;
 
         ImGui::BeginDisabled(capture_active);
-        if (ImGui::BeginTabBar("##launcher_tabs")) {
-        if (ImGui::BeginTabItem("Play")) {
-        // --- ROM -----------------------------------------------------------
-        ImGui::SeparatorText("ROM");
-        if (rom_valid) {
-            ImGui::Text("Loaded: %s", rom_display.c_str());
-        } else {
-            ImGui::TextDisabled("No ROM selected. Provide your own legally obtained ROM.");
-        }
-        if (ImGui::Button("Select ROM...")) {
-            if (nfd_ok) {
-                // No filename filter, matching the reference dialog: dumps
-                // show up as .z64/.n64/.v64 and plenty of misnamed variants.
-                nfdnchar_t* picked = nullptr;
-                nfdresult_t res = NFD_OpenDialogN(&picked, nullptr, 0, nullptr);
-                if (res == NFD_OKAY) {
-                    std::filesystem::path p{picked};
-                    NFD_FreePathN(picked);
-                    recomp::RomValidationError err = recomp::select_rom(p, game_id);
-                    if (err == recomp::RomValidationError::Good) {
-                        rom_valid = true;
-                        rom_error.clear();
-                        rom_path = p;
-                        rom_display = path_to_utf8(p.filename());
-                    } else {
-                        rom_error = rom_error_message(err);
-                    }
-                } else if (res == NFD_ERROR) {
-                    rom_error = std::string("File dialog error: ") + NFD_GetError();
+        if (page == LauncherPage::Main) {
+            // Keep the identity lockup centered within the art half instead
+            // of treating the game title like oversized menu copy.
+            const ImVec2 title_anchor = draw_title_logo(
+                title_logo, safe_x, screen_scale, io.DisplaySize);
+            const char* subtitle = "N64 STATIC RECOMPILATION";
+            const ImVec2 subtitle_size = ImGui::CalcTextSize(subtitle);
+            ImGui::SetCursorPos(ImVec2(
+                title_anchor.x - subtitle_size.x * 0.5f,
+                title_anchor.y + 6.0f * screen_scale));
+            ImGui::TextColored(ImVec4(1.00f, 0.73f, 0.25f, 1.0f),
+                "%s", subtitle);
+            const std::string version_label = "Version " + version_string;
+            const ImVec2 version_size = ImGui::CalcTextSize(version_label.c_str());
+            ImGui::SetCursorPosX(title_anchor.x - version_size.x * 0.5f);
+            ImGui::TextDisabled("Version %s", version_string.c_str());
+
+            const float menu_width = std::min(
+                430.0f * screen_scale, io.DisplaySize.x * 0.43f);
+            const float menu_height = io.DisplaySize.y - safe_y * 2.0f;
+            ImGui::SetCursorPos(ImVec2(
+                io.DisplaySize.x - menu_width - safe_x, safe_y));
+            ImGui::BeginChild("##main_menu", ImVec2(menu_width, menu_height),
+                true, ImGuiWindowFlags_NoScrollbar);
+
+            ImGui::SetWindowFontScale(1.35f);
+            ImGui::TextUnformatted("MAIN MENU");
+            ImGui::SetWindowFontScale(1.0f);
+            if (rom_valid) {
+                ImGui::TextDisabled("ROM: %s", rom_display.c_str());
+            } else {
+                ImGui::PushStyleColor(ImGuiCol_Text,
+                    ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+                ImGui::TextWrapped("Provide your own legally obtained ROM.");
+                ImGui::PopStyleColor();
+            }
+            if (deck_desktop_controls) {
+                ImGui::PushStyleColor(ImGuiCol_Text,
+                    ImVec4(1.00f, 0.73f, 0.25f, 1.0f));
+                ImGui::TextWrapped(
+                    "STEAM DECK: Add this AppImage to Steam, then launch it "
+                    "from Gaming Mode. Desktop Mode uses keyboard/mouse "
+                    "button shortcuts.");
+                ImGui::PopStyleColor();
+            }
+            ImGui::Dummy(ImVec2(0.0f, 4.0f * screen_scale));
+
+            const float button_height = 53.0f * screen_scale;
+            const ImVec2 menu_button_size(-FLT_MIN, button_height);
+            const bool focus_primary_action = request_focus;
+            if (request_focus) {
+                ImGui::SetKeyboardFocusHere();
+                request_focus = false;
+            }
+            if (rom_valid) {
+                const bool start_game =
+                    ImGui::Button("START GAME", menu_button_size);
+                if (focus_primary_action) {
+                    ImGui::SetItemDefaultFocus();
+                }
+                if (start_game) {
+                    outcome = Outcome::StartGame;
+                    running = false;
+                }
+                if (ImGui::Button("CHANGE ROM", menu_button_size)) {
+                    select_rom();
                 }
             } else {
-                rom_error = "No native file dialog available. Pass the ROM path "
-                            "on the command line instead (see --help).";
-            }
-        }
-        if (!rom_error.empty()) {
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.45f, 0.45f, 1.0f));
-            ImGui::TextWrapped("%s", rom_error.c_str());
-            ImGui::PopStyleColor();
-        }
-        ImGui::Dummy(ImVec2(0.0f, 8.0f));
-
-        // --- Display -------------------------------------------------------
-        ImGui::SeparatorText("Display");
-        char fullscreen_label[64] = {};
-        if (settings.fullscreen && have_desktop) {
-            std::snprintf(fullscreen_label, sizeof fullscreen_label,
-                          "Desktop (%d x %d)", desktop.w, desktop.h);
-        }
-        const char* preview = settings.fullscreen && have_desktop
-            ? fullscreen_label
-            : (preset_index >= 0 ? kPresets[preset_index].label : custom_label);
-        ImGui::SetNextItemWidth(220.0f);
-        ImGui::BeginDisabled(settings.fullscreen);
-        if (ImGui::BeginCombo("Resolution", preview)) {
-            if (preset_index < 0 && ImGui::Selectable(custom_label, true)) {
-                // keep the custom size
-            }
-            for (int i = 0; i < (int)std::size(kPresets); i++) {
-                if (ImGui::Selectable(kPresets[i].label, i == preset_index)) {
-                    preset_index = i;
-                    settings.window_w = kPresets[i].w;
-                    settings.window_h = kPresets[i].h;
+                const bool select_rom_pressed =
+                    ImGui::Button("SELECT ROM", menu_button_size);
+                if (focus_primary_action) {
+                    ImGui::SetItemDefaultFocus();
+                }
+                if (select_rom_pressed) {
+                    select_rom();
                 }
             }
-            ImGui::EndCombo();
-        }
-        ImGui::EndDisabled();
-        ImGui::SameLine(0.0f, 24.0f);
-        ImGui::Checkbox("Fullscreen", &settings.fullscreen);
-        if (settings.fullscreen && have_desktop) {
+
+            if (ImGui::Button("GRAPHICS", menu_button_size)) {
+                page = LauncherPage::Graphics;
+                request_focus = true;
+            }
+            if (ImGui::Button("CONTROLS", menu_button_size)) {
+                page = LauncherPage::Controls;
+                request_focus = true;
+            }
+            if (ImGui::Button("SUPPORT", menu_button_size)) {
+                page = LauncherPage::Support;
+                request_focus = true;
+            }
+            if (ImGui::Button("EXIT", menu_button_size)) {
+                running = false;
+            }
+
+            if (!rom_error.empty()) {
+                ImGui::PushStyleColor(ImGuiCol_Text,
+                    ImVec4(1.0f, 0.42f, 0.42f, 1.0f));
+                ImGui::TextWrapped("%s", rom_error.c_str());
+                ImGui::PopStyleColor();
+            }
+
+            const float hint_y = ImGui::GetWindowHeight() -
+                ImGui::GetTextLineHeightWithSpacing() -
+                ImGui::GetStyle().WindowPadding.y;
+            ImGui::SetCursorPosY(std::max(ImGui::GetCursorPosY(), hint_y));
             ImGui::TextDisabled(
-                "Fullscreen uses the desktop mode; the saved size is restored in windowed mode.");
-        }
-        ImGui::Checkbox("Widescreen", &settings.widescreen);
-        ImGui::SameLine();
-        ImGui::TextDisabled("(?)");
-        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-            ImGui::SetTooltip("Expands the rendered field to the window aspect.\n"
-                              "Opt-in: can reveal off-stage areas in a 2D game.");
-        }
+                "A / Enter  Select    D-pad  Navigate    View  Fullscreen in game");
+            ImGui::EndChild();
+        } else {
+            const float panel_width = io.DisplaySize.x - safe_x * 2.0f;
+            const float panel_height = io.DisplaySize.y - safe_y * 2.0f;
+            ImGui::SetCursorPos(ImVec2(safe_x, safe_y));
+            ImGui::BeginChild("##settings_panel",
+                ImVec2(panel_width, panel_height), true);
 
-        const char* msaa_preview = settings.msaa == 2 ? "2x"
-                                 : settings.msaa == 4 ? "4x"
-                                                      : "Off";
-        ImGui::SetNextItemWidth(220.0f);
-        if (ImGui::BeginCombo("MSAA", msaa_preview)) {
-            constexpr int values[] = {0, 2, 4};
-            constexpr const char* labels[] = {"Off", "2x", "4x"};
-            for (int i = 0; i < static_cast<int>(std::size(values)); ++i) {
-                if (ImGui::Selectable(labels[i], settings.msaa == values[i])) {
-                    settings.msaa = values[i];
-                    if (settings.msaa > 0) {
-                        settings.ssaa = 1;
-                    }
-                }
+            const bool focus_back = request_focus;
+            if (focus_back) {
+                ImGui::SetKeyboardFocusHere();
+                request_focus = false;
             }
-            ImGui::EndCombo();
-        }
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Optionally smooths polygon edges, but the difference can be subtle\n"
-                              "at the game's already-high internal resolution. Selecting MSAA disables SSAA.");
-        }
-
-        char ssaa_preview[16] = "Off";
-        if (settings.ssaa > 1) {
-            std::snprintf(ssaa_preview, sizeof ssaa_preview, "%dx", settings.ssaa);
-        }
-        ImGui::SetNextItemWidth(220.0f);
-        if (ImGui::BeginCombo("SSAA", ssaa_preview)) {
-            constexpr int values[] = {1, 2};
-            constexpr const char* labels[] = {"Off", "2x"};
-            for (int i = 0; i < static_cast<int>(std::size(values)); ++i) {
-                if (ImGui::Selectable(labels[i], settings.ssaa == values[i])) {
-                    settings.ssaa = values[i];
-                    if (settings.ssaa > 1) {
-                        settings.msaa = 0;
-                    }
-                }
+            const bool back_pressed = ImGui::Button("<  BACK");
+            if (focus_back) {
+                ImGui::SetItemDefaultFocus();
             }
-            ImGui::EndCombo();
-        }
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Renders at 2x each dimension (4x as many pixels) and downsamples.\n"
-                              "This is substantially heavier than MSAA, especially above 60 fps.\n"
-                              "Selecting SSAA disables MSAA.");
-        }
-
-        ImGui::TextUnformatted("Quick presets");
-        if (ImGui::Button("Recommended (AA off)")) {
-            settings.fps = 0;
-            settings.msaa = 0;
-            settings.ssaa = 1;
-        }
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Native 60 fps with antialiasing disabled.");
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Higher FPS (AA off)")) {
-            settings.fps = 120;
-            settings.msaa = 0;
-            settings.ssaa = 1;
-        }
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Targets 120 fps with interpolation (clamped to the display). Prefer\n"
-                              "this visible motion upgrade over AA when there is spare performance.");
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Try 4x MSAA")) {
-            settings.fps = 0;
-            settings.msaa = 4;
-            settings.ssaa = 1;
-        }
-        if (ImGui::IsItemHovered()) {
-            ImGui::SetTooltip("Native 60 fps with 4x MSAA for an A/B image-quality check.");
-        }
-
-        // --- Advanced ------------------------------------------------------
-        ImGui::SeparatorText("Advanced");
-
-        // Frame interpolation (RT64). 0 = native 60; -1 = match display; a
-        // positive value is an interpolated target (game logic stays 60Hz).
-        char fps_preview[24];
-        if (settings.fps == 0)       std::snprintf(fps_preview, sizeof fps_preview, "Native (60)");
-        else if (settings.fps < 0)   std::snprintf(fps_preview, sizeof fps_preview, "Match display");
-        else                         std::snprintf(fps_preview, sizeof fps_preview, "%d fps", settings.fps);
-        ImGui::SetNextItemWidth(220.0f);
-        if (ImGui::BeginCombo("Frame rate", fps_preview)) {
-            constexpr int values[] = {0, 120, 144, 240, -1};
-            constexpr const char* labels[] = {
-                "Native (60)", "120 fps", "144 fps", "240 fps", "Match display"};
-            for (int i = 0; i < static_cast<int>(std::size(values)); ++i) {
-                if (ImGui::Selectable(labels[i], settings.fps == values[i])) {
-                    settings.fps = values[i];
-                }
+            if (back_pressed) {
+                page = LauncherPage::Main;
+                request_focus = true;
             }
-            ImGui::EndCombo();
-        }
-        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-            ImGui::SetTooltip("Interpolates smoother motion above the game's 60Hz using RT64.\n"
-                              "The game's logic still runs at 60Hz; the extra frames are\n"
-                              "synthesized. Capped to your monitor's refresh rate.");
-        }
-
-        ImGui::Checkbox("VSync", &settings.vsync);
-        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-            ImGui::SetTooltip(
-                "Waits for the display's vertical sync before presenting (default).\n"
-                "Turn off to skip that wait without touching driver settings.\n"
-                "Presentation can tear; frame pacing above 60 fps may be less even.");
-        }
-
-        const int output_width = settings.fullscreen && have_desktop
-            ? desktop.w : settings.window_w;
-        const int output_height = settings.fullscreen && have_desktop
-            ? desktop.h : settings.window_h;
-        int effective_rate = 60;
-        if (settings.fps < 0) {
-            effective_rate = have_desktop && desktop.refresh_rate > 0
-                ? desktop.refresh_rate : 60;
-        } else if (settings.fps > 0) {
-            effective_rate = settings.fps;
-            if (have_desktop && desktop.refresh_rate > 0) {
-                effective_rate = std::min(effective_rate, desktop.refresh_rate);
+            ImGui::SameLine();
+            ImGui::SetWindowFontScale(1.55f);
+            switch (page) {
+                case LauncherPage::Graphics:
+                    ImGui::TextUnformatted("GRAPHICS");
+                    break;
+                case LauncherPage::Controls:
+                    ImGui::TextUnformatted("CONTROLS");
+                    break;
+                case LauncherPage::Support:
+                    ImGui::TextUnformatted("SUPPORT");
+                    break;
+                default:
+                    break;
             }
-        }
-        const int output_scale = std::max((output_height + 239) / 240, 1);
-        const int internal_scale = output_scale * std::max(settings.ssaa, 1);
-        const double aspect_expansion = settings.widescreen && output_height > 0
-            ? std::max((static_cast<double>(output_width) / output_height) /
-                       (4.0 / 3.0), 1.0)
-            : 1.0;
-        const int estimated_internal_width = static_cast<int>(std::lround(
-            320.0 * internal_scale * aspect_expansion));
-        const int estimated_internal_height = 240 * internal_scale;
-        const double frame_multiplier = std::max(effective_rate / 60.0, 1.0);
-        const double aa_multiplier = settings.ssaa > 1
-            ? static_cast<double>(settings.ssaa * settings.ssaa)
-            : static_cast<double>(std::max(settings.msaa, 1));
-        const double estimated_sample_load = frame_multiplier * aa_multiplier;
+            ImGui::SetWindowFontScale(1.0f);
+            ImGui::Separator();
 
-        ImGui::TextDisabled(
-            "Estimated internal target: %d x %d, %d fps target, ~%.1fx raster samples",
-            estimated_internal_width, estimated_internal_height,
-            effective_rate, estimated_sample_load);
-        ImGui::TextDisabled(
-            "For a noticeable upgrade, increase frame rate before enabling AA.");
-        if (settings.ssaa > 1 && effective_rate > 60) {
-            ImGui::PushStyleColor(ImGuiCol_Text,
-                ImVec4(1.00f, 0.48f, 0.32f, 1.0f));
-            ImGui::TextWrapped(
-                "Very high cost: SSAA and frame interpolation multiply each other. "
-                "Use Recommended (AA off) or reduce the frame-rate target if pacing degrades.");
-            ImGui::PopStyleColor();
-        } else if (estimated_sample_load >= 8.0) {
-            ImGui::PushStyleColor(ImGuiCol_Text,
-                ImVec4(1.00f, 0.72f, 0.30f, 1.0f));
-            ImGui::TextWrapped(
-                "High renderer load. Test native 60 or reduce antialiasing if frame pacing degrades.");
-            ImGui::PopStyleColor();
-        } else if (settings.msaa > 0 || settings.ssaa > 1) {
+            const float footer_height =
+                ImGui::GetTextLineHeightWithSpacing() + 10.0f * screen_scale;
+            const ImGuiWindowFlags content_flags =
+                page == LauncherPage::Graphics
+                    ? ImGuiWindowFlags_AlwaysVerticalScrollbar
+                    : ImGuiWindowFlags_None;
+            ImGui::BeginChild("##page_content",
+                ImVec2(0.0f, -footer_height), false, content_flags);
+            if (page == LauncherPage::Graphics) {
+                draw_graphics_page(settings, have_desktop, desktop,
+                    preset_index, custom_label);
+            } else if (page == LauncherPage::Controls) {
+                draw_controls_tab(controls_device, capture_active,
+                    capture_device, capture_input, capture_slot,
+                    axis_neutral, controls_status);
+            } else if (page == LauncherPage::Support) {
+                draw_support_tab(support_status);
+            }
+            ImGui::EndChild();
+
             ImGui::TextDisabled(
-                "AA is optional and often subtle here. Compare it with AA off before keeping the cost.");
-        }
-
-        ImGui::Checkbox("Enable debug menu", &settings.debug_menu);
-        ImGui::SameLine();
-        ImGui::TextDisabled("(?)");
-        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
-            ImGui::SetTooltip(
-                "F1 or controller L+R+Start opens the in-game overlay.\n"
-                "Using a debug warp blocks all save writes until exit.");
-        }
-
-        ImGui::EndTabItem();
-        }
-
-        if (ImGui::BeginTabItem("Controls")) {
-            draw_controls_tab(controls_device, capture_active, capture_device,
-                              capture_input, capture_slot, axis_neutral,
-                              controls_status);
-            ImGui::EndTabItem();
-        }
-
-        if (ImGui::BeginTabItem("Support")) {
-            draw_support_tab(support_status);
-            ImGui::EndTabItem();
-        }
-        ImGui::EndTabBar();
-        }
-
-        // --- Start / Exit ---------------------------------------------------
-        // Pinned to the bottom of the window. Derive the size from the scaled
-        // font and padding: fixed pixel widths clip both labels when the Linux
-        // launcher scales itself for a high-DPI desktop.
-        const ImGuiStyle& style = ImGui::GetStyle();
-        const float extra_edge = 2.0f * static_cast<float>(ui_scale);
-        const float button_h = ImGui::GetFontSize() + style.FramePadding.y * 2.0f +
-                               extra_edge;
-        const auto button_width = [&](const char* label, float base_width) {
-            return std::max(base_width * static_cast<float>(ui_scale),
-                ImGui::CalcTextSize(label).x + style.FramePadding.x * 2.0f +
-                extra_edge);
-        };
-        const float start_button_w = button_width("Start Game", 160.0f);
-        const float exit_button_w = button_width("Exit", 100.0f);
-        const float pad_b = style.WindowPadding.y;
-        const float footer_y = ImGui::GetWindowHeight() - button_h - pad_b;
-        // Never move the cursor backwards over the Advanced controls. Apart
-        // from drawing the rows on top of each other, overlapping ImGui items
-        // leave the earlier checkbox's hit rectangle in charge, so clicking
-        // Start toggles the hidden checkbox instead. If an unusually small
-        // window still cannot fit everything, keeping the natural cursor
-        // position lets ImGui expose the footer through normal scrolling.
-        ImGui::SetCursorPosY(std::max(ImGui::GetCursorPosY(), footer_y));
-        ImGui::BeginDisabled(!rom_valid);
-        if (ImGui::Button("Start Game", ImVec2(start_button_w, button_h))) {
-            outcome = Outcome::StartGame;
-            running = false;
-        }
-        ImGui::EndDisabled();
-        ImGui::SameLine();
-        if (ImGui::Button("Exit", ImVec2(exit_button_w, button_h))) {
-            running = false;
+                "A / Enter  Select    B / Escape  Back    D-pad / Stick  Navigate");
+            ImGui::EndChild();
         }
         ImGui::EndDisabled();
 
         if (capture_active) {
             ImGui::SetNextWindowPos(
                 ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
-                ImGuiCond_Always,
-                                    ImVec2(0.5f, 0.5f));
-            ImGui::SetNextWindowBgAlpha(0.98f);
+                ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+            ImGui::SetNextWindowBgAlpha(0.99f);
             ImGui::Begin("Bind input", nullptr,
-                ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoCollapse |
-                ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
+                ImGuiWindowFlags_AlwaysAutoResize |
+                ImGuiWindowFlags_NoCollapse |
+                ImGuiWindowFlags_NoMove |
+                ImGuiWindowFlags_NoSavedSettings);
+            ImGui::SetWindowFontScale(1.25f);
             ImGui::Text("Binding %s (slot %zu)",
-                        mm_audio_input::input_name(capture_input), capture_slot + 1);
+                mm_audio_input::input_name(capture_input), capture_slot + 1);
+            ImGui::SetWindowFontScale(1.0f);
             if (capture_device == mm_audio_input::ControlDevice::Controller) {
                 ImGui::TextWrapped(
                     "Press a controller button, or move an axis from neutral.\n"
@@ -791,7 +1199,7 @@ Outcome run(std::u8string game_id, const std::string& version_string,
                 ImGui::TextWrapped("Press a key.");
             }
             ImGui::TextDisabled("Escape cancels");
-            if (ImGui::Button("Cancel")) {
+            if (ImGui::Button("CANCEL")) {
                 capture_active = false;
                 controls_status = "Binding cancelled.";
             }
@@ -819,6 +1227,12 @@ Outcome run(std::u8string game_id, const std::string& version_string,
 
     if (nfd_ok) {
         NFD_Quit();
+    }
+    if (splash.texture != nullptr) {
+        SDL_DestroyTexture(splash.texture);
+    }
+    if (title_logo.texture != nullptr) {
+        SDL_DestroyTexture(title_logo.texture);
     }
     ImGui_ImplSDLRenderer2_Shutdown();
     ImGui_ImplSDL2_Shutdown();

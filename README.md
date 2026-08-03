@@ -28,6 +28,9 @@ Everything runs locally from your own legally dumped ROM.
 Grab the latest build from the
 [Releases page](https://github.com/ThiagoLira/trouble-makers-pc-recomp/releases):
 
+- **Steam Deck** — `TroubleMakers-SteamDeck-x86_64.AppImage`. Add it to Steam
+  as a Non-Steam Game, then launch it from Gaming Mode. It starts with the
+  Deck-native fullscreen/controller defaults.
 - **Linux** — `TroubleMakers-x86_64.AppImage`. `chmod +x` it and run; needs a
   Vulkan-capable GPU and glibc ≥ 2.35 (Ubuntu 22.04+).
 - **Windows** — `TroubleMakers-Windows-X64.zip`. Extract and run
@@ -203,7 +206,8 @@ visual review for trails and texture correctness.
 
 Display options persist to `display.cfg` and input mappings to `controls.json`
 in the app config folder (CLI display options override the file). In game:
-**F11** toggles fullscreen, **hold Tab** fast-forwards 3x.
+**F11** or controller **Back/View** toggles fullscreen, and **hold Tab**
+fast-forwards 3x.
 
 The launcher's **Enable debug menu** option enables an in-game overlay. Press
 **F1** or controller **L+R+Start** to open it; use Up/Down and Enter (or
@@ -246,13 +250,26 @@ present and the game with it.
 
 ```sh
 ./.github/linux/appimage.sh          # after building troublemakers; NO_STRIP=1 on Arch-likes
+./.github/linux/appimage.sh --steam-deck
 ```
 
-Produces `TroubleMakers-x86_64.AppImage` (launcher included — no
+Produces `TroubleMakers-x86_64.AppImage` and, with `--steam-deck`,
+`TroubleMakers-SteamDeck-x86_64.AppImage` (launcher included — no
 CLI needed; the ROM is picked in the splash screen). Build it on the oldest
 distro you want to support: the AppImage requires the build machine's glibc
 or newer. Put a `portable.txt` next to the AppImage to keep config/saves in
 that folder instead of `~/.config/troublemakers-recomp`.
+
+For Steam Deck, copy the Deck AppImage to the device in Desktop Mode, make it
+executable, right-click it and choose **Add to Steam**, then launch it from
+Gaming Mode. This is the same flow used by Zelda64Recomp and other recomp
+projects. Do not play by opening it directly from the desktop: Steam's Desktop
+controller profile intentionally maps face buttons to keyboard/mouse actions
+(including the on-screen keyboard). The Deck build selects 1280x800,
+fullscreen, expanded aspect ratio, display-rate interpolation (90 FPS on the
+OLED Deck and 60 FPS on the LCD Deck), antialiasing off, VSync, and the shared
+recomp controller layout on first run. **Back/View** always
+toggles fullscreen so the window can be recovered without a keyboard.
 
 On Linux, GeForce RTX 50-series/Blackwell GPUs using NVIDIA 610-series and
 newer drivers automatically use RT64's ubershader path to avoid a

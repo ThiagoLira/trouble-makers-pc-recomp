@@ -4,6 +4,7 @@
 #
 # Run from the repository root after building:
 #   ./.github/linux/appimage.sh [path/to/troublemakers]
+#   ./.github/linux/appimage.sh --steam-deck [path/to/troublemakers]
 #
 # Notes:
 #  - linuxdeploy is downloaded on first use. No GTK plugin: the file picker
@@ -18,8 +19,21 @@
 #    bundled strip predates .relr.dyn sections and dies on modern system libs.
 set -euo pipefail
 
+STEAM_DECK_BUILD=0
+if [ "${1:-}" = "--steam-deck" ]; then
+  STEAM_DECK_BUILD=1
+  shift
+fi
+if [ "$#" -gt 1 ]; then
+  echo "usage: $0 [--steam-deck] [path/to/troublemakers]" >&2
+  exit 1
+fi
+
 BINARY="${1:-build/src/game/troublemakers}"
-APP_NAME="TroubleMakers"
+PACKAGE_NAME="TroubleMakers"
+if [ "$STEAM_DECK_BUILD" -eq 1 ]; then
+  PACKAGE_NAME="TroubleMakers-SteamDeck"
+fi
 
 if [ ! -x "$BINARY" ]; then
   echo "error: $BINARY not found or not executable (build troublemakers first)" >&2
@@ -40,8 +54,13 @@ chmod a+x linuxdeploy*
 rm -rf AppDir
 mkdir -p AppDir/usr/bin
 cp "$BINARY" AppDir/usr/bin/
-cp icons/512.png "AppDir/$APP_NAME.png"
-cp ".github/linux/$APP_NAME.desktop" AppDir/
+cp -R assets AppDir/usr/bin/
+cp icons/512.png "AppDir/$PACKAGE_NAME.png"
+cp ".github/linux/$PACKAGE_NAME.desktop" AppDir/
+if [ "$STEAM_DECK_BUILD" -eq 1 ]; then
+  mkdir -p AppDir/usr/share/troublemakers
+  : > AppDir/usr/share/troublemakers/steam-deck
+fi
 
 # Extract linuxdeploy (running the AppImage directly requires FUSE; extracting
 # works everywhere, including containers/CI).
@@ -49,8 +68,8 @@ cp ".github/linux/$APP_NAME.desktop" AppDir/
 rm -rf deploy && mv squashfs-root deploy
 
 ./deploy/AppRun --appdir=AppDir/ \
-  -d "AppDir/$APP_NAME.desktop" \
-  -i "AppDir/$APP_NAME.png" \
+  -d "AppDir/$PACKAGE_NAME.desktop" \
+  -i "AppDir/$PACKAGE_NAME.png" \
   -e AppDir/usr/bin/troublemakers
 
 # linuxdeploy may generate AppRun as a symlink to the game executable when no
@@ -70,9 +89,18 @@ fi
 
 # The bundled classic SDL2 mishandles HiDPI on the native Wayland backend
 # (tiny UI, mouse clicks land offset from what's drawn). Default to x11 so the
-# compositor does the scaling via XWayland â consistent and correct. Power
+# compositor does the scaling via XWayland — consistent and correct. Power
 # users can still force native Wayland with SDL_VIDEODRIVER=wayland.
 export SDL_VIDEODRIVER="${SDL_VIDEODRIVER:-x11}"
+
+# The dedicated Deck artifact follows RecompFrontend's SteamDeck=1 detection
+# path even when built/tested away from Valve hardware. It must still be added
+# to Steam and launched from Gaming Mode so Steam selects its gamepad profile
+# instead of the Desktop keyboard/mouse profile.
+if [ -f "$this_dir/usr/share/troublemakers/steam-deck" ]; then
+    export SteamDeck=1
+    set -- --steam-deck "$@"
+fi
 
 cd "$this_dir"/usr/bin/
 if [ -f "$portable_dir/portable.txt" ]; then
@@ -87,6 +115,6 @@ chmod a+x AppDir/AppRun
 # at runtime anyway); strip them if linuxdeploy pulled any in.
 rm -rf AppDir/usr/lib/libwayland*
 
-OUTPUT="$APP_NAME-$ARCH.AppImage" ./deploy/usr/bin/linuxdeploy-plugin-appimage --appdir=AppDir/
+OUTPUT="$PACKAGE_NAME-$ARCH.AppImage" ./deploy/usr/bin/linuxdeploy-plugin-appimage --appdir=AppDir/
 echo "AppImage built:"
-ls -la "$APP_NAME-$ARCH.AppImage"
+ls -la "$PACKAGE_NAME-$ARCH.AppImage"

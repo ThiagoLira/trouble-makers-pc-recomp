@@ -46,6 +46,7 @@
 #include "app_dirs.h"
 #include "debug_menu.h"
 #include "session_log.h"
+#include "steam_deck.h"
 #include "telemetry.h"
 #include "mm_rsp.hpp"
 #include "mm_audio_input.hpp"
@@ -127,6 +128,24 @@ static bool g_vsync = true;
 // immediately on the next run. Empty until a ROM validates.
 static std::string g_rom_path;
 static SDL_Window* g_sdl_window = nullptr;
+static bool g_steam_deck_mode = false;
+
+// RecompFrontend's platform-specific default is fullscreen on Steam Deck.
+// Use the panel's native size, match its refresh rate (90 Hz on OLED, 60 Hz on
+// LCD), and leave antialiasing disabled: at 1280x800 the extra interpolated
+// frames are a better use of the Deck's GPU budget. A user's existing
+// display.cfg still overrides these first-run values.
+static void apply_steam_deck_defaults() {
+    g_window_w = 1280;
+    g_window_h = 800;
+    g_fullscreen = true;
+    g_widescreen = true;
+    g_ssaa = 1;
+    g_msaa = 0;
+    g_fps = -1;
+    g_vsync = true;
+    g_debug_menu = false;
+}
 
 static void log_display_config(const char* state) {
     const std::uint32_t target_rate = g_fps < 0 ? 0u
@@ -391,6 +410,28 @@ void update_gfx(ultramodern::gfx_callbacks_t::gfx_data_t) {
     // the window cleanly shuts the runtime down. Hotkeys:
     //   F11        toggle fullscreen (persisted)
     //   Tab (hold) fast-forward 3x (game speed via the VI/timer multiplier)
+    const auto toggle_fullscreen = [] {
+        if (g_sdl_window == nullptr) return;
+
+        g_fullscreen = !g_fullscreen;
+#if !defined(_WIN32)
+        if (SDL_SetWindowFullscreen(g_sdl_window,
+                g_fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0) != 0) {
+            std::fprintf(stderr, "[display] fullscreen toggle failed: %s\n",
+                         SDL_GetError());
+        }
+#endif
+        // Widescreen presentation is transient: stage select and cinematics
+        // force Original even when the saved preference is Expand. Change
+        // only the window mode so those gates remain intact.
+        auto cfg = ultramodern::renderer::get_graphics_config();
+        cfg.wm_option = g_fullscreen
+            ? ultramodern::renderer::WindowMode::Fullscreen
+            : ultramodern::renderer::WindowMode::Windowed;
+        ultramodern::renderer::set_graphics_config(cfg);
+        save_display_config();
+    };
+
     SDL_Event ev;
     while (SDL_PollEvent(&ev)) {
         if (mm::debug_menu::handle_event(ev)) {
@@ -399,25 +440,15 @@ void update_gfx(ultramodern::gfx_callbacks_t::gfx_data_t) {
             ultramodern::set_speed_multiplier(1);
         } else if (ev.type == SDL_QUIT) {
             ultramodern::quit();
+        } else if (ev.type == SDL_CONTROLLERBUTTONDOWN &&
+                   ev.cbutton.button == SDL_CONTROLLER_BUTTON_BACK) {
+            // RecompFrontend reserves Back/View for its in-game menu. This
+            // project does not have that menu yet, so use the same otherwise
+            // unbound button as a controller-only way out of fullscreen.
+            toggle_fullscreen();
         } else if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0) {
             if (ev.key.keysym.scancode == SDL_SCANCODE_F11 && g_sdl_window != nullptr) {
-                g_fullscreen = !g_fullscreen;
-#if !defined(_WIN32)
-                SDL_SetWindowFullscreen(g_sdl_window,
-                    g_fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
-#endif
-                // Widescreen presentation is transient: stage select and
-                // cinematics force Original even when the saved preference is
-                // Expand. Rebuilding the complete display config here would
-                // restore that saved preference and leave those screens in an
-                // invalid expanded state until gameplay began. Change only the
-                // window mode and preserve the renderer's current aspect gate.
-                auto cfg = ultramodern::renderer::get_graphics_config();
-                cfg.wm_option = g_fullscreen
-                    ? ultramodern::renderer::WindowMode::Fullscreen
-                    : ultramodern::renderer::WindowMode::Windowed;
-                ultramodern::renderer::set_graphics_config(cfg);
-                save_display_config();
+                toggle_fullscreen();
             } else if (ev.key.keysym.scancode == SDL_SCANCODE_TAB) {
                 ultramodern::set_speed_multiplier(3);
             }
@@ -444,7 +475,7 @@ create_render_context(uint8_t* /*rdram*/, ultramodern::renderer::WindowHandle /*
 static bool g_rom_selected = false;
 static const std::u8string kGameId = u8"troublemakers.n64.us.1";
 #ifndef MM_PROJECT_VERSION
-#define MM_PROJECT_VERSION "0.6.0"
+#define MM_PROJECT_VERSION "0.7.0"
 #endif
 static constexpr const char* kProjectVersion = MM_PROJECT_VERSION;
 
@@ -515,6 +546,8 @@ static void print_usage(const char* argv0) {
     std::fprintf(stderr,
         "usage: %s [rom.z64] [options]\n"
         "  run without a ROM argument to open the launcher (ROM select + options)\n"
+        "  --steam-deck       use Steam Deck defaults (normally set by the\n"
+        "                     Steam Deck AppImage automatically)\n"
         "  --fullscreen        borderless fullscreen (also toggles via RT64)\n"
         "  --window WxH        window size (default 1280x960); the scene renders\n"
         "                      at window-integer-scale, so bigger = sharper\n"
@@ -533,7 +566,7 @@ static void print_usage(const char* argv0) {
         "  --no-debug-menu     disable the in-game debug overlay\n"
         "settings persist in the app config folder (display.cfg, controls.json)\n"
         "diagnostic logs are written under its logs/ directory\n"
-        "in game: F11 = fullscreen, hold Tab = 3x fast-forward\n"
+        "in game: F11 or controller Back/View = fullscreen; hold Tab = 3x fast-forward\n"
         "debug: F1 or controller L+R+Start = overlay\n",
         argv0);
 }
@@ -551,6 +584,17 @@ int main(int argc, char** argv) {
         environment_value("SDL_AUDIODRIVER");
     const std::string startup_mistaken_sdl_audio_driver =
         environment_value("SDL_AUDIO_DRIVER");
+
+    // The dedicated AppImage exports SteamDeck=1. Keep an explicit CLI switch
+    // as well so extracted builds and developers can exercise the same path.
+    bool force_steam_deck = false;
+    for (int i = 1; i < argc; ++i) {
+        if (std::string_view{argv[i]} == "--steam-deck") {
+            force_steam_deck = true;
+            break;
+        }
+    }
+    g_steam_deck_mode = force_steam_deck || mm::platform::is_steam_deck();
 
     const fs::path config_dir = mm::get_app_folder_path();
     std::error_code config_ec;
@@ -583,10 +627,11 @@ int main(int argc, char** argv) {
 
     const std::string sdl_video_driver = environment_value("SDL_VIDEODRIVER");
     mm::telemetry::event("environment",
-        "SDL_AUDIODRIVER=%s SDL_AUDIO_DRIVER=%s SDL_VIDEODRIVER=%s",
+        "SDL_AUDIODRIVER=%s SDL_AUDIO_DRIVER=%s SDL_VIDEODRIVER=%s steam-deck=%s",
         startup_sdl_audio_driver.c_str(),
         startup_mistaken_sdl_audio_driver.c_str(),
-        sdl_video_driver.c_str());
+        sdl_video_driver.c_str(),
+        g_steam_deck_mode ? "yes" : "no");
     if (startup_mistaken_sdl_audio_driver != "<unset>" &&
         startup_sdl_audio_driver == "<unset>") {
         mm::telemetry::event("environment",
@@ -602,11 +647,16 @@ int main(int argc, char** argv) {
 
     // Display options: config file first, CLI overrides, then persist the
     // resolved values so flags "stick" for the next flagless run.
+    if (g_steam_deck_mode) {
+        apply_steam_deck_defaults();
+    }
     load_display_config();
     const char* rom_arg = nullptr;
     for (int i = 1; i < argc; i++) {
         std::string_view arg = argv[i];
-        if (arg == "--fullscreen") {
+        if (arg == "--steam-deck") {
+            // Already handled before platform defaults were selected.
+        } else if (arg == "--fullscreen") {
             g_fullscreen = true;
         } else if (arg == "--widescreen") {
             g_widescreen = true;

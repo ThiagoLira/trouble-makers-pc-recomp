@@ -20,6 +20,7 @@ add_executable(troublemakers
     main.cpp
     app_dirs.cpp
     session_log.cpp
+    steam_deck.cpp
     register_overlays.cpp
     os_stubs.cpp
     debug_menu.cpp
@@ -75,14 +76,26 @@ if(TARGET mm_graphics)
     # the SDL_Renderer backend TU is missing from rt64, so compile it here.
     target_sources(troublemakers PRIVATE
         launcher.cpp
+        ${CMAKE_SOURCE_DIR}/assets/launcher/splash-background.jpg
+        ${CMAKE_SOURCE_DIR}/assets/launcher/title-logo.png
         ${CMAKE_SOURCE_DIR}/lib/rt64/src/contrib/imgui/backends/imgui_impl_sdlrenderer2.cpp
     )
+    set_source_files_properties(
+        ${CMAKE_SOURCE_DIR}/assets/launcher/splash-background.jpg
+        ${CMAKE_SOURCE_DIR}/assets/launcher/title-logo.png
+        PROPERTIES HEADER_FILE_ONLY TRUE)
     target_include_directories(troublemakers PRIVATE
+        ${CMAKE_SOURCE_DIR}/lib/rt64/src/contrib
         ${CMAKE_SOURCE_DIR}/lib/rt64/src/contrib/imgui
         ${CMAKE_SOURCE_DIR}/lib/rt64/src/imgui                                      # imgui_impl_sdl2_custom.h
         ${CMAKE_SOURCE_DIR}/lib/rt64/src/contrib/nativefiledialog-extended/src/include
     )
     target_link_libraries(troublemakers PRIVATE nfd)
+    add_custom_command(TARGET troublemakers POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_SOURCE_DIR}/assets/launcher"
+            "$<TARGET_FILE_DIR:troublemakers>/assets/launcher"
+        COMMENT "Copying launcher artwork")
 endif()
 
 # Enforce no unresolved symbols (matches the probe; surfaces any new gap).
