@@ -1,0 +1,83 @@
+{
+  "client_id": "troublemakers-generic-launcher-art",
+  "prompt": {
+    "1": {
+      "class_type": "UNETLoader",
+      "inputs": {
+        "unet_name": "z_image_turbo_bf16.safetensors",
+        "weight_dtype": "default"
+      }
+    },
+    "2": {
+      "class_type": "CLIPLoader",
+      "inputs": {
+        "clip_name": "qwen_3_4b.safetensors",
+        "type": "lumina2",
+        "device": "default"
+      }
+    },
+    "3": {
+      "class_type": "CLIPTextEncode",
+      "inputs": {
+        "clip": ["2", 0],
+        "text": "NO TEXT OR LOGO OF ANY KIND. Minimal wide 16:10 launcher background for a playful cartridge-era science-fiction action game. A single large iconic Clancer-inspired face is the visual motif: two simple oval eyes and one cheerful curved smile cleanly embossed into the front of a chunky beveled cobalt-blue mechanical cube. Place the hero cube in the lower-left quadrant, partially cropped by the bottom edge, with a few smaller faceless cubes floating behind it. Surround it with two sweeping golden-orange energy arcs and sparse four-point sparkles. Abstract geometric alien machinery and soft layered shapes recede into a deep burgundy, violet, and midnight-blue background. Graphic screen-printed poster feeling combined with polished cel-shaded 3D shapes, bold clean silhouettes, subtle grain, restrained detail, playful 1990s console-box atmosphere. COMPOSITION IS CRITICAL: leave the upper-left quarter calm and mostly empty for the launcher's real title; keep the smiling cube below that title area; keep the entire rightmost 42 percent extremely dark, quiet, low contrast, and almost empty for a bright menu; no focal objects or bright sparks on the right. Full bleed. Background art only. Absolutely no people, characters, bodies, words, letters, typography, title, logo, watermark, UI, menu, buttons, border, signature, scary face, duplicated face, photorealism, clutter, or busy right side."
+      }
+    },
+    "4": {
+      "class_type": "ConditioningZeroOut",
+      "inputs": {
+        "conditioning": ["3", 0]
+      }
+    },
+    "5": {
+      "class_type": "EmptySD3LatentImage",
+      "inputs": {
+        "width": 1536,
+        "height": 960,
+        "batch_size": 1
+      }
+    },
+    "6": {
+      "class_type": "ModelSamplingAuraFlow",
+      "inputs": {
+        "model": ["1", 0],
+        "shift": 3.0
+      }
+    },
+    "7": {
+      "class_type": "KSampler",
+      "inputs": {
+        "model": ["6", 0],
+        "positive": ["3", 0],
+        "negative": ["4", 0],
+        "latent_image": ["5", 0],
+        "seed": 482913760,
+        "steps": 8,
+        "cfg": 1.0,
+        "sampler_name": "res_multistep",
+        "scheduler": "simple",
+        "denoise": 1.0
+      }
+    },
+    "8": {
+      "class_type": "VAELoader",
+      "inputs": {
+        "vae_name": "ae.safetensors"
+      }
+    },
+    "9": {
+      "class_type": "VAEDecode",
+      "inputs": {
+        "samples": ["7", 0],
+        "vae": ["8", 0]
+      }
+    },
+    "10": {
+      "class_type": "SaveImage",
+      "inputs": {
+        "images": ["9", 0],
+        "filename_prefix": "troublemakers_generic"
+      }
+    }
+  }
+}

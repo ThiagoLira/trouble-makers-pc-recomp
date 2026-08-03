@@ -102,13 +102,20 @@ jobs:
           cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
           cmake --build build --target troublemakers mm_controls_tests mm_session_log_tests mm_telemetry_tests -j "$(nproc)"
           ctest --test-dir build --output-on-failure -R 'mm_(controls|session_log|telemetry)'
-      - name: Build AppImage
+      - name: Build Linux AppImage
         run: ./.github/linux/appimage.sh
-      - name: Upload AppImage
+      - name: Build Steam Deck AppImage
+        run: ./.github/linux/appimage.sh --steam-deck
+      - name: Upload Linux AppImage
         uses: actions/upload-artifact@v4
         with:
           name: TroubleMakers-AppImage-X64
-          path: TroubleMakers-*.AppImage
+          path: TroubleMakers-x86_64.AppImage
+      - name: Upload Steam Deck AppImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: TroubleMakers-SteamDeck-AppImage-X64
+          path: TroubleMakers-SteamDeck-x86_64.AppImage
 
   build-windows:
     runs-on: windows-latest
@@ -169,6 +176,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           Copy-Item build/src/game/troublemakers.exe dist/
           Copy-Item build/src/game/*.dll dist/
+          Copy-Item assets dist/assets -Recurse
           Compress-Archive -Path dist/* -DestinationPath TroubleMakers-Windows-X64.zip -Force
       - name: Upload Windows build
         uses: actions/upload-artifact@v4
@@ -209,4 +217,5 @@ jobs:
             "${notes_args[@]}" \
             --prerelease \
             artifacts/TroubleMakers-AppImage-X64/TroubleMakers-x86_64.AppImage \
+            artifacts/TroubleMakers-SteamDeck-AppImage-X64/TroubleMakers-SteamDeck-x86_64.AppImage \
             artifacts/TroubleMakers-Windows-X64/TroubleMakers-Windows-X64.zip

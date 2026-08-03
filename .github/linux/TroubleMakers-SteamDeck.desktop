@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=Trouble Makers (Steam Deck)
+Type=Application
+Terminal=false
+Icon=TroubleMakers-SteamDeck
+Exec=troublemakers --steam-deck
+GenericName=Mischief Makers (N64) recompilation for Steam Deck
+Categories=Game;
