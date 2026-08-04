@@ -2,9 +2,10 @@
 
 `splash-background.jpg` is the active launcher artwork. It was generated
 locally with ComfyUI 0.15.0 and the Z-Image Turbo model, then resized to the
-launcher's 2560 x 1600 production canvas. It uses a simple smiling
-Clancer-style block motif; its reproducible workflow is in
-`comfy-generic-workflow.json`.
+launcher's 2560 x 1600 production canvas. It uses the game's signature Clancer
+block face — two oval eyes and a single open oval "oh" mouth (not a smile) —
+on a beveled cobalt cube, with the right ~55% kept dark for the menu. Its
+reproducible workflow (prompt + seed) is in `comfy-generic-workflow.json`.
 
 `title-logo.png` uses the Luckiest Guy display font from Google Fonts, layered
 into original Trouble Makers lettering for this launcher. The bundled font is
