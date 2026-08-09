@@ -34,6 +34,11 @@ namespace mm::graphics {
     // immediate mode where the surface supports it).
     void set_vsync_enabled(bool enabled);
 
+    // Temporarily present only native game frames while leaving the user's
+    // saved refresh-rate selection untouched. Intended for a narrowly scoped
+    // scene compatibility fallback; changing the value is thread-safe.
+    void set_interpolation_suppressed(bool suppressed);
+
     // Registers create_render_context (and the API-name helper) with the
     // ultramodern renderer layer. Idempotent; call once before recomp::start().
     void register_callbacks();

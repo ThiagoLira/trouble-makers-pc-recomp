@@ -40,6 +40,7 @@ namespace {
 
 std::atomic<OverlayDrawCallback> g_overlay_draw_callback{nullptr};
 std::atomic<bool> g_vsync_enabled{true};
+std::atomic<bool> g_interpolation_suppressed{false};
 
 int ring_queue_depth(int thread_cursor, int write_cursor, int queue_size) {
     return (write_cursor - thread_cursor + queue_size) % queue_size;
@@ -286,7 +287,14 @@ public:
 
         app_ = std::make_unique<RT64::Application>(core, app_config);
 
-        apply_config(*app_, ultramodern::renderer::get_graphics_config());
+        auto initial_config = ultramodern::renderer::get_graphics_config();
+        interpolation_suppressed_ =
+            g_interpolation_suppressed.load(std::memory_order_acquire);
+        if (interpolation_suppressed_) {
+            initial_config.rr_option =
+                ultramodern::renderer::RefreshRate::Original;
+        }
+        apply_config(*app_, initial_config);
 
         // The game stashes RDP-copied palette scratch in the framebuffer rows
         // a CRT never showed: one row above VI_ORIGIN plus the first scanned
@@ -391,9 +399,10 @@ public:
 
         // [MM] Opt-in widescreen wing clear. With --widescreen (AspectRatio::Expand)
         // the HD color target is wider than the game's 4:3 framebuffer; the side
-        // "wings" are never written by the game's 2D draws and otherwise freeze
-        // stale framebuffer content. MM_CLEAR_WINGS=1 makes RT64 clear those wing
-        // rects at the start of each framebuffer's render pass. See
+        // "wings" and suppressed native border gutters are not guaranteed to be
+        // written by the game's 2D draws and otherwise freeze stale framebuffer
+        // content. MM_CLEAR_WINGS=1 makes RT64 clear those rects at the start of
+        // each framebuffer's render pass. See
         // docs/README.md, "Rectangles versus projected geometry".
         bool clear_wings = ultramodern::renderer::get_graphics_config().ar_option
                            == ultramodern::renderer::AspectRatio::Expand; // default ON in widescreen
@@ -414,16 +423,29 @@ public:
 
     bool update_config(const ultramodern::renderer::GraphicsConfig& old_config,
                        const ultramodern::renderer::GraphicsConfig& new_config) override {
-        if (old_config == new_config) {
+        const bool interpolation_suppressed =
+            g_interpolation_suppressed.load(std::memory_order_acquire);
+        if (old_config == new_config &&
+            interpolation_suppressed == interpolation_suppressed_) {
             return false;
         }
         if (old_config.wm_option != new_config.wm_option) {
             app_->setFullScreen(new_config.wm_option == ultramodern::renderer::WindowMode::Fullscreen);
         }
-        apply_config(*app_, new_config);
+        auto effective_config = new_config;
+        if (interpolation_suppressed) {
+            effective_config.rr_option =
+                ultramodern::renderer::RefreshRate::Original;
+        }
+        apply_config(*app_, effective_config);
         app_->updateUserConfig(true);
         if (old_config.msaa_option != new_config.msaa_option) {
             app_->updateMultisampling();
+        }
+        if (interpolation_suppressed != interpolation_suppressed_) {
+            mm::telemetry::event("gfx", "interpolation=%s",
+                interpolation_suppressed ? "scene-native" : "user-setting");
+            interpolation_suppressed_ = interpolation_suppressed;
         }
         return true;
     }
@@ -654,12 +676,20 @@ private:
     } regs_;
 
     std::unique_ptr<RT64::Application> app_;
+    bool interpolation_suppressed_ = false;
 };
 
 } // namespace
 
 void set_vsync_enabled(bool enabled) {
     g_vsync_enabled.store(enabled, std::memory_order_release);
+}
+
+void set_interpolation_suppressed(bool suppressed) {
+    if (g_interpolation_suppressed.exchange(
+            suppressed, std::memory_order_acq_rel) != suppressed) {
+        ultramodern::trigger_config_action();
+    }
 }
 
 void set_overlay_draw_callback(OverlayDrawCallback callback) {

@@ -194,14 +194,14 @@ for ((second = 0; second < capture_delay; ++second)); do
         continue
     fi
     if [[ $widescreen == 1 ]] && ! is_fixed_4x3_stage "$stage"; then
-        current_mode=$(grep '\[widescreen\] mode=' "$log" 2>/dev/null | tail -1)
+        current_mode=$(grep -a '\[widescreen\] mode=' "$log" 2>/dev/null | tail -1)
         if [[ $current_mode == *mode=gameplay-expand ]]; then
             if [[ $capture_early == 1 ]]; then
                 ready=1
                 break
             fi
             sleep 1
-            current_mode=$(grep '\[widescreen\] mode=' "$log" 2>/dev/null | tail -1)
+            current_mode=$(grep -a '\[widescreen\] mode=' "$log" 2>/dev/null | tail -1)
             if [[ $current_mode == *mode=gameplay-expand ]]; then
                 ready=1
                 break

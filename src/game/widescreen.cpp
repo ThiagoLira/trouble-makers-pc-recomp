@@ -9,6 +9,9 @@
 
 #include "recomp.h"
 #include "ultramodern/config.hpp"
+#ifdef MM_HAS_GRAPHICS
+#include "mm_graphics.h"
+#endif
 
 namespace {
 
@@ -611,6 +614,14 @@ extern "C" void mm_widescreen_sync_mode(uint8_t* rdram) {
         0, static_cast<gpr>(static_cast<int32_t>(kCurrentScene))));
     const int game_state = MEM_HU(
         0, static_cast<gpr>(static_cast<int32_t>(kGameState)));
+#ifdef MM_HAS_GRAPHICS
+    // Missile Surf's exhaust and explosion effects are short-lived sprite
+    // draws that RT64's temporal interpolator retains as separated copies.
+    // Native presentation is clean. Suppress interpolation only while scene
+    // 35 is actually running, preserving the user's setting everywhere else.
+    mm::graphics::set_interpolation_suppressed(
+        scene == 35 && game_state == 6);
+#endif
     const bool paused = game_state == 6 && MEM_HU(
         0, static_cast<gpr>(static_cast<int32_t>(kGamePaused))) != 0;
     report_gameplay_ready(rdram, scene);

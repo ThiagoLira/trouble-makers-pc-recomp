@@ -100,7 +100,7 @@ diff --git a/src/render/rt64_framebuffer_renderer.cpp b/src/render/rt64_framebuf
 index c4cf1bf..eef8d11 100644
 --- a/src/render/rt64_framebuffer_renderer.cpp
 +++ b/src/render/rt64_framebuffer_renderer.cpp
-@@ -1274,6 +1274,57 @@ namespace RT64 {
+@@ -1274,6 +1274,75 @@ namespace RT64 {
  
          bool depthState = false;
          worker->commandList->setFramebuffer(targetDrawCall.fbStorage->colorDepthWrite.get());
@@ -137,8 +137,26 @@ index c4cf1bf..eef8d11 100644
 +                const int32_t fullH = static_cast<int32_t>(colorTarget->height);
 +                const int32_t innerW = static_cast<int32_t>(std::lround(framebuffer.contentWidth));
 +                if (innerW > 0 && innerW + 2 <= fullW) {
-+                    const int32_t leftEdge = (fullW - innerW) / 2;
-+                    const int32_t rightEdge = leftEdge + innerW;
++                    const int32_t nativeLeft = (fullW - innerW) / 2;
++                    int32_t leftEdge = nativeLeft;
++                    int32_t rightEdge = nativeLeft + innerW;
++                    // Widescreen gameplay suppresses the game's vertical
++                    // border rectangles at x=0..14 and x=302..320. Include
++                    // those former-border gutters in the pre-draw clear or a
++                    // moving actor can leave persistent pixels there when a
++                    // stage's background does not repaint them. Limit the
++                    // inset to the known 320-wide game framebuffer; all other
++                    // render targets retain the ordinary outer-wing clear.
++                    if (framebuffer.nativeWidth == 320) {
++                        constexpr float safeLeft = 14.0f;
++                        constexpr float safeRight = 302.0f;
++                        const float nativeScale =
++                            framebuffer.contentWidth / framebuffer.nativeWidth;
++                        leftEdge += static_cast<int32_t>(std::lround(
++                            safeLeft * nativeScale));
++                        rightEdge = nativeLeft + static_cast<int32_t>(std::lround(
++                            safeRight * nativeScale));
++                    }
 +                    const RenderColor wingColor(0.0f, 0.0f, 0.0f, 1.0f);
 +                    if (leftEdge > 0) {
 +                        const RenderRect leftWing(0, 0, leftEdge, fullH);
@@ -158,17 +176,18 @@ index c4cf1bf..eef8d11 100644
          for (const auto &pair : targetDrawCall.sceneIndices) {
  #       if RT_ENABLED
              if (pair.second) {
-@@ -1359,6 +1410,9 @@ namespace RT64 {
+@@ -1359,6 +1428,10 @@ namespace RT64 {
          }
  
          Framebuffer &framebuffer = framebufferVector[framebufferCount - 1];
 +        framebuffer.clearWings = p.clearWings;
 +        framebuffer.submissionFrame = p.submissionFrame;
++        framebuffer.nativeWidth = p.fbWidth;
 +        framebuffer.contentWidth = float(p.fbWidth) * p.resolutionScale.y;
          void *paramBufferBytes = framebuffer.paramsBuffer->map();
          memcpy(paramBufferBytes, &fbParams, sizeof(interop::FramebufferParams));
          framebuffer.paramsBuffer->unmap();
-@@ -1688,7 +1742,28 @@ namespace RT64 {
+@@ -1688,7 +1761,28 @@ namespace RT64 {
                              break;
                          }
  
@@ -198,7 +217,7 @@ index c4cf1bf..eef8d11 100644
                          
                          if (triangles.vertexTestZ) {
                              if ((proj.type == Projection::Type::Perspective) || (proj.type == Projection::Type::Orthographic)) {
-@@ -1926,4 +2001,4 @@ namespace RT64 {
+@@ -1926,4 +2020,4 @@ namespace RT64 {
          unsigned int im3dVertexCount;
      };
  };
@@ -206,15 +225,16 @@ index c4cf1bf..eef8d11 100644
 \ No newline at end of file
 +*/
 diff --git a/src/render/rt64_framebuffer_renderer.h b/src/render/rt64_framebuffer_renderer.h
-index f593ab0..cd2e8b9 100644
+index f593ab0..350f195 100644
 --- a/src/render/rt64_framebuffer_renderer.h
 +++ b/src/render/rt64_framebuffer_renderer.h
-@@ -117,9 +117,17 @@ namespace RT64 {
+@@ -117,9 +117,18 @@ namespace RT64 {
              std::unique_ptr<FramebufferRendererDescriptorFramebufferSet> descDummyFbSet;
              std::set<RenderTarget *> transitionRenderTargetSet;
              RenderTargetDrawCall renderTargetDrawCall;
 +            bool clearWings = false; // [MM] per-framebuffer wing-clear request
 +            uint64_t submissionFrame = 0; // [MM] for once-per-frame wing clear
++            uint32_t nativeWidth = 0; // [MM] original framebuffer width
 +            float contentWidth = 0.0f; // [MM] game content width in target pixels
          };
  
@@ -227,7 +247,7 @@ index f593ab0..cd2e8b9 100644
          std::vector<BufferUploader *> pendingUploaders;
          uint32_t framebufferCount = 0;
  
-@@ -144,6 +152,7 @@ namespace RT64 {
+@@ -144,6 +153,7 @@ namespace RT64 {
              float deltaTimeMs;
              bool ubershadersOnly;
              bool fixRectLR;

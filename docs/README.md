@@ -363,7 +363,12 @@ The game's border helpers make the authored safe area still narrower:
 `Gfx_DrawLetterbox` (`0x800218FC`) and `Gfx_DrawBorderRect` (`0x80021690`)
 normally leave a visible region around `x=14..306`, `y=20..212`. Suppressing
 only the vertical border strips during expanded gameplay removes seams while
-retaining top/bottom letterbox animation.
+retaining top/bottom letterbox animation. The renderer's pre-draw wing clear
+therefore reaches inward through the exact suppressed `x=0..14` and
+`x=302..320` gutters as well as the true expanded wings. Otherwise a moving
+actor can leave persistent pixels inside a former border when a stage does not
+repaint that gutter. The inset applies only to the known 320-wide game target;
+other framebuffer widths keep the ordinary outer-wing clear.
 
 ### 6.3 Display-list capacity
 
@@ -702,6 +707,19 @@ iteration at entry 64. Original-mode scenes still draw all 66.
 Several scenes express a fixed-viewport color-grade rectangle as a top actor
 of type `0x2700` with flag bit 3. It is omitted only in expanded gameplay;
 cinematics and original mode retain it.
+
+### 12.4 Missile Surf presentation
+
+Missile Surf (scene 35) rapidly retires and recreates exhaust and explosion
+sprites. RT64's temporal interpolation can preserve earlier draws beside their
+replacements, producing separated flame copies that flicker in and out. Direct
+180 Hz presentation captures reproduce the fault, while native 60 Hz captures
+contain exactly one exhaust sprite per game frame.
+
+While scene 35 is actively running, the renderer therefore presents its native
+game frames without synthesis. The user's saved frame-rate choice is not
+modified and is restored immediately on leaving the scene. No other scene—
+including Vertigo—takes this compatibility path.
 
 ## 13. Rotating-room material contract
 
