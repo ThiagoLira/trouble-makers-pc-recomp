@@ -48,13 +48,19 @@ int main() {
 
     const InputBinding custom{BindingType::ControllerButton,
                               SDL_CONTROLLER_BUTTON_BACK};
+    result |= check(!binding_is_assigned(ControlDevice::Controller, custom),
+                    "Back is not assigned by default");
     result |= check(set_binding(ControlDevice::Controller, N64Input::A, 1, custom),
                     "set second binding");
+    result |= check(binding_is_assigned(ControlDevice::Controller, custom),
+                    "custom Back binding is assigned");
     result |= check(save_control_config(), "save custom binding");
     reset_all_bindings(ControlDevice::Controller);
     result |= check(load_control_config(root), "reload custom binding");
     result |= check(get_binding(ControlDevice::Controller, N64Input::A, 1) == custom,
                     "custom binding round-trip");
+    result |= check(binding_is_assigned(ControlDevice::Controller, custom),
+                    "reloaded Back binding is assigned");
 
     SDL_Event event{};
     event.type = SDL_CONTROLLERAXISMOTION;

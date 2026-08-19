@@ -325,6 +325,16 @@ bool set_binding(ControlDevice device, N64Input input, size_t slot,
     return true;
 }
 
+bool binding_is_assigned(ControlDevice device, InputBinding binding) {
+    if (binding.type == BindingType::None || !valid_binding(device, binding)) {
+        return false;
+    }
+    const ControlMap& map = map_for(device);
+    return std::any_of(map.begin(), map.end(), [&](const BindingSlots& slots) {
+        return std::find(slots.begin(), slots.end(), binding) != slots.end();
+    });
+}
+
 void clear_bindings(ControlDevice device, N64Input input) {
     const size_t index = index_of(input);
     if (index < kN64InputCount) map_for(device)[index] = {};

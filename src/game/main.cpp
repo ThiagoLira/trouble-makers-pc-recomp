@@ -441,10 +441,14 @@ void update_gfx(ultramodern::gfx_callbacks_t::gfx_data_t) {
         } else if (ev.type == SDL_QUIT) {
             ultramodern::quit();
         } else if (ev.type == SDL_CONTROLLERBUTTONDOWN &&
-                   ev.cbutton.button == SDL_CONTROLLER_BUTTON_BACK) {
+                   ev.cbutton.button == SDL_CONTROLLER_BUTTON_BACK &&
+                   !mm_audio_input::binding_is_assigned(
+                       mm_audio_input::ControlDevice::Controller,
+                       {mm_audio_input::BindingType::ControllerButton,
+                        SDL_CONTROLLER_BUTTON_BACK})) {
             // RecompFrontend reserves Back/View for its in-game menu. This
-            // project does not have that menu yet, so use the same otherwise
-            // unbound button as a controller-only way out of fullscreen.
+            // project does not have that menu yet, so use the same button as a
+            // fullscreen shortcut only while it is unbound from gameplay.
             toggle_fullscreen();
         } else if (ev.type == SDL_KEYDOWN && ev.key.repeat == 0) {
             if (ev.key.keysym.scancode == SDL_SCANCODE_F11 && g_sdl_window != nullptr) {
@@ -475,7 +479,7 @@ create_render_context(uint8_t* /*rdram*/, ultramodern::renderer::WindowHandle /*
 static bool g_rom_selected = false;
 static const std::u8string kGameId = u8"troublemakers.n64.us.1";
 #ifndef MM_PROJECT_VERSION
-#define MM_PROJECT_VERSION "0.8.0"
+#define MM_PROJECT_VERSION "0.8.1"
 #endif
 static constexpr const char* kProjectVersion = MM_PROJECT_VERSION;
 

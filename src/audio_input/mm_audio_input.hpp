@@ -75,6 +75,9 @@ constexpr size_t kN64InputCount = static_cast<size_t>(N64Input::Count);
 const char* input_name(N64Input input);
 InputBinding get_binding(ControlDevice device, N64Input input, size_t slot);
 bool set_binding(ControlDevice device, N64Input input, size_t slot, InputBinding binding);
+// Whether an exact, non-empty binding is currently assigned to any N64 input.
+// Host shortcuts use this to yield buttons that the player chose for gameplay.
+bool binding_is_assigned(ControlDevice device, InputBinding binding);
 void clear_bindings(ControlDevice device, N64Input input);
 void reset_bindings(ControlDevice device, N64Input input);
 void reset_all_bindings(ControlDevice device);

@@ -268,8 +268,9 @@ controller profile intentionally maps face buttons to keyboard/mouse actions
 (including the on-screen keyboard). The Deck build selects 1280x800,
 fullscreen, expanded aspect ratio, display-rate interpolation (90 FPS on the
 OLED Deck and 60 FPS on the LCD Deck), antialiasing off, VSync, and the shared
-recomp controller layout on first run. **Back/View** always
-toggles fullscreen so the window can be recovered without a keyboard.
+recomp controller layout on first run. **Back/View** toggles fullscreen when
+it is not assigned to a gameplay control, so gameplay bindings take priority
+while the window remains recoverable without a keyboard on default layouts.
 
 On Linux, GeForce RTX 50-series/Blackwell GPUs using NVIDIA 610-series and
 newer drivers automatically use RT64's ubershader path to avoid a
