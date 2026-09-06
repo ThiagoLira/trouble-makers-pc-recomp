@@ -359,6 +359,13 @@ certain horizontal scroll phases. Keeping the per-frame wing clear and fixing
 the edge rule is essential: disabling the clear hides the seam by preserving
 old pixels but restores stale sprite/scenery trails.
 
+The local renderer checkout can silently retain the old rule after a project
+update because `lib/rt64` is ignored by the parent repository. This reproduced
+the seam in the first level at 144 Hz despite patch `0006` already being
+checked in. Configuration and every RT64 build now run a reverse dry-run check
+of the required patches through `cmake/VerifyRT64Patches.cmake`, rejecting
+missing or partially applied fixes without modifying the dependency source.
+
 The game's border helpers make the authored safe area still narrower:
 `Gfx_DrawLetterbox` (`0x800218FC`) and `Gfx_DrawBorderRect` (`0x80021690`)
 normally leave a visible region around `x=14..306`, `y=20..212`. Suppressing
@@ -718,8 +725,35 @@ contain exactly one exhaust sprite per game frame.
 
 While scene 35 is actively running, the renderer therefore presents its native
 game frames without synthesis. The user's saved frame-rate choice is not
-modified and is restored immediately on leaving the scene. No other scene—
-including Vertigo—takes this compatibility path.
+modified and is restored immediately on leaving the scene. Vertigo retains
+the user's interpolation setting.
+
+### 12.5 Stage-selection presentation
+
+The same native-frame override covers game state 12 (`GameState_Transition`)
+and state 14 (`GameState_Records`). State 12 owns the stage-clear return,
+map opening/unlock animation, selection, and departure. Suppressing the whole
+controller covers the first opening frames, before the menu becomes interactive.
+The renderer restores the user's selected rate on leaving these states.
+
+### 12.6 Snow-stage panorama
+
+Chilly Dog! (3-6, scene 31) and Snowstorm Maze (3-7, scene 36) share a
+mountain backdrop whose offscreen map cells contain repeating filler. The
+textures are resident, so the normal bank-bound check cannot reject them.
+
+During expanded gameplay, only their static backdrop (`D_80180D90`) uses
+the original ten tile columns. Each emitted Fast3D texture rectangle is
+clipped to the authored horizontal safe area, x=14..302, then stretched to
+the window width. Texture S and dS/dX change with the rectangle so tile
+contents stretch continuously. The renderer publishes the window aspect
+through an atomic value, allowing resizing and different widescreen ratios.
+Terrain, actors, and Snowstorm Maze's snow layer retain normal proportions
+and the wider field of view. Original 4:3 and cinematic rendering use the
+existing path.
+
+`mm_presentation` tests native-frame state selection, panorama coverage at
+16:10/16:9/21:9, tile joins, clipping, UV steps, and unchanged vertical values.
 
 ## 13. Rotating-room material contract
 

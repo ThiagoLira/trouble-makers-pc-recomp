@@ -39,6 +39,10 @@ namespace mm::graphics {
     // scene compatibility fallback; changing the value is thread-safe.
     void set_interpolation_suppressed(bool suppressed);
 
+    // Window width relative to the original 4:3 canvas, published by the
+    // renderer for game-thread background layout. Never less than one.
+    float get_widescreen_scale();
+
     // Registers create_render_context (and the API-name helper) with the
     // ultramodern renderer layer. Idempotent; call once before recomp::start().
     void register_callbacks();

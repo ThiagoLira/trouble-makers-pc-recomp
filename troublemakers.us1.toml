@@ -289,4 +289,6 @@ hook = [
     { func = "func_800451E4", text = '{ extern void mm_test_trace_streaming(uint8_t*, recomp_context*); mm_test_trace_streaming(rdram, ctx); }' },
     { func = "func_80082820", text = '{ extern void mm_ws_band_repack(uint8_t*, recomp_context*); mm_ws_band_repack(rdram, ctx); }' },
     { func = "func_80082380", text = '{ extern void mm_ws_static_repack(uint8_t*, recomp_context*); mm_ws_static_repack(rdram, ctx); }' },
+    # Snow-stage panorama: transform each completed rectangle and its UV step.
+    { func = "func_80082380", before_vram = 0x800826D8, text = '{ extern void mm_ws_stretch_backdrop_rect(uint8_t*, recomp_context*); mm_ws_stretch_backdrop_rect(rdram, ctx); }' },
 ]

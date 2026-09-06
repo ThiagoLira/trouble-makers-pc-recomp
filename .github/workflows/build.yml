@@ -100,8 +100,8 @@ jobs:
       - name: Build troublemakers
         run: |
           cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-          cmake --build build --target troublemakers mm_controls_tests mm_session_log_tests mm_telemetry_tests -j "$(nproc)"
-          ctest --test-dir build --output-on-failure -R 'mm_(controls|session_log|telemetry)'
+          cmake --build build --target troublemakers mm_controls_tests mm_session_log_tests mm_telemetry_tests mm_presentation_tests -j "$(nproc)"
+          ctest --test-dir build --output-on-failure -R 'mm_(controls|session_log|telemetry|presentation)'
       - name: Build Linux AppImage
         run: ./.github/linux/appimage.sh
       - name: Build Steam Deck AppImage
@@ -169,8 +169,8 @@ jobs:
         run: |
           cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release `
             -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl
-          cmake --build build --target troublemakers mm_controls_tests mm_session_log_tests mm_telemetry_tests -j
-          ctest --test-dir build --output-on-failure -R "mm_(controls|session_log|telemetry)"
+          cmake --build build --target troublemakers mm_controls_tests mm_session_log_tests mm_telemetry_tests mm_presentation_tests -j
+          ctest --test-dir build --output-on-failure -R "mm_(controls|session_log|telemetry|presentation)"
       - name: Package
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null

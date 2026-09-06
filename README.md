@@ -133,6 +133,11 @@ tools/N64Recomp/build/N64Recomp troublemakers.us1.toml
 tools/N64Recomp/build/RSPRecomp aspMain.us1.rsp.toml
 ```
 
+Configuration and incremental builds verify that the RT64 patches are present.
+`lib/rt64` is an ignored checkout: pulling this project does not update its
+applied patches. If verification reports a missing or modified patch, reconcile
+that patch with the local RT64 source before rebuilding.
+
 ### Build and play
 
 ```sh

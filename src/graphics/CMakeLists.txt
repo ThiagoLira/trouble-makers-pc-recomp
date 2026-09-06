@@ -28,6 +28,19 @@ if(NOT EXISTS ${CMAKE_SOURCE_DIR}/lib/rt64/CMakeLists.txt)
     return()
 endif()
 
+# Fail early for stale local dependency checkouts, and repeat the read-only
+# check on incremental builds so editing/reverting a patch cannot bypass it.
+set(MM_RT64_SOURCE_DIR "${CMAKE_SOURCE_DIR}/lib/rt64")
+set(MM_RT64_PATCH_DIR "${CMAKE_SOURCE_DIR}/patches/rt64")
+include("${CMAKE_SOURCE_DIR}/cmake/VerifyRT64Patches.cmake")
+add_custom_target(mm_verify_rt64_patches
+    COMMAND "${CMAKE_COMMAND}"
+        "-DMM_RT64_SOURCE_DIR=${MM_RT64_SOURCE_DIR}"
+        "-DMM_RT64_PATCH_DIR=${MM_RT64_PATCH_DIR}"
+        -P "${CMAKE_SOURCE_DIR}/cmake/VerifyRT64Patches.cmake"
+    COMMENT "Verifying required RT64 fixes"
+    VERBATIM)
+
 # SDL2 is required by RT64 (and by ultramodern). The root CMakeLists already
 # finds it before adding any runtime component, but be explicit so this
 # component is self-describing when built standalone.
@@ -63,6 +76,7 @@ if(UNIX AND NOT APPLE)
 endif()
 
 add_subdirectory(${CMAKE_SOURCE_DIR}/lib/rt64 ${CMAKE_BINARY_DIR}/rt64)
+add_dependencies(rt64 mm_verify_rt64_patches)
 
 # RT64's own include_directories() are directory-scoped (not PUBLIC on the
 # target), so they do not propagate to consumers. Its public headers

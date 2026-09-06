@@ -41,6 +41,7 @@ namespace {
 std::atomic<OverlayDrawCallback> g_overlay_draw_callback{nullptr};
 std::atomic<bool> g_vsync_enabled{true};
 std::atomic<bool> g_interpolation_suppressed{false};
+std::atomic<float> g_widescreen_scale{1.0f};
 
 int ring_queue_depth(int thread_cursor, int write_cursor, int queue_size) {
     return (write_cursor - thread_cursor + queue_size) % queue_size;
@@ -506,6 +507,27 @@ public:
             inspector->endFrame();
         }
         app_->updateScreen();
+        {
+            const std::scoped_lock lock(
+                app_->sharedQueueResources->configurationMutex);
+            auto width = app_->sharedQueueResources->swapChainWidth;
+            auto height = app_->sharedQueueResources->swapChainHeight;
+            // Wayland can leave the shared swap-chain dimensions at zero
+            // until a resize; use the same client-size fallback as telemetry.
+            if ((width == 0 || height == 0) && app_->appWindow->sdlWindow) {
+                int client_width = 0;
+                int client_height = 0;
+                SDL_GetWindowSize(app_->appWindow->sdlWindow,
+                                  &client_width, &client_height);
+                width = static_cast<uint32_t>(std::max(client_width, 0));
+                height = static_cast<uint32_t>(std::max(client_height, 0));
+            }
+            if (width > 0 && height > 0) {
+                g_widescreen_scale.store(std::max(
+                    (3.0f * width) / (4.0f * height), 1.0f),
+                    std::memory_order_relaxed);
+            }
+        }
         const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::steady_clock::now() - screen_started).count();
         mm::telemetry::record_screen_update(
@@ -690,6 +712,10 @@ void set_interpolation_suppressed(bool suppressed) {
             suppressed, std::memory_order_acq_rel) != suppressed) {
         ultramodern::trigger_config_action();
     }
+}
+
+float get_widescreen_scale() {
+    return g_widescreen_scale.load(std::memory_order_relaxed);
 }
 
 void set_overlay_draw_callback(OverlayDrawCallback callback) {

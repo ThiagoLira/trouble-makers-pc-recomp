@@ -8,6 +8,7 @@
 #include <iterator>
 
 #include "recomp.h"
+#include "presentation.h"
 #include "ultramodern/config.hpp"
 #ifdef MM_HAS_GRAPHICS
 #include "mm_graphics.h"
@@ -161,6 +162,7 @@ bool valid_rdram_ptr(uint32_t ptr) {
 }
 
 int g_gameplay_wide_active = 0;
+float g_backdrop_stretch = 0.0f;
 
 // These gameplay scenes transform or composite an authored 320x240 canvas
 // rather than drawing a scrollable world. Expanding the projection reveals
@@ -617,10 +619,12 @@ extern "C" void mm_widescreen_sync_mode(uint8_t* rdram) {
 #ifdef MM_HAS_GRAPHICS
     // Missile Surf's exhaust and explosion effects are short-lived sprite
     // draws that RT64's temporal interpolator retains as separated copies.
-    // Native presentation is clean. Suppress interpolation only while scene
-    // 35 is actually running, preserving the user's setting everywhere else.
+    // Native presentation is clean. The stage-selection/return controller
+    // (state 12) also replaces its actors during the post-clear animation;
+    // cover its entire transition, plus the adjoining records menu (14).
+    // Preserve the user's setting and restore it on returning to gameplay.
     mm::graphics::set_interpolation_suppressed(
-        scene == 35 && game_state == 6);
+        mm::presentation::suppress_interpolation(scene, game_state));
 #endif
     const bool paused = game_state == 6 && MEM_HU(
         0, static_cast<gpr>(static_cast<int32_t>(kGamePaused))) != 0;
@@ -1778,6 +1782,7 @@ extern "C" void mm_ws_band_repack(uint8_t* rdram, recomp_context* ctx) {
 // the exact fill formulas from the game's func_8001107C; anything else gets
 // zeroed wings and a byte-identical center.
 extern "C" void mm_ws_static_repack(uint8_t* rdram, recomp_context* ctx) {
+    g_backdrop_stretch = 0.0f;
     ctx->r4 = static_cast<gpr>(static_cast<int32_t>(
         remap_arena(static_cast<uint32_t>(ctx->r4))));
     const uint32_t buffer = static_cast<uint32_t>(ctx->r7);
@@ -1787,6 +1792,32 @@ extern "C" void mm_ws_static_repack(uint8_t* rdram, recomp_context* ctx) {
         MEM_HU(0, rdram_gpr(kCurrentScene)));
     const bool captured = g_layer_fill_state.valid &&
         g_layer_fill_state.scene == scene;
+
+#ifdef MM_HAS_GRAPHICS
+    // These snow stages author a mountain panorama only inside the original
+    // safe area (x=14..302). Offscreen map cells are repeating filler, even
+    // though their textures are resident. Stretch this distant layer alone;
+    // the midground, snow, actors and collision retain the expanded view.
+    const float window_scale = mm::graphics::get_widescreen_scale();
+    if (buffer == kBandBuffer && (scene == 31 || scene == 36) &&
+        g_gameplay_wide_active && window_scale > 1.0f) {
+        g_backdrop_stretch = window_scale * 320.0f / 288.0f;
+        repack_grid(wc, [](int, int) -> int32_t { return 0; }, false);
+        if (env_enabled("MM_TEST_AUTO_ADVANCE")) {
+            static int previous_scene = -1;
+            static float previous_scale = 0.0f;
+            if (scene != previous_scene || g_backdrop_stretch != previous_scale) {
+                std::fprintf(stderr,
+                    "[widescreen-backdrop] scene=%d stretch=%.4f source=14..302\n",
+                    scene, g_backdrop_stretch);
+                previous_scene = scene;
+                previous_scale = g_backdrop_stretch;
+            }
+        }
+        ctx->r7 = wc.dst;
+        return;
+    }
+#endif
 
     if (buffer == kEnvBuffer) {
         wc.dst = rdram_gpr(kEnvScratch);
@@ -1999,6 +2030,24 @@ extern "C" void mm_ws_static_repack(uint8_t* rdram, recomp_context* ctx) {
         buffer == kBandBuffer ? "static" : "unknown",
         wc.dst);
     ctx->r7 = wc.dst;
+}
+
+// Called after the static renderer emits all three Fast3D texture-rectangle
+// words. Clip the panorama to its authored safe area before stretching, and
+// adjust texture S and dS/dX together with geometry to keep each tile intact.
+extern "C" void mm_ws_stretch_backdrop_rect(uint8_t* rdram, recomp_context* ctx) {
+    if (g_backdrop_stretch == 0.0f) {
+        return;
+    }
+    const gpr rect = ctx->r6;
+    uint32_t words[6];
+    for (int i = 0; i < 6; ++i) {
+        words[i] = MEM_W(i * 4, rect);
+    }
+    mm::presentation::stretch_backdrop_rectangle(words, g_backdrop_stretch);
+    for (int i = 0; i < 6; ++i) {
+        MEM_W(i * 4, rect) = words[i];
+    }
 }
 
 // func_80026428 decompresses a replacement map bank over 0x80380000 for

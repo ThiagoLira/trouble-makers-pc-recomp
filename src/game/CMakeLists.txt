@@ -129,6 +129,10 @@ if(WIN32)
 endif()
 
 if(BUILD_TESTING)
+    add_executable(mm_presentation_tests tests/presentation_test.cpp)
+    target_include_directories(mm_presentation_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    add_test(NAME mm_presentation COMMAND mm_presentation_tests)
+
     find_package(Threads REQUIRED)
     add_executable(mm_session_log_tests
         tests/session_log_test.cpp
