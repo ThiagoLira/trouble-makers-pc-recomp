@@ -4,11 +4,13 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cfloat>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -80,7 +82,103 @@ enum class LauncherPage {
     Graphics,
     Controls,
     Support,
+    BrowseRom,
 };
+
+// Built-in ROM browser, used when the native file dialog is unavailable.
+// On Linux nfd talks to xdg-desktop-portal over D-Bus; console-style distros
+// (Batocera, bare kiosk sessions) run no portal, so NFD_OpenDialog fails
+// outright and the launcher would otherwise have no way to pick a ROM.
+struct BrowserEntry {
+    std::filesystem::path path;
+    std::string label;
+    bool is_dir;
+};
+
+bool has_rom_extension(const std::filesystem::path& p) {
+    std::string ext = path_to_utf8(p.extension());
+    std::transform(ext.begin(), ext.end(), ext.begin(),
+        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return ext == ".z64" || ext == ".n64" || ext == ".v64";
+}
+
+std::string lowercase(std::string s) {
+    std::transform(s.begin(), s.end(), s.begin(),
+        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return s;
+}
+
+// Lists `dir` (directories first, then files, each case-insensitively
+// sorted). Dotfiles are skipped; non-ROM files only when show_all is set.
+// Returns false if the directory cannot be read.
+bool list_browser_dir(const std::filesystem::path& dir, bool show_all,
+                      std::vector<BrowserEntry>& out) {
+    out.clear();
+    std::error_code ec;
+    std::filesystem::directory_iterator it(dir,
+        std::filesystem::directory_options::skip_permission_denied, ec);
+    if (ec) {
+        return false;
+    }
+    std::vector<BrowserEntry> dirs;
+    std::vector<BrowserEntry> files;
+    for (const std::filesystem::directory_iterator end; it != end; it.increment(ec)) {
+        if (ec) {
+            break;
+        }
+        const std::filesystem::path& p = it->path();
+        std::string name = path_to_utf8(p.filename());
+        if (name.empty() || name[0] == '.') {
+            continue;
+        }
+        std::error_code type_ec;
+        if (it->is_directory(type_ec)) {
+            dirs.push_back({ p, name + "/", true });
+        } else if (show_all || has_rom_extension(p)) {
+            files.push_back({ p, std::move(name), false });
+        }
+    }
+    auto by_name = [](const BrowserEntry& a, const BrowserEntry& b) {
+        return lowercase(a.label) < lowercase(b.label);
+    };
+    std::sort(dirs.begin(), dirs.end(), by_name);
+    std::sort(files.begin(), files.end(), by_name);
+    out = std::move(dirs);
+    out.insert(out.end(), std::make_move_iterator(files.begin()),
+               std::make_move_iterator(files.end()));
+    return true;
+}
+
+// Where the built-in browser opens: the last ROM's folder, else the folder
+// the user launched from. AppRun cd's into the AppImage mount, so prefer the
+// runtime's $OWD (original working dir) and the AppImage's own folder over
+// the process cwd.
+std::filesystem::path initial_browser_dir(const std::filesystem::path& rom_path) {
+    std::error_code ec;
+    auto usable = [&](const std::filesystem::path& p) {
+        return !p.empty() && std::filesystem::is_directory(p, ec);
+    };
+    if (!rom_path.empty() && usable(rom_path.parent_path())) {
+        return rom_path.parent_path();
+    }
+    if (const char* owd = std::getenv("OWD"); owd != nullptr && usable(owd)) {
+        return owd;
+    }
+    if (const char* appimage = std::getenv("APPIMAGE"); appimage != nullptr) {
+        const std::filesystem::path dir = std::filesystem::path(appimage).parent_path();
+        if (usable(dir)) {
+            return dir;
+        }
+    }
+    std::filesystem::path cwd = std::filesystem::current_path(ec);
+    if (!ec && usable(cwd)) {
+        return cwd;
+    }
+    if (const char* home = std::getenv("HOME"); home != nullptr && usable(home)) {
+        return home;
+    }
+    return std::filesystem::path("/");
+}
 
 struct SplashTexture {
     SDL_Texture* texture = nullptr;
@@ -827,6 +925,11 @@ Outcome run(std::u8string game_id, const std::string& version_string,
         renderer, kTitleLogoAsset, "title logo");
 
     const bool nfd_ok = (NFD_Init() == NFD_OKAY);
+    if (!nfd_ok) {
+        std::fprintf(stderr,
+            "[launcher] native file dialog unavailable (%s); using built-in browser\n",
+            NFD_GetError());
+    }
 
     // Revalidate a remembered ROM so a returning user just hits Start (the
     // reference does the same via recomp::is_rom_valid at launcher creation).
@@ -872,6 +975,16 @@ Outcome run(std::u8string game_id, const std::string& version_string,
     LauncherPage page = LauncherPage::Main;
     bool request_focus = true;
     bool back_requested = false;
+
+    // Built-in browser state. MM_BUILTIN_FILE_BROWSER forces it (testing, or
+    // a portal that exists but misbehaves).
+    bool use_builtin_browser =
+        !nfd_ok || std::getenv("MM_BUILTIN_FILE_BROWSER") != nullptr;
+    std::filesystem::path browser_dir;
+    std::vector<BrowserEntry> browser_entries;
+    std::string browser_error;
+    bool browser_show_all = false;
+    bool browser_focus_first = false;
 
     Outcome outcome = Outcome::Quit;
     bool running = true;
@@ -936,10 +1049,38 @@ Outcome run(std::u8string game_id, const std::string& version_string,
             }
         }
     };
+    // Validates and adopts a picked file. Returns true on success.
+    auto accept_rom = [&](const std::filesystem::path& picked_path) {
+        const recomp::RomValidationError error =
+            recomp::select_rom(picked_path, game_id);
+        if (error == recomp::RomValidationError::Good) {
+            rom_valid = true;
+            rom_error.clear();
+            rom_path = picked_path;
+            rom_display = path_to_utf8(picked_path.filename());
+            return true;
+        }
+        rom_error = rom_error_message(error);
+        return false;
+    };
+    auto browse_to = [&](const std::filesystem::path& dir) {
+        if (list_browser_dir(dir, browser_show_all, browser_entries)) {
+            browser_dir = dir;
+            browser_error.clear();
+        } else {
+            browser_error = "Cannot open " + path_to_utf8(dir);
+        }
+        browser_focus_first = true;
+    };
+    auto open_builtin_browser = [&]() {
+        rom_error.clear();
+        browser_error.clear();
+        browse_to(initial_browser_dir(rom_path));
+        page = LauncherPage::BrowseRom;
+    };
     auto select_rom = [&]() {
-        if (!nfd_ok) {
-            rom_error = "No native file dialog is available. Pass the ROM path "
-                        "on the command line instead (see --help).";
+        if (use_builtin_browser) {
+            open_builtin_browser();
             return;
         }
 
@@ -950,18 +1091,15 @@ Outcome run(std::u8string game_id, const std::string& version_string,
         if (result == NFD_OKAY) {
             const std::filesystem::path picked_path{picked};
             NFD_FreePathN(picked);
-            const recomp::RomValidationError error =
-                recomp::select_rom(picked_path, game_id);
-            if (error == recomp::RomValidationError::Good) {
-                rom_valid = true;
-                rom_error.clear();
-                rom_path = picked_path;
-                rom_display = path_to_utf8(picked_path.filename());
-            } else {
-                rom_error = rom_error_message(error);
-            }
+            accept_rom(picked_path);
         } else if (result == NFD_ERROR) {
-            rom_error = std::string("File dialog error: ") + NFD_GetError();
+            // Typically no xdg-desktop-portal (Batocera and other
+            // console-style sessions). Fall back for the rest of the session.
+            std::fprintf(stderr,
+                "[launcher] file dialog error: %s; using built-in browser\n",
+                NFD_GetError());
+            use_builtin_browser = true;
+            open_builtin_browser();
         }
     };
     while (running) {
@@ -1145,6 +1283,9 @@ Outcome run(std::u8string game_id, const std::string& version_string,
                 case LauncherPage::Support:
                     ImGui::TextUnformatted("SUPPORT");
                     break;
+                case LauncherPage::BrowseRom:
+                    ImGui::TextUnformatted("SELECT ROM");
+                    break;
                 default:
                     break;
             }
@@ -1168,6 +1309,58 @@ Outcome run(std::u8string game_id, const std::string& version_string,
                     axis_neutral, controls_status);
             } else if (page == LauncherPage::Support) {
                 draw_support_tab(support_status);
+            } else if (page == LauncherPage::BrowseRom) {
+                ImGui::TextWrapped("%s", path_to_utf8(browser_dir).c_str());
+                if (ImGui::Checkbox("Show all files", &browser_show_all)) {
+                    browse_to(browser_dir);
+                    browser_focus_first = false;
+                }
+                const auto show_error = [](const std::string& message) {
+                    if (!message.empty()) {
+                        ImGui::PushStyleColor(ImGuiCol_Text,
+                            ImVec4(1.0f, 0.42f, 0.42f, 1.0f));
+                        ImGui::TextWrapped("%s", message.c_str());
+                        ImGui::PopStyleColor();
+                    }
+                };
+                show_error(browser_error);
+                show_error(rom_error);
+                ImGui::Separator();
+
+                // Defer navigation until after the loop: browse_to()
+                // replaces browser_entries.
+                std::filesystem::path navigate_to;
+                const std::filesystem::path parent = browser_dir.parent_path();
+                const bool has_parent = !parent.empty() && parent != browser_dir;
+                if (browser_focus_first) {
+                    ImGui::SetKeyboardFocusHere();
+                    browser_focus_first = false;
+                }
+                if (has_parent && ImGui::Selectable("../")) {
+                    navigate_to = parent;
+                }
+                for (size_t i = 0; i < browser_entries.size(); ++i) {
+                    const BrowserEntry& entry = browser_entries[i];
+                    ImGui::PushID(static_cast<int>(i));
+                    if (ImGui::Selectable(entry.label.c_str())) {
+                        if (entry.is_dir) {
+                            navigate_to = entry.path;
+                        } else if (accept_rom(entry.path)) {
+                            page = LauncherPage::Main;
+                            request_focus = true;
+                        }
+                    }
+                    ImGui::PopID();
+                }
+                if (browser_entries.empty()) {
+                    ImGui::TextDisabled(browser_show_all
+                        ? "(empty folder)"
+                        : "(no .z64 / .n64 / .v64 files here)");
+                }
+                if (!navigate_to.empty()) {
+                    rom_error.clear();
+                    browse_to(navigate_to);
+                }
             }
             ImGui::EndChild();
 
