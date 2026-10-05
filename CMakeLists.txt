@@ -137,6 +137,14 @@ file(GLOB FUNC_C_SOURCES   ${CMAKE_SOURCE_DIR}/RecompiledFuncs/*.c)
 file(GLOB FUNC_CXX_SOURCES ${CMAKE_SOURCE_DIR}/RecompiledFuncs/*.cpp)
 target_sources(mm_recompiled PRIVATE ${FUNC_C_SOURCES} ${FUNC_CXX_SOURCES})
 
+set(MM_SOURCE_DIR "${CMAKE_SOURCE_DIR}")
+include(cmake/VerifyRecompiledHooks.cmake)
+add_custom_target(mm_verify_recompiled_hooks
+    COMMAND ${CMAKE_COMMAND} -DMM_SOURCE_DIR=${CMAKE_SOURCE_DIR}
+        -P ${CMAKE_SOURCE_DIR}/cmake/VerifyRecompiledHooks.cmake
+    COMMENT "Verifying generated widescreen hooks")
+add_dependencies(mm_recompiled mm_verify_recompiled_hooks)
+
 # ----------------------------------------------------------------------------
 # Runtime components, each with its own CMakeLists.txt. Hooks are guarded on
 # existence so a translated-library-only build keeps working when optional

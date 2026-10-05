@@ -1,5 +1,12 @@
 # Known Issues
 
+## Remaining widescreen boss backgrounds
+
+CERBERUS (3-12) has a brighter 4:3 center against its expanded background.
+PHOENIX has separated background strips and black gaps outside the native
+view. Original 4:3 mode avoids these expansion defects. These remain open
+after the [whole-game background audit](docs/widescreen-background-audit.md).
+
 ## Animated sprite artifacts with frame interpolation
 
 At frame rates above the game's native 60 FPS, some animated characters can

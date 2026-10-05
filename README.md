@@ -190,6 +190,17 @@ Run the complete playable-level screenshot/crash suite with:
 tools/test_widescreen_playable.sh ./build/src/game/troublemakers path/to/rom.z64 /tmp/mm-widescreen-suite
 ```
 
+For background review, run the image audit after the sweep (requires Python,
+Pillow, and NumPy):
+
+```sh
+python3 tools/audit_widescreen_backgrounds.py /tmp/mm-widescreen-suite
+```
+
+It produces labeled contact sheets and flags black side regions or abrupt
+changes near the original frame edges. These are review hints: compare
+suspicious scenes with original 4:3 captures before treating them as defects.
+
 Run the dense rotation-stage regression matrix in 4:3 and with a widescreen
 preference, at native 60 and display-rate interpolation, with:
 

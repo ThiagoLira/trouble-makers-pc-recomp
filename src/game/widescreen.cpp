@@ -1,6 +1,7 @@
 // Host helpers for translated-code widescreen hooks.
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <cstdio>
@@ -25,8 +26,8 @@ constexpr uint32_t kFilteredActorList = 0x9FFFA000u;
 constexpr uint32_t kActors = 0x800EF510u;
 constexpr uint32_t kActorsTop = 0x80171F10u;
 // Stable synthetic indices used only by the actor renderer. The corresponding
-// 208 actor-sized records occupy 0x80440168..0x80454CE8, clear of the widened
-// tile arenas, relocated clan records, and runtime allocations.
+// 208 repeat records plus one sky base occupy 0x80440168..0x80454E80,
+// clear of the tile arenas, relocated clan records, and runtime allocations.
 constexpr int kWrappedRepeatActorBase = 8521;
 constexpr uint32_t kClanBlocks = 0x804269E0u;
 constexpr uint32_t kClanBlockCount = 0x801782C0u;
@@ -106,7 +107,7 @@ constexpr uint32_t kGlobalButtonPress = 0x800BE4FCu;
 // display lists in the Migen's Shrine overlay. Keep corrected copies in unused
 // expansion RDRAM so the overlay's original data remains intact.
 // 0x80455000..0x80456DFF is clear of the expanded actor records ending at
-// 0x80454CE8 and the relocated frame arenas beginning at 0x80460000.
+// 0x80454E80 and the relocated frame arenas beginning at 0x80460000.
 constexpr uint32_t kRotationWallActorType = 0x508u;
 constexpr uint32_t kRotationPlatformActorType = 0x509u;
 constexpr uint32_t kRotationMaterialDLBase = 0x80455000u;
@@ -1551,7 +1552,19 @@ extern "C" void mm_ws_repeat_wrapped_terrain(
     uint16_t output[kActorCount];
     int out = 0;
     int clones = 0;
+    int panoramas = 0;
+    bool sky_base_added = false;
     int removed = 0;
+    const int scene = read_s16(rdram, kCurrentScene);
+    float panorama_scale = 1.0f;
+#ifdef MM_HAS_GRAPHICS
+    if (scene == 33 || scene == 35) {
+        panorama_scale = mm::graphics::get_widescreen_scale();
+        if (panorama_scale > 1.0f) {
+            panorama_scale *= 320.0f / 288.0f;
+        }
+    }
+#endif
     int hidden_state = -1;
     if (const char* value = std::getenv("MM_TEST_HIDE_TERRAIN_STATE")) {
         char* end = nullptr;
@@ -1566,6 +1579,56 @@ extern "C" void mm_ws_repeat_wrapped_terrain(
         const gpr source = actors + index * kActorSize;
         const uint16_t type = MEM_HU(0xD2, source);
         const int terrain_state = MEM_HU(0xD0, source);
+        // The Day Before and Missile Surf use screen-space sky/cloud/snow
+        // panels instead of a wrapping tile backdrop. Expand the composition as a
+        // unit: scaling positions as well as widths preserves panel joins.
+        // Map the same authored x=14..302 safe area as the tile panoramas to
+        // the window; its center is two pixels left of the projection origin.
+        // Use renderer-only records so scrolling controllers never accumulate
+        // the scale, and preserve both in-flight matrices just like repeats.
+        const uint16_t graphics_flags = MEM_HU(0x94, source);
+        if ((scene == 33 || scene == 35) && type == 0x1C0D && terrain_state == 1 &&
+            (MEM_W(0x80, source) & 0x18u) == 0x08u &&
+            (graphics_flags & 0x0901u) == 0x0901u &&
+            panorama_scale > 1.0f && index < kActorCount) {
+            const uint16_t clone_index = kWrappedRepeatActorBase + index;
+            const gpr clone = actors + clone_index * kActorSize;
+            for (int word = 0x80; word < kActorSize; word += 4) {
+                MEM_W(word, clone) = MEM_W(word, source);
+            }
+            const int32_t raw_x = MEM_W(0x88, source);
+            MEM_W(0x88, clone) = static_cast<int32_t>(
+                std::lround((raw_x + 2.0 * 65536.0) * panorama_scale));
+            uint32_t scale_bits = MEM_W(0xB4, source);
+            float scale_x;
+            std::memcpy(&scale_x, &scale_bits, sizeof(scale_x));
+            scale_x *= panorama_scale;
+            std::memcpy(&scale_bits, &scale_x, sizeof(scale_bits));
+            MEM_W(0xB4, clone) = scale_bits;
+            // Seed the translucent sky with its own opaque base before the
+            // background lights. This gives the cleared wings the same base
+            // as the center without hiding the lights under an opaque sky.
+            if (scene == 35 && !sky_base_added &&
+                MEM_HU(0x84, source) == 0x1820 && graphics_flags == 0x0B01 &&
+                out + count - i < kActorCount) {
+                constexpr uint16_t base_index =
+                    kWrappedRepeatActorBase + kActorCount;
+                static_assert(kActors + (base_index + 1) * kActorSize <=
+                    kRotationMaterialDLBase);
+                const gpr base = actors + base_index * kActorSize;
+                for (int word = 0x80; word < kActorSize; word += 4) {
+                    MEM_W(word, base) = MEM_W(word, clone);
+                }
+                MEM_B(0x9F, base) = 0xFF;
+                std::move_backward(output, output + out, output + out + 1);
+                output[0] = base_index;
+                ++out;
+                sky_base_added = true;
+            }
+            output[out++] = clone_index;
+            ++panoramas;
+            continue;
+        }
         const bool terrain = type == 0x181C;
         if (terrain && terrain_state == hidden_state) {
             ++removed;
@@ -1583,7 +1646,8 @@ extern "C" void mm_ws_repeat_wrapped_terrain(
             !env_enabled("MM_TEST_DISABLE_LANDSCAPE_REPEAT");
         const bool repeating_scenery = flipping_terrain || landscape_panel;
 
-        if (repeating_scenery && out + 1 < kActorCount) {
+        // Reserve one output slot for every source still to be processed.
+        if (repeating_scenery && out + count - i < kActorCount) {
             const int source_slot = static_cast<int>(index);
             if (source_slot >= 0 && source_slot < kActorCount) {
                 const uint16_t clone_index = static_cast<uint16_t>(
@@ -1632,7 +1696,7 @@ extern "C" void mm_ws_repeat_wrapped_terrain(
         output[out++] = index;
     }
 
-    if (clones == 0 && removed == 0) {
+    if (clones == 0 && panoramas == 0 && removed == 0) {
         return;
     }
     for (int i = 0; i < out; ++i) {
@@ -1651,8 +1715,8 @@ extern "C" void mm_ws_repeat_wrapped_terrain(
             reported_scene = scene;
             std::fprintf(stderr,
                 "[widescreen-terrain-repeat] scene=%d source=%d "
-                "clones=%d hidden_state=%d removed=%d output=%d\n",
-                scene, count, clones, hidden_state, removed, out);
+                "clones=%d panoramas=%d hidden_state=%d removed=%d output=%d\n",
+                scene, count, clones, panoramas, hidden_state, removed, out);
         }
     }
 }
@@ -1794,12 +1858,14 @@ extern "C" void mm_ws_static_repack(uint8_t* rdram, recomp_context* ctx) {
         g_layer_fill_state.scene == scene;
 
 #ifdef MM_HAS_GRAPHICS
-    // These snow stages author a mountain panorama only inside the original
+    // These snow stages and Lunar author a panorama only inside the original
     // safe area (x=14..302). Offscreen map cells are repeating filler, even
     // though their textures are resident. Stretch this distant layer alone;
     // the midground, snow, actors and collision retain the expanded view.
     const float window_scale = mm::graphics::get_widescreen_scale();
-    if (buffer == kBandBuffer && (scene == 31 || scene == 36) &&
+    const bool tile_panorama = scene == 9 || scene == 12 || scene == 31 ||
+        scene == 32 || scene == 36 || scene == 72;
+    if (buffer == kBandBuffer && tile_panorama &&
         g_gameplay_wide_active && window_scale > 1.0f) {
         g_backdrop_stretch = window_scale * 320.0f / 288.0f;
         repack_grid(wc, [](int, int) -> int32_t { return 0; }, false);

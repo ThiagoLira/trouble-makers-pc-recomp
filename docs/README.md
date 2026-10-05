@@ -431,6 +431,33 @@ The host audio contract is easy to misread:
 - the current output device path resamples to a stable host rate while
   reporting remaining data back in the game's rate domain.
 
+### 7.1 Stalled host playback and synthesis overflow
+
+A Steam Deck startup failure reported `Failed to find function at 0x08000000`.
+A hardware watchpoint and a local reproduction with SDL playback held paused
+identified an audio command-list overflow: commands replaced the synthesizer
+filter callback at `0x80152F78` (originally `0x800B2154`).
+
+`Sound_Update` at `0x800022D0..0x80002310` calculates
+`(target - remaining + 96) & 0xFFF0`, reads the result as signed 16-bit, then
+applies the minimum sample count. An unbounded host queue eventually wraps
+that subtraction into a large positive request. The captured transition was
+33,414 remaining frames producing a 32,576-frame request instead of the normal
+352–464 frames. The two `0x3800` command buffers cannot hold that synthesis.
+
+The SDL backend discards queued playback older than 250 ms before adding a
+new buffer. Its backlog report is independently bounded and capped to the
+signed 16-bit range, so the register-mirroring thread cannot expose an unsafe
+value between queue updates. Normal rate conversion and the one-VI backoff
+are preserved. The sample rate shared with that thread is atomic.
+
+`mm_audio_queue` exercises the observed wraparound, normal backlog reporting,
+and oversized queue values. Build `mm_audio_queue_tests` and run
+`ctest --test-dir build -R mm_audio_queue --output-on-failure`. A local
+15-second run with playback permanently paused continued producing game and
+audio tasks at 60 Hz without heap corruption; a separate delayed-resume run
+checks recovery when playback starts draining again.
+
 ## 8. EEPROM save layout
 
 The program calls `osEepromProbe`, `osEepromLongRead`, and
@@ -736,11 +763,13 @@ map opening/unlock animation, selection, and departure. Suppressing the whole
 controller covers the first opening frames, before the menu becomes interactive.
 The renderer restores the user's selected rate on leaving these states.
 
-### 12.6 Snow-stage panorama
+### 12.6 World 3 panoramas
 
-Chilly Dog! (3-6, scene 31) and Snowstorm Maze (3-7, scene 36) share a
-mountain backdrop whose offscreen map cells contain repeating filler. The
-textures are resident, so the normal bank-bound check cannot reject them.
+Clanpot Shake (scene 72), Clance War (12), Go Marzen 64 (32), Chilly Dog!
+(31), Snowstorm Maze (36), and Lunar (9) use panoramas whose offscreen map
+cells contain repeating filler. The textures are resident, so the normal
+bank-bound check cannot reject them. Extending that map reveals square sky
+patches alongside the correctly authored center.
 
 During expanded gameplay, only their static backdrop (`D_80180D90`) uses
 the original ten tile columns. Each emitted Fast3D texture rectangle is
@@ -754,6 +783,31 @@ existing path.
 
 `mm_presentation` tests native-frame state selection, panorama coverage at
 16:10/16:9/21:9, tile joins, clipping, UV steps, and unchanged vertical values.
+
+The Day Before (scene 33) and Missile Surf (35) instead use screen-space
+actors of type `0x1C0D`, state 1, for their sky, clouds, and distant snow.
+Their horizontal positions and scales are transformed together from the same
+authored safe area to the expanded window. Only renderer-owned copies are
+changed; the original controller records and both in-flight matrices are
+preserved. Vertical scale and material flags are copied unchanged. Midground
+trees, terrain, gameplay actors, and collision retain
+their normal proportions and expanded view.
+
+Missile Surf's translucent sky otherwise accumulates over old pixels in the
+center while RT64 clears the wings each frame, exposing a brighter 4:3 box.
+A separate renderer-owned opaque copy of its `0x1820` sky panel is inserted
+before the background lights. The original translucent panel then composites
+normally over those lights. This seeds the entire background consistently
+without hiding the lights or disabling the wing clear. The extra actor's two
+matrices are also preserved across frames, and the local draw list reserves
+space for all remaining original actors before adding any repeat/base.
+
+The rectangle correction requires the generated call to
+`mm_ws_stretch_backdrop_rect`. Stale `RecompiledFuncs` can otherwise link
+successfully and leave the original snow-stage fixes painting only the center.
+Configuration and incremental builds verify this and the other critical
+widescreen hooks; regenerate from `troublemakers.us1.toml` when that check
+fails. Generated C is never hand-edited.
 
 ## 13. Rotating-room material contract
 
@@ -843,7 +897,7 @@ cartridge-authored addresses:
 |---:|---|
 | `0x80400000..0x80417FFF` | six enlarged layer display-list arenas |
 | `0x804269E0...` | relocated 128-entry clan/prop array |
-| `0x80440168..0x80454CE8` | renderer-only repeated-actor records |
+| `0x80440168..0x80454E80` | renderer-only repeated actors and sky base |
 | `0x80455000..0x80456DFF` | corrected rotation-material display lists |
 | `0x80460000..0x8047FFFF` | double-buffered top-level frame arenas |
 | `0x9FFFA000..0x9FFFFFFF` | runtime scratch lists and 7 × 20 grids |
