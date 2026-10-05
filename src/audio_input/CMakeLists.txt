@@ -32,6 +32,10 @@ target_link_libraries(mm_audio_input PUBLIC
 )
 
 if(BUILD_TESTING)
+    add_executable(mm_audio_queue_tests tests/audio_queue_test.cpp)
+    target_include_directories(mm_audio_queue_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    add_test(NAME mm_audio_queue COMMAND mm_audio_queue_tests)
+
     add_executable(mm_controls_tests tests/controls_test.cpp)
     target_compile_definitions(mm_controls_tests PRIVATE SDL_MAIN_HANDLED)
     target_link_libraries(mm_controls_tests PRIVATE mm_audio_input)

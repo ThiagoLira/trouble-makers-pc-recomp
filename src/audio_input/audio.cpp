@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "mm_audio_input.hpp"
+#include "audio_queue.h"
 #include "telemetry.h"
 
 namespace mm_audio_input {
@@ -28,7 +29,7 @@ void init_input_subsystem();
 namespace {
 
 // Output device runs at a fixed 48 kHz; SDL resamples the game's stream to it.
-constexpr uint32_t kOutputSampleRate = 48000;
+constexpr uint32_t kOutputSampleRate = queue_policy::kOutputSampleRate;
 constexpr uint32_t kInputChannels = 2;
 constexpr uint32_t kOutputChannels = 2;
 constexpr uint32_t kBytesPerFrame = kInputChannels * sizeof(int16_t);
@@ -36,31 +37,32 @@ constexpr uint32_t kBytesPerFrame = kInputChannels * sizeof(int16_t);
 SDL_AudioDeviceID g_audio_device = 0;
 // Current game (input) sample rate, set via set_frequency(). Defaults to the
 // output rate until the game tells us otherwise.
-uint32_t g_sample_rate = kOutputSampleRate;
+std::atomic<uint32_t> g_sample_rate{kOutputSampleRate};
 SDL_AudioCVT g_convert{};
 bool g_convert_valid = false;
 
 void rebuild_converter() {
+    const uint32_t sample_rate = g_sample_rate.load(std::memory_order_relaxed);
     SDL_zero(g_convert);
     int ret = SDL_BuildAudioCVT(&g_convert,
-        AUDIO_S16LSB, kInputChannels, g_sample_rate,
+        AUDIO_S16LSB, kInputChannels, sample_rate,
         AUDIO_S16LSB, kOutputChannels, kOutputSampleRate);
     if (ret < 0) {
-        fprintf(stderr, "mm_audio: SDL_BuildAudioCVT(%u): %s\n", g_sample_rate, SDL_GetError());
+        fprintf(stderr, "mm_audio: SDL_BuildAudioCVT(%u): %s\n", sample_rate, SDL_GetError());
         g_convert_valid = false;
         return;
     }
     g_convert_valid = true;
-    mm::telemetry::set_audio_rates(g_sample_rate, kOutputSampleRate);
+    mm::telemetry::set_audio_rates(sample_rate, kOutputSampleRate);
     // SDL_AudioCVT::len_ratio is scratch state in some SDL builds and has
     // produced uninitialised garbage in Windows diagnostics.  The rate ratio
     // is deterministic for this stereo-to-stereo conversion, so report it
     // directly instead of trusting that implementation detail.
     const double sample_rate_ratio = static_cast<double>(kOutputSampleRate) /
-                                     static_cast<double>(g_sample_rate);
+                                     static_cast<double>(sample_rate);
     mm::telemetry::event("audio",
         "converter input=%uHz output=%uHz conversion-needed=%s len-mult=%d ratio=%.6f",
-        g_sample_rate, kOutputSampleRate, ret == 0 ? "no" : "yes",
+        sample_rate, kOutputSampleRate, ret == 0 ? "no" : "yes",
         g_convert.len_mult, sample_rate_ratio);
 }
 
@@ -70,8 +72,20 @@ void rebuild_converter() {
 void queue_samples(int16_t* audio_data, size_t sample_count) {
     if (g_audio_device == 0 || sample_count < kInputChannels) return;
 
-    const std::uint64_t queued_before_frames =
-        SDL_GetQueuedAudioSize(g_audio_device) / kBytesPerFrame;
+    uint32_t queued_before_bytes = SDL_GetQueuedAudioSize(g_audio_device);
+    if (queued_before_bytes > queue_policy::kMaxQueuedBytes) {
+        SDL_ClearQueuedAudio(g_audio_device);
+        queued_before_bytes = 0;
+        static uint32_t last_report = 0;
+        const uint32_t now = SDL_GetTicks();
+        if (last_report == 0 || now - last_report >= 5000) {
+            last_report = now;
+            mm::telemetry::event("audio",
+                "discarded stale playback queue above 250ms; device-status=%d",
+                static_cast<int>(SDL_GetAudioDeviceStatus(g_audio_device)));
+        }
+    }
+    const std::uint64_t queued_before_frames = queued_before_bytes / kBytesPerFrame;
 
     static std::vector<int16_t> buf;
     const size_t cap = (sample_count + 8u) * static_cast<size_t>(std::max(1, g_convert.len_mult));
@@ -128,11 +142,10 @@ void queue_samples(int16_t* audio_data, size_t sample_count) {
 
 void set_frequency(uint32_t freq) {
     if (freq == 0) return;
-    if (freq == g_sample_rate) return;
-    const uint32_t previous = g_sample_rate;
-    g_sample_rate = freq;
+    const uint32_t previous = g_sample_rate.exchange(freq, std::memory_order_relaxed);
+    if (freq == previous) return;
     mm::telemetry::event("audio", "input sample rate changed %uHz -> %uHz",
-                         previous, g_sample_rate);
+                         previous, freq);
     rebuild_converter();
 }
 
@@ -145,15 +158,9 @@ void set_frequency(uint32_t freq) {
 // src/game/register_overlays.cpp); it is also the audio_callbacks value.
 size_t get_frames_remaining() {
     if (g_audio_device == 0) return 0;
-    uint64_t out_frames = SDL_GetQueuedAudioSize(g_audio_device) / kBytesPerFrame;
-    // Rescale device-rate frames back to the game's sample-rate frame count.
-    uint64_t in_frames = out_frames * g_sample_rate / kOutputSampleRate;
-
-    const uint32_t frames_per_vi = g_sample_rate / 60;
-    const uint64_t backoff = 1u * frames_per_vi;
-    if (in_frames > backoff) in_frames -= backoff;
-    else in_frames = 0;
-    return static_cast<size_t>(in_frames);
+    return queue_policy::remaining_game_frames(
+        SDL_GetQueuedAudioSize(g_audio_device),
+        g_sample_rate.load(std::memory_order_relaxed));
 }
 
 void init() {

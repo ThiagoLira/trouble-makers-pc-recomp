@@ -431,6 +431,33 @@ The host audio contract is easy to misread:
 - the current output device path resamples to a stable host rate while
   reporting remaining data back in the game's rate domain.
 
+### 7.1 Stalled host playback and synthesis overflow
+
+A Steam Deck startup failure reported `Failed to find function at 0x08000000`.
+A hardware watchpoint and a local reproduction with SDL playback held paused
+identified an audio command-list overflow: commands replaced the synthesizer
+filter callback at `0x80152F78` (originally `0x800B2154`).
+
+`Sound_Update` at `0x800022D0..0x80002310` calculates
+`(target - remaining + 96) & 0xFFF0`, reads the result as signed 16-bit, then
+applies the minimum sample count. An unbounded host queue eventually wraps
+that subtraction into a large positive request. The captured transition was
+33,414 remaining frames producing a 32,576-frame request instead of the normal
+352–464 frames. The two `0x3800` command buffers cannot hold that synthesis.
+
+The SDL backend discards queued playback older than 250 ms before adding a
+new buffer. Its backlog report is independently bounded and capped to the
+signed 16-bit range, so the register-mirroring thread cannot expose an unsafe
+value between queue updates. Normal rate conversion and the one-VI backoff
+are preserved. The sample rate shared with that thread is atomic.
+
+`mm_audio_queue` exercises the observed wraparound, normal backlog reporting,
+and oversized queue values. Build `mm_audio_queue_tests` and run
+`ctest --test-dir build -R mm_audio_queue --output-on-failure`. A local
+15-second run with playback permanently paused continued producing game and
+audio tasks at 60 Hz without heap corruption; a separate delayed-resume run
+checks recovery when playback starts draining again.
+
 ## 8. EEPROM save layout
 
 The program calls `osEepromProbe`, `osEepromLongRead`, and
